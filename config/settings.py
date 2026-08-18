@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'jornadas',
     'participantes',
+    'analitica',
 ]
 
 MIDDLEWARE = [
