@@ -29,7 +29,10 @@ MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_FILE
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 
 MIN_RESPUESTAS_TOPICOS = 8
-GENERATION_TIMEOUT_SECONDS = 90
+# Jornadas reales con varias decenas de preguntas empujan el prompt a varios miles de tokens;
+# medido ~72s para la Jornada Ágil 2 completa (34 preguntas) en este servidor (48 cores, sin GPU).
+# Se deja margen amplio porque esto corre en el hilo de background, no bloquea el request.
+GENERATION_TIMEOUT_SECONDS = 180
 
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
