@@ -696,7 +696,8 @@
         <span class="ep delete"><span class="m">DELETE</span><span class="path">/api/admin/reportes/{id}/</span></span>
       </div>
       <ul class="criteria">
-        <li><code>analisis</code> trae <code>participacion</code> (totales) y <code>momentos[]</code>, cada uno con <code>descripcion_general</code> y <code>preguntas[]</code> (<code>tipo</code>, <code>tipo_grafica</code>: <code>"pastel"</code>/<code>"barras"</code>/<code>null</code>, <code>descripcion</code>, <code>valores_caracteristicos</code>, <code>metodo_valores</code>). No repite texto de preguntas/momentos — se referencian por id.</li>
+        <li><code>analisis</code> trae <code>participacion</code> (totales) y <code>momentos[]</code>, cada uno con <code>descripcion_general</code> y <code>preguntas[]</code> (<code>tipo</code>, <code>tipo_grafica</code>, <code>descripcion</code>, <code>valores_caracteristicos</code>, <code>metodo_valores</code>). No repite texto de preguntas/momentos — se referencian por id.</li>
+        <li><code>tipo_grafica</code> es <code>null</code> para <code>abierta</code>. Para <code>unica</code>/<code>multiple</code> es <code>"pastel"</code>, <code>"barras"</code> o <code>"radar"</code> — el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar con 4+ opciones, para ver la forma general de la inclinación); si el modelo no responde con una elección válida, se usa un respaldo determinístico.</li>
         <li><code>texto_reporte</code> es la síntesis del agente de jornada, el nivel más alto.</li>
         <li>Devuelve <code>estado</code> (<code>pendiente</code>/<code>procesando</code>/<code>completo</code>/<code>error</code>), <code>estadisticas</code>, <code>topicos</code>, <code>texto_reporte</code> y <code>modelo_usado</code>.</li>
       </ul>

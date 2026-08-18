@@ -22,6 +22,7 @@ llegó a superar la ventana de contexto del modelo con una jornada real de 34 pr
     vez de descripción generada, y el resto del análisis sigue su curso.
 """
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -52,7 +53,16 @@ FALLBACK_TEXTO = (
     'análisis por momento y por pregunta.'
 )
 
-TIPO_GRAFICA_POR_TIPO_PREGUNTA = {'unica': 'pastel', 'multiple': 'barras'}
+GRAFICA_TAG_RE = re.compile(r'\n?\s*GRAFICA:\s*(pastel|barras|radar)\s*\.?\s*$', re.IGNORECASE)
+
+
+def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
+    """Respaldo determinístico si el LLM no elige una gráfica válida (o falla): con pocas
+    opciones mutuamente excluyentes un pastel/barras simple es más claro; con 4+ opciones un
+    radar muestra mejor la forma general de hacia dónde se inclina el público entre todas."""
+    if num_opciones >= 4:
+        return 'radar'
+    return 'pastel' if tipo_pregunta == 'unica' else 'barras'
 
 
 # ---------------------------------------------------------------------------
@@ -232,31 +242,63 @@ def _estadisticas_pregunta(pregunta):
     }
 
 
-def _agente_pregunta_descripcion(pregunta, estad, valores_caracteristicos, metodo_valores):
+def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
     system = (
         "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
-        "resultados de UNA pregunta de encuesta, usando EXCLUSIVAMENTE los datos entregados a "
-        "continuación — nunca inventes cifras ni ideas que no estén ahí. Español, prosa clara."
+        "resultados de UNA pregunta de encuesta abierta, usando EXCLUSIVAMENTE los datos "
+        "entregados a continuación — nunca inventes cifras ni ideas que no estén ahí. Español, "
+        "prosa clara."
     )
-    if pregunta.tipo == 'abierta':
-        lineas = [
-            f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
-            f"(de {estad['total_respuestas']} recibidas)."
-        ]
-        if metodo_valores == 'sin_datos':
-            lineas.append('No se recibieron respuestas.')
-        elif metodo_valores == 'insuficiente':
-            lineas.append('Muestra insuficiente para identificar patrones robustos.')
-        elif valores_caracteristicos:
-            lineas.append('Temas/frases recurrentes: ' + '; '.join(valores_caracteristicos) + '.')
-        else:
-            lineas.append('No se identificaron patrones claros en las respuestas.')
+    lineas = [
+        f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
+        f"(de {estad['total_respuestas']} recibidas)."
+    ]
+    if metodo_valores == 'sin_datos':
+        lineas.append('No se recibieron respuestas.')
+    elif metodo_valores == 'insuficiente':
+        lineas.append('Muestra insuficiente para identificar patrones robustos.')
+    elif valores_caracteristicos:
+        lineas.append('Temas/frases recurrentes: ' + '; '.join(valores_caracteristicos) + '.')
     else:
-        lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
-        for opcion in estad.get('conteo_opciones', []):
-            lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
+        lineas.append('No se identificaron patrones claros en las respuestas.')
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=200, temperature=0.5)
     return texto or f'(Sin descripción automática — {error})'
+
+
+def _agente_pregunta_cerrada(pregunta, estad):
+    """Para preguntas `unica`/`multiple`: además de la descripción, el propio LLM elige el tipo
+    de gráfica que mejor muestre hacia dónde se inclina el público entre las opciones — pastel
+    (pocas, mutuamente excluyentes), barras (comparación simple de conteos) o radar (varias
+    opciones, muestra la forma general de la inclinación entre todas). Si el modelo no devuelve
+    una elección válida, se usa `_tipo_grafica_por_defecto` como respaldo."""
+    opciones = estad.get('conteo_opciones', [])
+    system = (
+        "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
+        "resultados de UNA pregunta de encuesta de opción cerrada, usando EXCLUSIVAMENTE los "
+        "datos entregados — nunca inventes cifras. Luego, en una última línea aparte, recomienda "
+        "la gráfica que mejor muestre hacia dónde se inclina el público entre las opciones, "
+        "escribiendo EXACTAMENTE una de estas tres líneas: 'GRAFICA: pastel' (pocas opciones "
+        "mutuamente excluyentes), 'GRAFICA: barras' (comparación simple de conteos), o "
+        "'GRAFICA: radar' (varias opciones — 4 o más — donde interesa ver la forma general de la "
+        "inclinación entre todas a la vez). Español, prosa clara."
+    )
+    lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
+    for opcion in opciones:
+        lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
+
+    tipo_grafica = None
+    if texto:
+        m = GRAFICA_TAG_RE.search(texto)
+        if m:
+            tipo_grafica = m.group(1).lower()
+            texto = GRAFICA_TAG_RE.sub('', texto).strip()
+
+    if tipo_grafica not in ('pastel', 'barras', 'radar'):
+        tipo_grafica = _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
+
+    descripcion = texto or f'(Sin descripción automática — {error})'
+    return descripcion, tipo_grafica
 
 
 def analizar_pregunta(pregunta):
@@ -282,7 +324,7 @@ def analizar_pregunta(pregunta):
             valores, error = _extraer_valores_llm(textos)
             metodo = 'llm' if valores else 'insuficiente'
 
-        descripcion = _agente_pregunta_descripcion(pregunta, estad, valores, metodo)
+        descripcion = _agente_pregunta_abierta(estad, valores, metodo)
         return {
             'pregunta_id': pregunta.id,
             'tipo': pregunta.tipo,
@@ -293,11 +335,11 @@ def analizar_pregunta(pregunta):
             'metodo_valores': metodo,
         }
 
-    descripcion = _agente_pregunta_descripcion(pregunta, estad, None, 'conteo')
+    descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad)
     return {
         'pregunta_id': pregunta.id,
         'tipo': pregunta.tipo,
-        'tipo_grafica': TIPO_GRAFICA_POR_TIPO_PREGUNTA.get(pregunta.tipo),
+        'tipo_grafica': tipo_grafica,
         'total_respuestas': estad['total_respuestas'],
         'descripcion': descripcion,
         'valores_caracteristicos': estad['conteo_opciones'],

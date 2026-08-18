@@ -81,7 +81,8 @@ Como administrador quiero pedir un análisis de una jornada completa, un momento
 ### HU-14 — Consultar el estado y el resultado de un reporte
 Como administrador quiero consultar el estado de un reporte y su resultado una vez listo, para hacer seguimiento del análisis sin bloquear mi sesión de trabajo.
 - `GET /api/admin/reportes/` (filtrable `?jornada=<id>`) y `GET /api/admin/reportes/{id}/` devuelven `estado` (`pendiente`/`procesando`/`completo`/`error`), `analisis` y `texto_reporte`.
-- `analisis` trae `participacion` (totales) y `momentos[]`, cada uno con `descripcion_general` y `preguntas[]` — cada pregunta con `tipo`, `tipo_grafica` (`"pastel"`/`"barras"`/`null` según el tipo de pregunta), `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic"`/`"llm"`/`"conteo"`). No repite el texto de preguntas/momentos — se referencian por id contra `/api/admin/preguntas/` y `/api/admin/momentos/`.
+- `analisis` trae `participacion` (totales) y `momentos[]`, cada uno con `descripcion_general` y `preguntas[]` — cada pregunta con `tipo`, `tipo_grafica`, `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic"`/`"llm"`/`"conteo"`). No repite el texto de preguntas/momentos — se referencian por id contra `/api/admin/preguntas/` y `/api/admin/momentos/`.
+- `tipo_grafica` es `null` para preguntas `abierta`. Para `unica`/`multiple` es `"pastel"`, `"barras"` o `"radar"` — para estas, el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar cuando hay 4+ opciones y conviene ver la forma general de la inclinación entre todas); si el modelo no responde con una elección válida, se usa un respaldo determinístico según la cantidad de opciones.
 - `texto_reporte` es la síntesis del agente de jornada (el nivel más alto).
 - `DELETE /api/admin/reportes/{id}/` elimina un reporte.
 

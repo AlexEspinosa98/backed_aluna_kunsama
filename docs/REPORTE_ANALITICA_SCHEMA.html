@@ -401,7 +401,7 @@
         <tbody>
           <tr><td class="campo">pregunta_id</td><td class="tipo">int</td><td class="desc">Referencia — sin texto; búscalo en <code>/api/admin/preguntas/{id}/</code>.</td></tr>
           <tr><td class="campo">tipo</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">abierta</span> <span class="enum-pill">unica</span> <span class="enum-pill">multiple</span> — tipo real de la pregunta.</td></tr>
-          <tr><td class="campo">tipo_grafica</td><td class="tipo">enum | null</td><td class="desc"><span class="enum-pill">pastel</span> (unica) · <span class="enum-pill">barras</span> (multiple) · <code>null</code> (abierta) — sugerencia de cómo graficarla.</td></tr>
+          <tr><td class="campo">tipo_grafica</td><td class="tipo">enum | null</td><td class="desc"><span class="enum-pill">pastel</span> · <span class="enum-pill">barras</span> · <span class="enum-pill">radar</span> (solo unica/multiple) · <code>null</code> (abierta) — ver nota abajo, la elige el propio agente de pregunta.</td></tr>
           <tr><td class="campo">total_respuestas</td><td class="tipo">int</td><td class="desc">—</td></tr>
           <tr><td class="campo">descripcion</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de pregunta</b>.</td></tr>
           <tr><td class="campo">metodo_valores</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">bertopic</span> <span class="enum-pill">llm</span> <span class="enum-pill">conteo</span> — cómo se calculó <code>valores_caracteristicos</code>.</td></tr>
@@ -415,7 +415,7 @@
       </div>
       <div class="variant-note">
         <span class="variant-tag cerrada">unica / multiple</span>
-        <p><code>{opcion_id: int, texto: string, conteo: int}[]</code> — una entrada por cada opción de respuesta con su conteo real (<code>metodo_valores="conteo"</code>, siempre determinístico).</p>
+        <p><code>{opcion_id: int, texto: string, conteo: int}[]</code> — una entrada por cada opción de respuesta con su conteo real (<code>metodo_valores="conteo"</code>, siempre determinístico). El <code>tipo_grafica</code> de estas preguntas lo elige el propio LLM viendo los conteos reales, para reflejar hacia dónde se inclina el público: <code>pastel</code> con pocas opciones mutuamente excluyentes, <code>barras</code> para una comparación simple, <code>radar</code> con 4 o más opciones cuando conviene mostrar la forma general de la inclinación entre todas a la vez. Si el modelo no responde con una elección válida, se usa un respaldo determinístico por cantidad de opciones.</p>
       </div>
     </div>
   </section>
