@@ -29,6 +29,12 @@ python manage.py test
 - **Administrador (staff)**: `POST /api/admin/login/` con `username`/`password` devuelve un token. Se usa como header `Authorization: Token <token>` en todo `/api/admin/**`.
 - **Participante**: se obtiene un token UUID al registrarse en una jornada (`POST /api/jornadas/<slug>/registro/`). Se usa como header `Authorization: Participant <token>` en los endpoints de esa jornada.
 
+## Documentación de la API (Swagger/OpenAPI)
+
+- `GET /api/schema/` — esquema OpenAPI 3 en crudo
+- `GET /api/docs/` — Swagger UI
+- `GET /api/redoc/` — Redoc
+
 ## Endpoints principales
 
 Ver [docs/USER_STORIES.md](docs/USER_STORIES.md) para el detalle funcional completo.

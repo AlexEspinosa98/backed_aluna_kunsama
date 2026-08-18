@@ -1,3 +1,4 @@
+from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 
 from jornadas.models import Momento, OpcionPregunta, Pregunta
@@ -29,6 +30,7 @@ class ParticipanteSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+@extend_schema_serializer(component_name='ParticipanteOpcionPregunta')
 class OpcionPreguntaSerializer(serializers.ModelSerializer):
     class Meta:
         model = OpcionPregunta

@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework.authtoken',
+    'drf_spectacular',
     'corsheaders',
     'jornadas',
     'participantes',
@@ -106,4 +107,20 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Aluna Kunsamu API',
+    'DESCRIPTION': (
+        'API REST para administrar jornadas, sus momentos y preguntas, '
+        'e inscribir/recorrer momentos como participante.'
+    ),
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'SCHEMA_PATH_PREFIX': '/api/',
+    'ENUM_NAME_OVERRIDES': {
+        'MomentoTipoEnum': 'jornadas.models.Momento.TIPO_CHOICES',
+        'PreguntaTipoEnum': 'jornadas.models.Pregunta.TIPO_CHOICES',
+    },
 }

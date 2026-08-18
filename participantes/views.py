@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
@@ -37,6 +38,7 @@ class JornadaDetalleView(generics.RetrieveAPIView):
 class RegistroParticipanteView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(request=ParticipanteRegistroSerializer, responses=ParticipanteSerializer)
     def post(self, request, jornada_slug):
         jornada = get_object_or_404(Jornada, slug=jornada_slug, activa=True)
 
@@ -85,6 +87,7 @@ def _validar_entrada(pregunta, texto_libre, opciones):
 class RespuestasMomentoView(APIView):
     permission_classes = [EsParticipanteDeLaJornada]
 
+    @extend_schema(request=RespuestaEnvioSerializer, responses=RespuestaSalidaSerializer(many=True))
     def post(self, request, jornada_slug, momento_id):
         momento = get_object_or_404(
             Momento, pk=momento_id, jornada__slug=jornada_slug, activo=True

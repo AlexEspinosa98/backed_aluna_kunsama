@@ -1,3 +1,4 @@
+from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework import exceptions
 from rest_framework.authentication import BaseAuthentication
 
@@ -22,3 +23,19 @@ class ParticipanteTokenAuthentication(BaseAuthentication):
             raise exceptions.AuthenticationFailed('Token de participante inválido.')
 
         return (participante, None)
+
+
+class ParticipanteTokenAuthenticationScheme(OpenApiAuthenticationExtension):
+    target_class = ParticipanteTokenAuthentication
+    name = 'ParticipantAuth'
+
+    def get_security_definition(self, auto_schema):
+        return {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'Authorization',
+            'description': (
+                "Token de participante obtenido al registrarse en una jornada. "
+                "Formato: 'Participant <token>'."
+            ),
+        }
