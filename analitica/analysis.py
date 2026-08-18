@@ -65,7 +65,7 @@ def _get_llm():
                         "'python manage.py download_llm_model' primero."
                     )
                 _llm_instance = Llama(
-                    model_path=str(MODEL_PATH), n_ctx=4096,
+                    model_path=str(MODEL_PATH), n_ctx=16384,
                     n_threads=os.cpu_count(), verbose=False,
                 )
     return _llm_instance
@@ -284,7 +284,9 @@ def _formatear_contexto(jornada, alcance_label, estadisticas, topicos):
 
 
 def generar_narrativa(plantilla, contexto_texto):
-    """Devuelve el texto generado, o None si falló/se pasó del tiempo — nunca lanza excepción."""
+    """Devuelve (texto, error). `texto` es None si falló o se pasó del tiempo — nunca lanza
+    excepción; `error` queda disponible para diagnóstico aunque el reporte igual se complete con
+    el texto de respaldo."""
     system = BASE_SYSTEM_PROMPT
     if plantilla and plantilla.prompt_sistema:
         system += '\n\nInstrucciones adicionales de estilo del equipo organizador:\n' + plantilla.prompt_sistema
@@ -309,9 +311,11 @@ def generar_narrativa(plantilla, contexto_texto):
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
-    if hilo.is_alive() or not resultado.get('texto'):
-        return None
-    return resultado['texto']
+    if hilo.is_alive():
+        return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s).'
+    if not resultado.get('texto'):
+        return None, resultado.get('error', 'El modelo no devolvió texto.')
+    return resultado['texto'], None
 
 
 # ---------------------------------------------------------------------------
@@ -337,12 +341,13 @@ def procesar_reporte(reporte_id):
 
         alcance_label = dict(Reporte.ALCANCE_CHOICES)[reporte.alcance]
         contexto = _formatear_contexto(reporte.jornada, alcance_label, estadisticas, topicos)
-        texto = generar_narrativa(reporte.plantilla, contexto)
+        texto, error_narrativa = generar_narrativa(reporte.plantilla, contexto)
 
         reporte.estadisticas = estadisticas
         reporte.topicos = topicos
         reporte.texto_reporte = texto or FALLBACK_TEXTO
         reporte.modelo_usado = DEFAULT_MODEL_FILE if texto else ''
+        reporte.error_mensaje = '' if texto else f'Narrativa no generada: {error_narrativa}'
         reporte.estado = Reporte.ESTADO_COMPLETO
         reporte.completado_en = timezone.now()
         reporte.save()
