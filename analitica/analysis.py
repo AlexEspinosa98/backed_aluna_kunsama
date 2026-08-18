@@ -171,6 +171,11 @@ STOPWORDS_ES = [
     'suya', 'suyos', 'suyas', 'nuestro', 'nuestra', 'nuestros', 'nuestras', 'vuestro', 'vuestra',
     'vuestros', 'vuestras', 'esos', 'esas', 'soy', 'eres', 'es', 'somos', 'sois', 'son', 'fui',
     'fue', 'fuimos', 'fueron', 'ser', 'era', 'muy', 'bien', 'fue', 'está', 'estuvo', 'the', 'and',
+    # Verbos modales/auxiliares: como las preguntas se frasean "¿Qué debería...?", casi toda
+    # respuesta los repite, y no discriminan entre temas.
+    'debe', 'deben', 'debería', 'deberían', 'debemos', 'debiera', 'debieran',
+    'puede', 'pueden', 'podría', 'podrían', 'podemos', 'quiero', 'quiere', 'quieren', 'creo',
+    'considero', 'considera', 'consideran', 'pienso', 'siento', 'debía', 'debían',
 ]
 
 
