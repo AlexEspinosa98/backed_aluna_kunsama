@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Esquema Reporte Analítica</title>
+<style>
+  :root {
+    --bg: #edf0e9;
+    --surface: #ffffff;
+    --surface-2: #e2e7dc;
+    --text: #16231d;
+    --text-muted: #4c5c51;
+    --border: #d3dac9;
+    --border-strong: #b7c1a9;
+
+    --accent: #5b5680;
+    --accent-ink: #322e4d;
+    --accent-soft: #e4e1f0;
+    --accent-soft-border: #c6c0e0;
+
+    --abierta: #146b6e;
+    --abierta-soft: #d9ecea;
+    --abierta-soft-border: #a9d1cd;
+    --cerrada: #a8721f;
+    --cerrada-soft: #f3e4c6;
+    --cerrada-soft-border: #e2c68e;
+
+    --code-bg: #16211a;
+    --code-text: #d8ded4;
+    --code-key: #8fd0c8;
+    --code-string: #e8c07d;
+    --code-number: #7cabe0;
+    --code-literal: #e28787;
+    --code-punct: #6f7d71;
+
+    --serif: Iowan Old Style, "Palatino Linotype", Palatino, Georgia, "Noto Serif", serif;
+    --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1712;
+      --surface: #16211a;
+      --surface-2: #1c2921;
+      --text: #e9efe6;
+      --text-muted: #a3b3a6;
+      --border: #2a3a2e;
+      --border-strong: #3c4f3f;
+
+      --accent: #a79fd6;
+      --accent-ink: #120f24;
+      --accent-soft: #241f3a;
+      --accent-soft-border: #382f57;
+
+      --abierta: #5cc9c6;
+      --abierta-soft: #143331;
+      --abierta-soft-border: #1e4d49;
+      --cerrada: #e2a53f;
+      --cerrada-soft: #3a2c12;
+      --cerrada-soft-border: #5a4118;
+
+      --code-bg: #0c1310;
+      --code-text: #d8ded4;
+      --code-key: #7fc4bb;
+      --code-string: #e0b866;
+      --code-number: #7cabe0;
+      --code-literal: #e28787;
+      --code-punct: #58665a;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f1712;
+    --surface: #16211a;
+    --surface-2: #1c2921;
+    --text: #e9efe6;
+    --text-muted: #a3b3a6;
+    --border: #2a3a2e;
+    --border-strong: #3c4f3f;
+
+    --accent: #a79fd6;
+    --accent-ink: #120f24;
+    --accent-soft: #241f3a;
+    --accent-soft-border: #382f57;
+
+    --abierta: #5cc9c6;
+    --abierta-soft: #143331;
+    --abierta-soft-border: #1e4d49;
+    --cerrada: #e2a53f;
+    --cerrada-soft: #3a2c12;
+    --cerrada-soft-border: #5a4118;
+
+    --code-bg: #0c1310;
+    --code-text: #d8ded4;
+    --code-key: #7fc4bb;
+    --code-string: #e0b866;
+    --code-number: #7cabe0;
+    --code-literal: #e28787;
+    --code-punct: #58665a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 0.9rem;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2rem, 4vw, 2.75rem);
+    line-height: 1.15;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+
+  .lede {
+    font-size: 1.0625rem;
+    color: var(--text-muted);
+    max-width: 65ch;
+    margin: 0 0 1.5rem;
+  }
+
+  nav.toc {
+    position: sticky;
+    top: 1rem;
+    z-index: 5;
+    display: flex;
+    gap: 0.6rem;
+    margin: 2rem 0 0;
+    padding: 0.5rem;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  nav.toc a {
+    flex: 1;
+    text-align: center;
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 600;
+    padding: 0.6rem 0.75rem;
+    border-radius: 5px;
+    color: var(--text-muted);
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--accent-ink); }
+
+  section { margin-top: 3.25rem; }
+
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 2px solid var(--accent-soft-border);
+    padding-bottom: 0.9rem;
+    margin-bottom: 1.5rem;
+    scroll-margin-top: 5rem;
+  }
+  .section-head h2 {
+    font-family: var(--serif);
+    font-size: 1.55rem;
+    font-weight: 600;
+    margin: 0;
+  }
+  .section-note {
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+  }
+
+  .field-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  .field-card-title {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 0.75rem 1.1rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    color: var(--accent-ink);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0.6rem 1.1rem;
+    border-bottom: 1px solid var(--border-strong);
+  }
+  td {
+    padding: 0.65rem 1.1rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  td.campo { font-family: var(--mono); font-size: 0.85rem; white-space: nowrap; color: var(--text); }
+  td.tipo { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); white-space: nowrap; }
+  td.desc { color: var(--text-muted); }
+  td.desc code { font-family: var(--mono); font-size: 0.85em; background: var(--surface-2); padding: 0.05em 0.35em; border-radius: 3px; color: var(--text); }
+
+  .tabla-scroll { overflow-x: auto; }
+
+  .variant-note {
+    display: flex;
+    gap: 0.75rem;
+    padding: 1rem 1.1rem;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .variant-tag {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+    height: fit-content;
+  }
+  .variant-tag.abierta { color: var(--abierta); background: var(--abierta-soft); border: 1px solid var(--abierta-soft-border); }
+  .variant-tag.cerrada { color: var(--cerrada); background: var(--cerrada-soft); border: 1px solid var(--cerrada-soft-border); }
+  .variant-note p { margin: 0; font-size: 0.875rem; color: var(--text-muted); }
+  .variant-note code { font-family: var(--mono); background: var(--surface); padding: 0.05em 0.35em; border-radius: 3px; }
+
+  .enum-pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 0.05em 0.45em;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    margin: 0.1em 0;
+  }
+
+  .json-viewer {
+    background: var(--code-bg);
+    color: var(--code-text);
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    overflow: auto;
+    max-height: 720px;
+  }
+  .json-viewer pre {
+    margin: 0;
+    padding: 1.25rem 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    line-height: 1.65;
+    white-space: pre;
+  }
+  .json-viewer .key { color: var(--code-key); }
+  .json-viewer .string { color: var(--code-string); }
+  .json-viewer .number { color: var(--code-number); }
+  .json-viewer .literal { color: var(--code-literal); font-weight: 600; }
+  .json-viewer .punct { color: var(--code-punct); }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.75rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  footer code { font-family: var(--mono); background: var(--surface-2); padding: 0.1em 0.4em; border-radius: 3px; }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 2.25rem 1.1rem 4rem; }
+    nav.toc { position: static; }
+    td, th { padding: 0.55rem 0.7rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Aluna Kunsamu · API REST · GET /api/admin/reportes/{id}/</p>
+    <h1>Esquema del reporte de análisis</h1>
+    <p class="lede">
+      Referencia de tipos del JSON que devuelve el módulo <code style="font-family:var(--mono);background:var(--surface-2);padding:0.1em 0.4em;border-radius:3px;">analitica</code>,
+      más un ejemplo real completo — un reporte generado sobre la Jornada Ágil 2 con el pipeline
+      multiagente (un análisis por pregunta, por momento, y una síntesis de jornada).
+    </p>
+  </header>
+
+  <nav class="toc">
+    <a href="#esquema">Esquema / tipos</a>
+    <a href="#ejemplo">Ejemplo real completo</a>
+  </nav>
+
+  <section id="esquema">
+    <div class="section-head">
+      <h2>Esquema</h2>
+      <span class="section-note">4 niveles</span>
+    </div>
+
+    <div class="field-card">
+      <div class="field-card-title">Reporte — nivel raíz</div>
+      <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
+        <tbody>
+          <tr><td class="campo">id</td><td class="tipo">int</td><td class="desc">ID del reporte.</td></tr>
+          <tr><td class="campo">jornada</td><td class="tipo">string</td><td class="desc">Slug de la jornada analizada.</td></tr>
+          <tr><td class="campo">momentos</td><td class="tipo">array&lt;{id,titulo,orden}&gt;</td><td class="desc">Momentos del <b>alcance</b> pedido en el <code>POST</code> — vacío significa jornada completa.</td></tr>
+          <tr><td class="campo">alcance</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">jornada</span> <span class="enum-pill">momento</span> <span class="enum-pill">momentos</span> — derivado automático según <code>momentos</code>.</td></tr>
+          <tr><td class="campo">plantilla</td><td class="tipo">int | null</td><td class="desc">ID de la <code>PlantillaAnalisis</code> usada para el tono de la síntesis final.</td></tr>
+          <tr><td class="campo">plantilla_nombre</td><td class="tipo">string | null</td><td class="desc">—</td></tr>
+          <tr><td class="campo">estado</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">pendiente</span> <span class="enum-pill">procesando</span> <span class="enum-pill">completo</span> <span class="enum-pill">error</span></td></tr>
+          <tr><td class="campo">error_mensaje</td><td class="tipo">string</td><td class="desc">Vacío si nada falló. Si algún agente puntual falla, el motivo queda aquí sin tumbar el resto del reporte.</td></tr>
+          <tr><td class="campo">analisis</td><td class="tipo">object</td><td class="desc">El cuerpo jerárquico — ver abajo.</td></tr>
+          <tr><td class="campo">texto_reporte</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de jornada</b> (el nivel más alto, integra todos los momentos).</td></tr>
+          <tr><td class="campo">modelo_usado</td><td class="tipo">string</td><td class="desc">Nombre del archivo <code>.gguf</code>, o <code>""</code> si la síntesis final no llegó a generarse.</td></tr>
+          <tr><td class="campo">solicitado_por</td><td class="tipo">int</td><td class="desc">ID del usuario admin que lo pidió.</td></tr>
+          <tr><td class="campo">creado_en / actualizado_en / completado_en</td><td class="tipo">datetime | null</td><td class="desc">ISO 8601.</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="field-card">
+      <div class="field-card-title">analisis</div>
+      <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
+        <tbody>
+          <tr><td class="campo">participacion.total_participantes</td><td class="tipo">int</td><td class="desc">Inscritos en la jornada.</td></tr>
+          <tr><td class="campo">participacion.participantes_que_respondieron</td><td class="tipo">int</td><td class="desc">Respondieron algo dentro del alcance.</td></tr>
+          <tr><td class="campo">participacion.tasa_participacion</td><td class="tipo">float</td><td class="desc">Porcentaje.</td></tr>
+          <tr><td class="campo">momentos</td><td class="tipo">array&lt;MomentoAnalisis&gt;</td><td class="desc">Uno por cada momento del alcance.</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="field-card">
+      <div class="field-card-title">MomentoAnalisis</div>
+      <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
+        <tbody>
+          <tr><td class="campo">momento_id</td><td class="tipo">int</td><td class="desc">Referencia — sin título; búscalo en <code>/api/admin/momentos/{id}/</code> si lo necesitas.</td></tr>
+          <tr><td class="campo">descripcion_general</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de momento</b>, integra las descripciones de sus preguntas.</td></tr>
+          <tr><td class="campo">preguntas</td><td class="tipo">array&lt;PreguntaAnalisis&gt;</td><td class="desc">—</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+
+    <div class="field-card">
+      <div class="field-card-title">PreguntaAnalisis</div>
+      <div class="tabla-scroll">
+      <table>
+        <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
+        <tbody>
+          <tr><td class="campo">pregunta_id</td><td class="tipo">int</td><td class="desc">Referencia — sin texto; búscalo en <code>/api/admin/preguntas/{id}/</code>.</td></tr>
+          <tr><td class="campo">tipo</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">abierta</span> <span class="enum-pill">unica</span> <span class="enum-pill">multiple</span> — tipo real de la pregunta.</td></tr>
+          <tr><td class="campo">tipo_grafica</td><td class="tipo">enum | null</td><td class="desc"><span class="enum-pill">pastel</span> (unica) · <span class="enum-pill">barras</span> (multiple) · <code>null</code> (abierta) — sugerencia de cómo graficarla.</td></tr>
+          <tr><td class="campo">total_respuestas</td><td class="tipo">int</td><td class="desc">—</td></tr>
+          <tr><td class="campo">descripcion</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de pregunta</b>.</td></tr>
+          <tr><td class="campo">metodo_valores</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">bertopic</span> <span class="enum-pill">llm</span> <span class="enum-pill">conteo</span> — cómo se calculó <code>valores_caracteristicos</code>.</td></tr>
+          <tr><td class="campo">valores_caracteristicos</td><td class="tipo">forma variable ↓</td><td class="desc">Depende de <code>tipo</code> — ver nota abajo.</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="variant-note">
+        <span class="variant-tag abierta">abierta</span>
+        <p><code>string[]</code> — cada elemento es un tema (palabras clave separadas por coma, si <code>metodo_valores="bertopic"</code>, con ≥8 respuestas) o una frase característica (si <code>metodo_valores="llm"</code>, muestra chica — típico en preguntas de mesa).</p>
+      </div>
+      <div class="variant-note">
+        <span class="variant-tag cerrada">unica / multiple</span>
+        <p><code>{opcion_id: int, texto: string, conteo: int}[]</code> — una entrada por cada opción de respuesta con su conteo real (<code>metodo_valores="conteo"</code>, siempre determinístico).</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="ejemplo">
+    <div class="section-head">
+      <h2>Ejemplo real completo</h2>
+      <span class="section-note">Jornada Ágil 2 · alcance jornada completa</span>
+    </div>
+    <p class="lede" style="margin-bottom:1rem;">
+      Reporte real generado con el pipeline multiagente (34 preguntas → 6 momentos → 1 síntesis
+      de jornada), sin recortar ni resumir. Los participantes de esta corrida son datos de prueba.
+    </p>
+    <div class="json-viewer">
+      <pre id="json-output"></pre>
+    </div>
+  </section>
+
+  <footer>
+    <span>Fuente: <code>GET /api/admin/reportes/{id}/</code> · Doc interactiva: <code>/api/docs/</code></span>
+    <span>Aluna Kunsamu API</span>
+  </footer>
+
+</div>
+
+<script id="json-data" type="application/json">
+{
+  "id": 7,
+  "jornada": "jornada-agil-2",
+  "momentos": [],
+  "alcance": "jornada",
+  "plantilla": 2,
+  "plantilla_nombre": "Síntesis institucional Jornada Ágil",
+  "estado": "completo",
+  "error_mensaje": "",
+  "analisis": {
+    "momentos": [
+      {
+        "preguntas": [
+          {
+            "tipo": "abierta",
+            "descripcion": "La respuesta de texto no vacía a la pregunta demuestra que todos los participantes han respondido, lo que indica un alto nivel de participación. Los temas recurrentes en las respuestas incluyen comunidades, consentimiento informado, protección de datos y honestidad, así como centralización y transparencia.",
+            "pregunta_id": 4,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "comunidades, consentimiento, comunidades irrenunciable, comunidades participantes, consentimiento informado, protección",
+              "honestidad manejo, honestidad, datos información, datos, central transparencia, central"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "De las 12 respuestas no vacías recibidas, los temas recurrentes fueron el manejo y los riesgos relacionados con los datos, así como la ejecución de estos riesgos y la comercialización de los resultados. También se mencionaron las comunidades que podrían ser riesgosa en este contexto.",
+            "pregunta_id": 5,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "manejo, manejo datos, riesgos, datos, datos fase, ejecución riesgos",
+              "comercialización, comercialización resultados, concentra mayores, concentra, comunidades riesgosa, comunidades"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican que todos los participantes le dieron una respuesta a la pregunta. Los temas recurrentes reflejan preocupaciones por el consentimiento informado, la urgencia de relaciones con comunidades y la protección de la información sensible. También se mencionaron asuntos de conflictos y el uso de métodos aplicados para resolverlos.",
+            "pregunta_id": 6,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "consentimiento informado, comunidades consentimiento, comunidades, urgente relación, sensible urgente, protección información",
+              "urgente, resolver conflictos, aplicada, asunto urgente, asunto, artificial criterios"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican que todos los participantes respondieron. Los temas y frases recurrentes incluyen el uso de \"comité\", \"especializados\", \"comités ética\" y \"capacite mejor\", sugiriendo un focus en estructuras de comités y la necesidad de mejorar habilidades.",
+            "pregunta_id": 7,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "tener, comité, comité tener, comunidades, especializados, especializados área",
+              "ética, comité ética, comité, cortos hace, cortos, capacite mejor"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican que todos los participantes respondieron a la pregunta. Los temas recurrentes incluyen capacitación ética, consentimiento informado y bioética obligatoria, lo que sugiere un interés en cuestiones relacionadas con la ética en investigaciones biomédicas.",
+            "pregunta_id": 8,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "artificial investigadores, artificial, capacitación, capacitación ética, consentimiento informado, consentimiento",
+              "formación, básica integridad, bioética obligatoria, básica, bioética, obligatoria"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican que el tema central del debate es la comunidades y el asegurar el reconocimiento activo y la protección de la biodiversidad. Los participantes también mencionaron datos sensibles y la importancia de centralizar la investigación de los investigadores.",
+            "pregunta_id": 9,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "comunidades, asegurar reconocimiento, activa comunidades, asegurar, activa, reconocimiento",
+              "biodiversidad, biodiversidad seres, datos sensibles, datos, central investigadores, central"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "De las 12 respuestas recopiladas, todas fueron no vacías, lo que indica que todos los encuestados proporcionaron respuestas. No se identificaron patrones claros en las respuestas dadas.",
+            "pregunta_id": 10,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": []
+          }
+        ],
+        "momento_id": 3,
+        "descripcion_general": "Todos los participantes respondieron a la pregunta, con temas recurrentes centrados en la protección de datos, la bioética, el consentimiento informado, la centralización de la investigación y el reconocimiento de las comunidades y la biodiversidad."
+      },
+      {
+        "preguntas": [
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados de la pregunta muestran que todos los encuestados han respondido con textos no vacíos, lo que indica una participación activa. Además, los temas recurrentes mencionados son integridad, transparencia, responsabilidad, respeto y consentimiento, sugiriendo preocupaciones por cuestiones éticas y de liderazgo en la respuesta.",
+            "pregunta_id": 11,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Integridad",
+              "Transparencia",
+              "Responsabilidad",
+              "Respeto",
+              "Consentimiento"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican que los participantes de la encuesta se centraron en temas como Conflictos de interés, Manejo de datos, Autoría y Uso indebido de IA, sin embargo, no se mencionaron datos sensibles específicamente.",
+            "pregunta_id": 12,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Conflictos de interés",
+              "Manejo de datos",
+              "Autoría",
+              "Uso indebido IA",
+              "Datos sensibles"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican un alto nivel de participación, con todos los participantes respondiendo a la pregunta. Los temas recurrentes mencionados reflejan una preocupación por mejorar la estructura y eficiencia de los comités, así como por la necesidad de implementar nuevas formas de gobernanza y comunicación.",
+            "pregunta_id": 13,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Comités por facultad",
+              "Gobernanza en red",
+              "Dos niveles estructurales",
+              "Comité ágil y especializados",
+              "Canal directo"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican que todos los participantes han respondido a la pregunta. Los temas recurrentes mencionados son la formación continua, las capacidades en gestión de datos, la IA responsable, el acompañamiento a comunidades y la formación docente.",
+            "pregunta_id": 14,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Formación continua.",
+              "Capacidades en gestión de datos.",
+              "IA responsable.",
+              "Acompañamiento a comunidades.",
+              "Formación docente."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados de la pregunta muestran que todos los respondientes (4 de 4) han incluido en sus respuestas la idea de \"Incorporar transversalmente\". Además, se destacaron las respuestas \"Prácticos por disciplina\" y \"Evaluación continua\", mientras que \"Formación diferenciada\" también fue mencionada.",
+            "pregunta_id": 15,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Incorporar transversalmente.",
+              "Prácticos por disciplina.",
+              "Evaluación continua.",
+              "Formación diferenciada."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados indican que todas las respuestas proporcionadas mencionaron temas relacionados con la docencia, los protocolos y los proyectos. Las respuestas recurrentes incluyeron la inclusión de lineamientos claros para docencia, investigación y extensión, así como la transversalización en la evaluación y los proyectos, y la promoción de una guía única para estos campos.",
+            "pregunta_id": 16,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Incluir en docencia, protocolos y proyectos.",
+              "Lineamientos claros para docencia, investigación y extensión.",
+              "Transversalizar en evaluación y proyectos.",
+              "Guía única para docencia, investigación y extensión."
+            ]
+          }
+        ],
+        "momento_id": 4,
+        "descripcion_general": "En la jornada participativa, todos los encuestados proporcionaron respuestas no vacías, indicando una alta participación. Los temas recurrentes mencionados fueron la docencia, los protocolos, la evaluación continua y la transversalización, reflejando preocupaciones por la eficiencia, la formación y la gobernanza en la institución."
+      },
+      {
+        "preguntas": [
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías en la encuesta muestran un interés en temas como la cuidar la confianza, proteger datos sensibles, fomentar la independencia y promover la transparencia.",
+            "pregunta_id": 17,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Cuidar la confianza.",
+              "Proteger datos sensibles.",
+              "Fomentar la independencia.",
+              "Promover la transparencia."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados muestran que todos los respondientes han identificado temas clave para mejorar la ética y la calidad de la investigación, incluyendo fortalecer el Comité Ético, formar a los investigadores, garantizar el consentimiento informado y integrar la protección de datos.",
+            "pregunta_id": 18,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Fortalecer Comité Ética",
+              "Formar investigadores",
+              "Garantizar consentimiento",
+              "Integrar protección datos"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados de la pregunta muestran que todas las respuestas recibidas fueron relevantes y no vacías. Las frases recurrentes incluyen la importancia de documentar riesgos éticos, la necesidad de capacitarse anualmente, la necesidad de incluir a las comunidades desde el inicio, y la importancia de auditar el manejo de datos.",
+            "pregunta_id": 19,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Documentar riesgos éticos.",
+              "Capacitarse anualmente.",
+              "Incluir comunidades desde el inicio.",
+              "Auditar manejo de datos."
+            ]
+          },
+          {
+            "tipo": "unica",
+            "descripcion": "En la encuesta, todas las respuestas fueron unificadas en un solo grupo, con cada categoría (Verde, Rojo, Amarillo y Azul) recibiendo una sola respuesta. Esto sugiere que los participantes valoraron la necesidad de unir esfuerzos y coordinación (Azul) como la prioridad más importante.",
+            "pregunta_id": 20,
+            "tipo_grafica": "pastel",
+            "metodo_valores": "conteo",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              {
+                "texto": "Verde — capacidad o fortaleza que debe consolidarse",
+                "conteo": 1,
+                "opcion_id": 4
+              },
+              {
+                "texto": "Rojo — riesgo, dilema, conflicto o barrera que debe resolverse",
+                "conteo": 1,
+                "opcion_id": 5
+              },
+              {
+                "texto": "Amarillo — oportunidad, solución o nueva práctica que debería desarrollarse",
+                "conteo": 1,
+                "opcion_id": 6
+              },
+              {
+                "texto": "Azul — necesidad de articulación, gobernanza, participación o trabajo conjunto",
+                "conteo": 1,
+                "opcion_id": 7
+              }
+            ]
+          }
+        ],
+        "momento_id": 5,
+        "descripcion_general": "En la jornada participativa, se identificó un hilo común de preocupación por la ética y la calidad de la investigación, con respuestas recurrentes sobre la protección de datos, consentimiento informado y fortalecimiento del Comité Ético. La coordinación y la unificación de esfuerzos fueron valorados como la prioridad más importante, según las respuestas unificadas de todos los participantes."
+      },
+      {
+        "preguntas": [
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías fueron recabadas de todos los participantes (12 de 12 recibidas), pero no se identificaron patrones o tendencias claras en ellas.",
+            "pregunta_id": 21,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": []
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados muestran que la sostenibilidad y el bienestar son temas recurrentes en las respuestas de este grupo de encuestados, con un total de 12 respuestas no vacías dedicadas a estos temas. Además, se destacan los conceptos de ganancias económicas y el propósito de crear empresas, así como el impacto compartido en estos procesos.",
+            "pregunta_id": 22,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "sostenibilidad, ganancias, económico, bienestar sostenibilidad, bienestar, ambiental resultado",
+              "propósito, creación empresas, creación, compartido solo, compartido, central impacto"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican un alto nivel de participación en la pregunta. Los temas recurrentes apuntan a la importancia de análisis, desarrollo de competencias digitales, y la validación temprana de ideas, sugiriendo que la comunidad está enfocada en mejorar sus habilidades y validar proyectos de manera eficiente.",
+            "pregunta_id": 23,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "análisis, análisis datos, competencias digitales, comunidad, digitales, desarrollar competencias",
+              "requieren, requieren competencias, ideas, validación, riesgo validación, validación temprana"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "De las 12 respuestas recopiladas, todas fueron completadas con texto, pero no se identificaron patrones o tendencias significativas en las respuestas proporcionadas.",
+            "pregunta_id": 24,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": []
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "La pregunta de encuesta mostró que los temas recurrentes fueron el acompañamiento legal y la claridad en los procedimientos. Además, se destacaron las iniciativas de emprendimiento y la accesibilidad para estudiantes, así como el escalamiento de estas iniciativas.",
+            "pregunta_id": 25,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "acompañamiento, acompañamiento legal, clara, clara validación, emprendimientos, emprendimientos hacen",
+              "accesibles, accesibles estudiantes, estudiantes, escalamiento, acompañe idea, acompañe"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "De las 12 respuestas recibidas, todas fueron no vacías, pero no se identificaron patrones claros en las respuestas proporcionadas.",
+            "pregunta_id": 26,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": []
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas a la pregunta indican que el tema de fortalecimiento y alianzas entre empresas y comunidades organizaciones fue recurrente, con múltiples menciones a fortalecer redes, escalar soluciones y el involucramiento de graduados y universidades.",
+            "pregunta_id": 27,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": [
+              "fortalecer, alianzas empresas, alianzas, empresas, comunidades organizaciones, comunidades",
+              "fortalecer, fortalecer redes, escalar, escalar soluciones, graduados, universidades"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "De las 12 respuestas recabadas, todas fueron no vacías, pero no se identificaron patrones claros en las respuestas proporcionadas.",
+            "pregunta_id": 28,
+            "tipo_grafica": null,
+            "metodo_valores": "bertopic",
+            "total_respuestas": 12,
+            "valores_caracteristicos": []
+          }
+        ],
+        "momento_id": 6,
+        "descripcion_general": "Las respuestas recopiladas muestran un alto nivel de participación con temas recurrentes como la sostenibilidad, el bienestar, ganancias económicas, el desarrollo de competencias digitales, el escalamiento de proyectos y la alianza entre empresas y comunidades. Sin patrones claros, los datos sugieren una variedad de intereses y enfoques en la comunidad de encuestados."
+      },
+      {
+        "preguntas": [
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican que los participantes valoraron temas como la transformación del conocimiento en valor, la innovación intercultural sostenible, el enlace entre ciencia y comunidad, y un emprendimiento inclusivo como motor de cambio.",
+            "pregunta_id": 29,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Transformar conocimiento en valor.",
+              "Innovación intercultural sostenible.",
+              "Conectar ciencia comunidad.",
+              "Motor emprendimiento inclusivo."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas recogidas muestran una alta aceptación general del tema, con temas recurrentes como el valor público, el impacto verificable, la pertinencia, la sostenibilidad y la inclusión como puntos fuertes.",
+            "pregunta_id": 30,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Valor público",
+              "Impacto verificable",
+              "Pertinencia",
+              "Sostenibilidad",
+              "Inclusión"
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Los resultados de la pregunta muestran que los temas de gestión de propiedad intelectual (IP) y mentoría se encuentran recurrentemente entre las respuestas de los encuestados, junto con temas como laboratorios prototipado y formación emprendimiento, así como oficina de transferencia y financiamiento. También se mencionaron aspectos de validación temprana y financiamiento.",
+            "pregunta_id": 31,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Gestión IP, mentoría.",
+              "Laboratorios prototipado, formación emprendimiento.",
+              "Oficina transferencia, financiamiento.",
+              "Validación temprana, financiamiento."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican que los temas recurrentes identificados por los encuestados son: simplificar procesos, incentivar transferencia, formar en emprendimiento, fortalecer la cultura y promover la investigación.",
+            "pregunta_id": 32,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Simplificar procesos.",
+              "Incentivar transferencia.",
+              "Formar en emprendimiento.",
+              "Fortalecer cultura.",
+              "Incentivar investigación."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías a la pregunta indican que los temas y frases recurrentes mencionados en la encuesta son: spin-offs activos, empleos generados, patentes registradas, alianzas consolidadas y impacto social.",
+            "pregunta_id": 33,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Spin-offs activos",
+              "Empleos generados",
+              "Patentes registradas",
+              "Alianzas consolidadas",
+              "Impacto social"
+            ]
+          }
+        ],
+        "momento_id": 7,
+        "descripcion_general": "Durante la jornada participativa, los participantes valoraron temas como la transformación del conocimiento en valor, la innovación intercultural sostenible y el enlace entre ciencia y comunidad. Los puntos fuertes identificados incluyeron el valor público, el impacto verificable, la pertinencia, la sostenibilidad y la inclusión. También se destacaron temas como gestión de propiedad intelectual, mentoría, validación temprana, financiamiento y fortalecimiento de la cultura de investigación."
+      },
+      {
+        "preguntas": [
+          {
+            "tipo": "unica",
+            "descripcion": "Las respuestas a la pregunta de encuesta muestran que todos los rumbo son relevantes, ya que cada uno obtuvo una sola respuesta, evidenciando un nivel de interés o participación similar en todos los temas abordados.",
+            "pregunta_id": 34,
+            "tipo_grafica": "pastel",
+            "metodo_valores": "conteo",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              {
+                "texto": "Rumbo 1 — Personas y Cultura",
+                "conteo": 1,
+                "opcion_id": 8
+              },
+              {
+                "texto": "Rumbo 2 — Conocimiento que se transforma",
+                "conteo": 1,
+                "opcion_id": 9
+              },
+              {
+                "texto": "Rumbo 3 — Ecosistema y Conexiones",
+                "conteo": 1,
+                "opcion_id": 10
+              },
+              {
+                "texto": "Rumbo 4 — Impacto y Territorio",
+                "conteo": 1,
+                "opcion_id": 11
+              }
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas no vacías indican que todos los participantes compartieron sus impresiones. Los temas recurrentes fueron la necesidad de ofrecer más capacidades técnicas y legales, la creación de una ruta única desde la idea hasta la spin-off, la conexión entre investigadores y empresarios, y la formación de estudiantes y docentes en innovación.",
+            "pregunta_id": 35,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Ofrecer más capacidades técnicas y legales.",
+              "Crear ruta única desde idea a spin-off.",
+              "Conectar investigadores con empresarios.",
+              "Formar a estudiantes y docentes en innovación."
+            ]
+          },
+          {
+            "tipo": "abierta",
+            "descripcion": "Las respuestas de texto no vacías indican un alto nivel de participación, con todos los encuestados respondiendo. Los temas recurrentes mencionados son avances en spin-offs y empleo, reconocimiento de comunidades, transferencia de tecnología y impacto positivo medible, lo que sugiere un interés y una visión compartida en estos aspectos.",
+            "pregunta_id": 36,
+            "tipo_grafica": null,
+            "metodo_valores": "llm",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              "Avanzamos con spin-offs y empleo.",
+              "Avanzamos con reconocimiento comunidades.",
+              "Avanzamos con transferencia tecnológica.",
+              "Avanzamos con impacto medible positivo."
+            ]
+          },
+          {
+            "tipo": "unica",
+            "descripcion": "Las respuestas a la pregunta muestran un equilibrio entre diferentes opciones: 1 voto por cada opción de color, incluyendo verde para fortalecer una capacidad existente, rojo para resolver una barrera estructural, amarillo para desarrollar una nueva oportunidad, y azul para crear una nueva conexión.",
+            "pregunta_id": 37,
+            "tipo_grafica": "pastel",
+            "metodo_valores": "conteo",
+            "total_respuestas": 4,
+            "valores_caracteristicos": [
+              {
+                "texto": "Verde — fortalecer una capacidad existente o construir una nueva capacidad",
+                "conteo": 1,
+                "opcion_id": 12
+              },
+              {
+                "texto": "Rojo — resolver una barrera o nudo estructural",
+                "conteo": 1,
+                "opcion_id": 13
+              },
+              {
+                "texto": "Amarillo — desarrollar una nueva oportunidad, apuesta o futuro posible",
+                "conteo": 1,
+                "opcion_id": 14
+              },
+              {
+                "texto": "Azul — crear una conexión, alianza o nueva forma de articulación",
+                "conteo": 1,
+                "opcion_id": 15
+              }
+            ]
+          }
+        ],
+        "momento_id": 8,
+        "descripcion_general": "Durante la jornada participativa, los participantes mostraron un alto nivel de interés en temas como la formación de spin-offs, la transferencia de tecnología y el impacto positivo medible. Las respuestas no vacías recurrentes reflejaron la necesidad de avanzar en áreas como el reconocimiento de comunidades, la resolución de barreras estructurales y la creación de nuevas conexiones, así como el desarrollo de capacidades técnicas y legales."
+      }
+    ],
+    "participacion": {
+      "tasa_participacion": 92.3,
+      "total_participantes": 13,
+      "participantes_que_respondieron": 12
+    }
+  },
+  "texto_reporte": "Síntesis ejecutiva para la Rectoría de la Universidad del Magdalena:\n\nLa jornada participativa organizada por nuestra comunidad de investigación tuvo una participación total de 13 participantes, de los cuales 12 (92.3%) respondieron a la encuesta. Este alto nivel de participación refleja una alta disposición de la comunidad para participar en la reflexión y la toma de decisiones relacionadas con el desarrollo y la gestión de la investigación en la institución.\n\nLos temas recurrentes identificados en las respuestas generalizan preocupaciones fundamentales como la protección de datos, la bioética, el consentimiento informado, la centralización de la investigación y el reconocimiento de las comunidades y la biodiversidad. Además, los participantes también destacaron preocupaciones sobre la docencia, los protocolos, la evaluación continua y la transversalización, reflejando una preocupación por la eficiencia, la formación y la gobernanza en la institución.\n\nEl hilo común de preocupación identificado fue la ética y la calidad de la investigación, con respuestas recurrentes sobre la protección de datos, consentimiento informado y fortalecimiento del Comité Ético. La coordinación y la unificación de esfuerzos fueron valorados como la prioridad más importante, según las respuestas unificadas de todos los participantes.\n\nLas respuestas recopiladas muestran un alto nivel de participación con temas recurrentes como la sostenibilidad, el bienestar, ganancias económicas, el desarrollo de competencias digitales, el escalamiento de proyectos y la alianza entre empresas y comunidades. Sin patrones claros, los datos sugieren una variedad de intereses y enfoques en la comunidad de encuestados.\n\nLas respuestas no vacías recurrentes reflejaron la necesidad de avanzar en áreas como el reconocimiento de comunidades, la resolución de barreras estructurales y la creación de nuevas conexiones, así como el desarrollo de capacidades técnicas y legales. Las respuestas también identificaron puntos fuertes como el valor público, el impacto verificable, la pertinencia, la sostenibilidad y la inclusión.",
+  "modelo_usado": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "solicitado_por": 3,
+  "creado_en": "2026-08-18T18:22:42.536389-05:00",
+  "actualizado_en": "2026-08-18T18:30:07.174754-05:00",
+  "completado_en": "2026-08-18T18:30:07.173450-05:00"
+}
+</script>
+<script>
+  function syntaxHighlight(json) {
+    json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    json = json.replace(
+      /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+      function (match) {
+        var cls = 'number';
+        if (/^"/.test(match)) {
+          cls = /:$/.test(match) ? 'key' : 'string';
+        } else if (/true|false/.test(match)) {
+          cls = 'literal';
+        } else if (/null/.test(match)) {
+          cls = 'literal';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+      }
+    );
+    return json.replace(/([{}\[\],])/g, '<span class="punct">$1</span>');
+  }
+  var raw = document.getElementById('json-data').textContent;
+  document.getElementById('json-output').innerHTML = syntaxHighlight(raw);
+</script>
+</body>
+</html>

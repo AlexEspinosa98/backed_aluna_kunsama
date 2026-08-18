@@ -47,6 +47,11 @@ Ver [docs/USER_STORIES.md](docs/USER_STORIES.md) para el detalle funcional compl
 - `GET /api/admin/participantes/` (filtrable `?jornada=<id>`)
 - `GET /api/admin/respuestas/` (filtrable `?momento=<id>` o `?pregunta=<id>`)
 
+**Análisis con IA** (`IsAdminUser`) — ver [docs/REPORTE_ANALITICA_SCHEMA.html](docs/REPORTE_ANALITICA_SCHEMA.html) para el esquema completo del JSON de respuesta:
+- `GET/POST /api/admin/plantillas-analisis/`, `GET/PATCH/DELETE /api/admin/plantillas-analisis/<id>/`
+- `POST /api/admin/reportes/` — dispara un análisis (`jornada`, `momentos` opcional, `plantilla` opcional); responde de inmediato con el reporte en `procesando`
+- `GET /api/admin/reportes/` (filtrable `?jornada=<id>`), `GET/DELETE /api/admin/reportes/<id>/` — hacer polling hasta `estado=completo`
+
 **Público / participante**:
 - `GET /api/jornadas/` — jornadas activas
 - `GET /api/jornadas/<slug>/` — detalle de jornada
