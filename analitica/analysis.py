@@ -265,6 +265,32 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
     return texto or f'(Sin descripción automática — {error})'
 
 
+def _pista_equilibrio(opciones):
+    """Un LLM chico (3B) razona mal 'a ojo' sobre la forma de una distribución a partir de una
+    tabla de conteos — en pruebas, con instrucciones neutrales terminaba recomendando 'barras'
+    casi siempre, sin importar qué tan pareja o desbalanceada fuera. En vez de pedirle que infiera
+    el equilibrio, se lo calculamos aquí (determinístico) y se lo entregamos como dato explícito
+    — así solo tiene que reaccionar a una pista ya lista, que es una tarea mucho más confiable
+    para un modelo de este tamaño."""
+    conteos = [o['conteo'] for o in opciones]
+    maximo = max(conteos) if conteos else 0
+    if maximo == 0 or len(opciones) < 4:
+        return None
+    minimo = min(conteos)
+    parejo = minimo / maximo >= 0.4
+    if parejo:
+        return (
+            'Nota: los conteos están relativamente parejos entre las opciones (ninguna domina '
+            'claramente) — con 4 o más opciones así, casi siempre conviene GRAFICA: radar para '
+            'mostrar la forma general de la inclinación entre todas a la vez.'
+        )
+    return (
+        'Nota: los conteos están desbalanceados — una o pocas opciones concentran las '
+        'respuestas — eso suele mostrarse mejor con GRAFICA: barras o GRAFICA: pastel que con '
+        'un radar.'
+    )
+
+
 def _agente_pregunta_cerrada(pregunta, estad):
     """Para preguntas `unica`/`multiple`: además de la descripción, el propio LLM elige el tipo
     de gráfica que mejor muestre hacia dónde se inclina el público entre las opciones — pastel
@@ -280,11 +306,15 @@ def _agente_pregunta_cerrada(pregunta, estad):
         "escribiendo EXACTAMENTE una de estas tres líneas: 'GRAFICA: pastel' (pocas opciones "
         "mutuamente excluyentes), 'GRAFICA: barras' (comparación simple de conteos), o "
         "'GRAFICA: radar' (varias opciones — 4 o más — donde interesa ver la forma general de la "
-        "inclinación entre todas a la vez). Español, prosa clara."
+        "inclinación entre todas a la vez). Si se te da una nota con una recomendación, síguela "
+        "salvo que los datos digan claramente lo contrario. Español, prosa clara."
     )
     lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
     for opcion in opciones:
         lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
+    pista = _pista_equilibrio(opciones)
+    if pista:
+        lineas.append(pista)
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
 
     tipo_grafica = None
