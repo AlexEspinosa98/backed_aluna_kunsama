@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16
+    container_name: aluna_kunsama_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aluna_kunsamu}
+      POSTGRES_USER: ${POSTGRES_USER:-aluna_kunsamu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - aluna_kunsama_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aluna_kunsamu}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  aluna_kunsama_pg_data:
+    name: aluna_kunsama_pg_data
