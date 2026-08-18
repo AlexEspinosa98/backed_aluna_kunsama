@@ -1,18 +1,25 @@
-"""Análisis cualitativo → cuantitativo para reportes de jornadas: estadísticas determinísticas
-sobre las respuestas, modelado de tópicos con BERTopic sobre las preguntas abiertas, y una
-narrativa redactada por un LLM local (`Qwen2.5-3B-Instruct`, cuantizado GGUF, servido con
-`llama-cpp-python` — sin GPU, sin `torch`; mismo enfoque ya probado en el repo hermano
-`aluna_propositos_backend/backend/catalog/ai_analysis.py`).
+"""Análisis jerárquico de una jornada: jornada → momento → pregunta, con un LLM local
+(`Qwen2.5-3B-Instruct`, cuantizado GGUF, servido con `llama-cpp-python` — sin GPU, sin `torch`;
+mismo enfoque ya probado en el repo hermano `aluna_propositos_backend/backend/catalog/ai_analysis.py`)
+actuando como varios agentes chicos en vez de uno solo con todo el contexto encima.
 
-Decisión de diseño central, igual que en ese repo hermano: **los números nunca dependen del
-LLM**. `calcular_estadisticas` y `modelar_topicos` son 100% determinísticos; el modelo solo
-redacta prosa sobre esos datos ya calculados, nunca los inventa. Si el LLM falla, tarda demasiado
-o no está descargado, el reporte igual queda `completo` con las estadísticas y tópicos — solo
-cambia si la narrativa es texto generado o un aviso de respaldo.
+Decisión de diseño central, igual que en el repo hermano: **los números nunca dependen del LLM**.
+Las estadísticas y los tópicos (BERTopic) son 100% determinísticos; el modelo solo redacta prosa
+sobre esos datos ya calculados. Cada agente además solo ve los datos de **su propio nivel** — nunca
+el detalle completo de la jornada — así que el tamaño del contexto no escala con la cantidad de
+preguntas/momentos de la jornada (a diferencia de la versión anterior de una sola llamada, que
+llegó a superar la ventana de contexto del modelo con una jornada real de 34 preguntas).
 
-    calcular_estadisticas ─┐
-    modelar_topicos (BERTopic) ─┴─→ generar_narrativa (LLM, con timeout) ─→ Reporte.completo
-                                                    └─(timeout / error)──→ texto de respaldo
+    Por pregunta:                      Por momento:                 Jornada completa:
+      estadísticas + (BERTopic si         agente_momento(              agente_jornada(
+      hay muestra, si no extracción       [descripciones               [síntesis de
+      directa por LLM)         ─┐          de sus preguntas])           sus momentos])
+      agente_pregunta(datos) ───┴──────────────┴──────────────────────────┘
+
+    Total: N (preguntas) + M (momentos) + 1 llamadas al LLM, todas secuenciales sobre la misma
+    instancia de `Llama` cacheada. Cada agente falla de forma aislada (nunca tumba el reporte
+    completo): si una llamada falla o se pasa del tiempo, esa pieza queda con un aviso corto en
+    vez de descripción generada, y el resto del análisis sigue su curso.
 """
 import os
 import threading
@@ -29,23 +36,23 @@ MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_FILE
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 
 MIN_RESPUESTAS_TOPICOS = 8
-# Jornadas reales con varias decenas de preguntas empujan el prompt a varios miles de tokens;
-# medido ~72s para la Jornada Ágil 2 completa (34 preguntas) en este servidor (48 cores, sin GPU).
-# Se deja margen amplio porque esto corre en el hilo de background, no bloquea el request.
-GENERATION_TIMEOUT_SECONDS = 180
+# Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
+# resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
+GENERATION_TIMEOUT_SECONDS = 90
 
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
-    "equipo organizador. Usa EXCLUSIVAMENTE los datos que se te entregan a continuación "
-    "(estadísticas y tópicos ya calculados a partir de las respuestas reales) — nunca inventes "
-    "cifras, porcentajes, temas ni citas que no estén en esos datos. Si un dato no está "
+    "equipo organizador. Usa EXCLUSIVAMENTE los datos que se te entregan a continuación — nunca "
+    "inventes cifras, porcentajes, temas ni citas que no estén en esos datos. Si un dato no está "
     "disponible, no lo menciones. Escribe en español, en prosa clara, sin viñetas innecesarias."
 )
 
 FALLBACK_TEXTO = (
-    'No se pudo generar el análisis narrativo automáticamente (el modelo no está disponible o '
-    'tardó demasiado). A continuación se muestran las estadísticas y los tópicos calculados.'
+    'No se pudo generar la síntesis narrativa automáticamente. A continuación se muestra el '
+    'análisis por momento y por pregunta.'
 )
+
+TIPO_GRAFICA_POR_TIPO_PREGUNTA = {'unica': 'pastel', 'multiple': 'barras'}
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +75,40 @@ def _get_llm():
                         "'python manage.py download_llm_model' primero."
                     )
                 _llm_instance = Llama(
-                    model_path=str(MODEL_PATH), n_ctx=16384,
+                    model_path=str(MODEL_PATH), n_ctx=4096,
                     n_threads=os.cpu_count(), verbose=False,
                 )
     return _llm_instance
+
+
+def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
+    """Una llamada de agente al LLM. Devuelve (texto, error) — nunca lanza excepción; `error`
+    queda disponible para diagnóstico cuando `texto` es None."""
+    resultado = {}
+
+    def _run():
+        try:
+            llm = _get_llm()
+            salida = llm.create_chat_completion(
+                messages=[
+                    {'role': 'system', 'content': system},
+                    {'role': 'user', 'content': user},
+                ],
+                max_tokens=max_tokens, temperature=temperature,
+            )
+            resultado['texto'] = salida['choices'][0]['message']['content'].strip()
+        except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
+            resultado['error'] = str(exc)
+
+    hilo = threading.Thread(target=_run, daemon=True)
+    hilo.start()
+    hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
+
+    if hilo.is_alive():
+        return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s).'
+    if not resultado.get('texto'):
+        return None, resultado.get('error', 'El modelo no devolvió texto.')
+    return resultado['texto'], None
 
 
 # ---------------------------------------------------------------------------
@@ -93,66 +130,7 @@ def _get_embedder():
 
 
 # ---------------------------------------------------------------------------
-# Estadísticas determinísticas.
-# ---------------------------------------------------------------------------
-
-def calcular_estadisticas(jornada, momentos):
-    from participantes.models import Participante, Respuesta
-
-    from jornadas.models import Pregunta
-
-    total_participantes = Participante.objects.filter(jornada=jornada).count()
-    preguntas = (
-        Pregunta.objects.filter(momento__in=momentos)
-        .select_related('momento')
-        .prefetch_related('opciones')
-        .order_by('momento__orden', 'orden')
-    )
-
-    participantes_respondieron = set(
-        Respuesta.objects.filter(pregunta__in=preguntas, participante__isnull=False)
-        .values_list('participante_id', flat=True)
-        .distinct()
-    )
-
-    por_pregunta = []
-    for pregunta in preguntas:
-        respuestas_qs = Respuesta.objects.filter(pregunta=pregunta)
-        entry = {
-            'pregunta_id': pregunta.id,
-            'texto': pregunta.texto,
-            'tipo': pregunta.tipo,
-            'momento_id': pregunta.momento_id,
-            'momento_titulo': pregunta.momento.titulo,
-            'total_respuestas': respuestas_qs.count(),
-        }
-        if pregunta.tipo == Pregunta.TIPO_ABIERTA:
-            entry['respuestas_no_vacias'] = respuestas_qs.exclude(texto_libre='').count()
-        else:
-            entry['conteo_opciones'] = [
-                {
-                    'opcion_id': opcion.id,
-                    'texto': opcion.texto,
-                    'conteo': respuestas_qs.filter(opciones=opcion).count(),
-                }
-                for opcion in pregunta.opciones.all()
-            ]
-        por_pregunta.append(entry)
-
-    tasa = (
-        round(len(participantes_respondieron) / total_participantes * 100, 1)
-        if total_participantes else 0.0
-    )
-    return {
-        'total_participantes': total_participantes,
-        'participantes_que_respondieron': len(participantes_respondieron),
-        'tasa_participacion': tasa,
-        'preguntas': por_pregunta,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Modelado de tópicos (BERTopic) — una corrida por pregunta abierta.
+# Tópicos (BERTopic) para muestras grandes — determinístico, sin LLM.
 # ---------------------------------------------------------------------------
 
 # Lista de paro en español para el vectorizador de palabras clave (c-TF-IDF). Sin esto, las
@@ -204,126 +182,171 @@ def _run_bertopic(textos):
     info = modelo.get_topic_info()
 
     temas = []
-    sin_tema = 0
     for _, row in info.iterrows():
         if row['Topic'] == -1:
-            sin_tema = int(row['Count'])
             continue
         palabras = [palabra for palabra, _peso in modelo.get_topic(row['Topic'])][:6]
-        temas.append({
-            'tema': int(row['Topic']),
-            'palabras_clave': palabras,
-            'tamano': int(row['Count']),
-            'porcentaje': round(row['Count'] / n * 100, 1),
-        })
+        temas.append({'palabras_clave': palabras, 'tamano': int(row['Count'])})
     temas.sort(key=lambda t: t['tamano'], reverse=True)
-    return temas, round(sin_tema / n * 100, 1)
+    return temas
 
 
-def modelar_topicos(momentos):
-    from jornadas.models import Pregunta
+def _extraer_valores_llm(textos):
+    """Para muestras chicas (no alcanza para BERTopic): el propio LLM lee las respuestas crudas
+    (son pocas) y extrae frases características tomadas/parafraseadas de ellas — no hay riesgo de
+    invención relevante porque debe basarse en lo dado, a diferencia de redactar sobre datos ya
+    resumidos."""
+    system = (
+        "Lees un grupo pequeño de respuestas abiertas de una encuesta. Devuelve entre 2 y 5 "
+        "frases cortas (3 a 6 palabras) que resuman los temas o ideas que aparecen, tomadas o "
+        "parafraseadas directamente de las respuestas dadas — nunca agregues ideas que no estén "
+        "ahí. Responde SOLO con las frases, una por línea, sin numerarlas ni agregar nada más."
+    )
+    user = '\n'.join(f'- {t}' for t in textos)
+    texto, error = _llamar_llm(system, user, max_tokens=150, temperature=0.4)
+    if not texto:
+        return [], error
+    frases = [linea.strip('-• ').strip() for linea in texto.splitlines() if linea.strip()]
+    return frases[:5], None
+
+
+# ---------------------------------------------------------------------------
+# Agente de pregunta.
+# ---------------------------------------------------------------------------
+
+def _estadisticas_pregunta(pregunta):
     from participantes.models import Respuesta
 
-    resultado = {}
-    preguntas_abiertas = Pregunta.objects.filter(momento__in=momentos, tipo=Pregunta.TIPO_ABIERTA)
-    for pregunta in preguntas_abiertas:
+    respuestas_qs = Respuesta.objects.filter(pregunta=pregunta)
+    if pregunta.tipo == 'abierta':
+        return {
+            'total_respuestas': respuestas_qs.count(),
+            'respuestas_no_vacias': respuestas_qs.exclude(texto_libre='').count(),
+        }
+    return {
+        'total_respuestas': respuestas_qs.count(),
+        'conteo_opciones': [
+            {'opcion_id': o.id, 'texto': o.texto, 'conteo': respuestas_qs.filter(opciones=o).count()}
+            for o in pregunta.opciones.all()
+        ],
+    }
+
+
+def _agente_pregunta_descripcion(pregunta, estad, valores_caracteristicos, metodo_valores):
+    system = (
+        "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
+        "resultados de UNA pregunta de encuesta, usando EXCLUSIVAMENTE los datos entregados a "
+        "continuación — nunca inventes cifras ni ideas que no estén ahí. Español, prosa clara."
+    )
+    if pregunta.tipo == 'abierta':
+        lineas = [
+            f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
+            f"(de {estad['total_respuestas']} recibidas)."
+        ]
+        if metodo_valores == 'sin_datos':
+            lineas.append('No se recibieron respuestas.')
+        elif metodo_valores == 'insuficiente':
+            lineas.append('Muestra insuficiente para identificar patrones robustos.')
+        elif valores_caracteristicos:
+            lineas.append('Temas/frases recurrentes: ' + '; '.join(valores_caracteristicos) + '.')
+        else:
+            lineas.append('No se identificaron patrones claros en las respuestas.')
+    else:
+        lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
+        for opcion in estad.get('conteo_opciones', []):
+            lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=200, temperature=0.5)
+    return texto or f'(Sin descripción automática — {error})'
+
+
+def analizar_pregunta(pregunta):
+    """Analiza una pregunta de forma aislada: estadísticas + (para abiertas) tópicos/frases +
+    descripción del agente de pregunta. Nunca lanza excepción — una falla puntual del LLM solo
+    deja un aviso corto en `descripcion`, no tumba el resto del análisis."""
+    estad = _estadisticas_pregunta(pregunta)
+
+    if pregunta.tipo == 'abierta':
+        from participantes.models import Respuesta
         textos = list(
             Respuesta.objects.filter(pregunta=pregunta)
             .exclude(texto_libre='')
             .values_list('texto_libre', flat=True)
         )
-        if len(textos) < MIN_RESPUESTAS_TOPICOS:
-            resultado[str(pregunta.id)] = {
-                'pregunta': pregunta.texto,
-                'muestra_insuficiente': True,
-                'total_respuestas': len(textos),
-                'temas': [],
-            }
-            continue
-
-        temas, sin_tema_pct = _run_bertopic(textos)
-        resultado[str(pregunta.id)] = {
-            'pregunta': pregunta.texto,
-            'muestra_insuficiente': False,
-            'total_respuestas': len(textos),
-            'temas': temas,
-            'sin_tema_pct': sin_tema_pct,
-        }
-    return resultado
-
-
-# ---------------------------------------------------------------------------
-# Narrativa (LLM).
-# ---------------------------------------------------------------------------
-
-def _formatear_contexto(jornada, alcance_label, estadisticas, topicos):
-    lineas = [
-        f"Jornada: {jornada.nombre} — alcance del reporte: {alcance_label}.",
-        f"Participantes totales en la jornada: {estadisticas['total_participantes']}.",
-        f"Participantes que respondieron algo en este alcance: "
-        f"{estadisticas['participantes_que_respondieron']} "
-        f"({estadisticas['tasa_participacion']}% de participación).",
-        '',
-    ]
-    for pregunta in estadisticas['preguntas']:
-        lineas.append(f"Pregunta — [{pregunta['momento_titulo']}] {pregunta['texto']}")
-        lineas.append(f"  Total de respuestas recibidas: {pregunta['total_respuestas']}.")
-        if pregunta['tipo'] == 'abierta':
-            lineas.append(f"  Respuestas de texto no vacías: {pregunta['respuestas_no_vacias']}.")
-            temas_p = topicos.get(str(pregunta['pregunta_id']))
-            if temas_p:
-                if temas_p['muestra_insuficiente']:
-                    lineas.append('  Muestra insuficiente para identificar temas recurrentes.')
-                elif not temas_p['temas']:
-                    lineas.append('  No se identificaron temas recurrentes claros en las respuestas.')
-                else:
-                    for tema in temas_p['temas']:
-                        palabras = ', '.join(tema['palabras_clave'])
-                        lineas.append(
-                            f"  Tema recurrente ({tema['porcentaje']}% · {tema['tamano']} "
-                            f"respuestas): {palabras}."
-                        )
-                    lineas.append(f"  Respuestas sin tema claro: {temas_p['sin_tema_pct']}%.")
+        if not textos:
+            valores, metodo = [], 'sin_datos'
+        elif len(textos) >= MIN_RESPUESTAS_TOPICOS:
+            temas = _run_bertopic(textos)
+            valores = [', '.join(t['palabras_clave']) for t in temas]
+            metodo = 'bertopic'
         else:
-            for opcion in pregunta.get('conteo_opciones', []):
-                lineas.append(f"  - {opcion['texto']}: {opcion['conteo']} respuestas.")
-        lineas.append('')
-    return '\n'.join(lineas)
+            valores, error = _extraer_valores_llm(textos)
+            metodo = 'llm' if valores else 'insuficiente'
+
+        descripcion = _agente_pregunta_descripcion(pregunta, estad, valores, metodo)
+        return {
+            'pregunta_id': pregunta.id,
+            'tipo': pregunta.tipo,
+            'tipo_grafica': None,
+            'total_respuestas': estad['total_respuestas'],
+            'descripcion': descripcion,
+            'valores_caracteristicos': valores,
+            'metodo_valores': metodo,
+        }
+
+    descripcion = _agente_pregunta_descripcion(pregunta, estad, None, 'conteo')
+    return {
+        'pregunta_id': pregunta.id,
+        'tipo': pregunta.tipo,
+        'tipo_grafica': TIPO_GRAFICA_POR_TIPO_PREGUNTA.get(pregunta.tipo),
+        'total_respuestas': estad['total_respuestas'],
+        'descripcion': descripcion,
+        'valores_caracteristicos': estad['conteo_opciones'],
+        'metodo_valores': 'conteo',
+    }
 
 
-def generar_narrativa(plantilla, contexto_texto):
-    """Devuelve (texto, error). `texto` es None si falló o se pasó del tiempo — nunca lanza
-    excepción; `error` queda disponible para diagnóstico aunque el reporte igual se complete con
-    el texto de respaldo."""
+# ---------------------------------------------------------------------------
+# Agente de momento.
+# ---------------------------------------------------------------------------
+
+def analizar_momento(momento):
+    preguntas = momento.preguntas.all().order_by('orden')
+    analisis_preguntas = [analizar_pregunta(p) for p in preguntas]
+
+    system = (
+        "Eres un analista de datos. Redacta una síntesis breve (2 a 4 frases) de UN momento de "
+        "una jornada participativa, integrando las descripciones ya redactadas de sus preguntas "
+        "— no repitas pregunta por pregunta, encuentra el hilo común. No agregues datos que no "
+        "estén en las descripciones dadas. Español."
+    )
+    user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
+    descripcion_general, error = _llamar_llm(system, user, max_tokens=250, temperature=0.5)
+
+    return {
+        'momento_id': momento.id,
+        'descripcion_general': descripcion_general or f'(Sin síntesis automática — {error})',
+        'preguntas': analisis_preguntas,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Agente de jornada.
+# ---------------------------------------------------------------------------
+
+def analizar_jornada(plantilla, momentos_analisis, participacion):
     system = BASE_SYSTEM_PROMPT
     if plantilla and plantilla.prompt_sistema:
         system += '\n\nInstrucciones adicionales de estilo del equipo organizador:\n' + plantilla.prompt_sistema
 
-    resultado = {}
-
-    def _run():
-        try:
-            llm = _get_llm()
-            salida = llm.create_chat_completion(
-                messages=[
-                    {'role': 'system', 'content': system},
-                    {'role': 'user', 'content': contexto_texto},
-                ],
-                max_tokens=900, temperature=0.5,
-            )
-            resultado['texto'] = salida['choices'][0]['message']['content'].strip()
-        except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
-            resultado['error'] = str(exc)
-
-    hilo = threading.Thread(target=_run, daemon=True)
-    hilo.start()
-    hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
-
-    if hilo.is_alive():
-        return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s).'
-    if not resultado.get('texto'):
-        return None, resultado.get('error', 'El modelo no devolvió texto.')
-    return resultado['texto'], None
+    lineas = [
+        f"Participantes totales: {participacion['total_participantes']}.",
+        f"Participantes que respondieron: {participacion['participantes_que_respondieron']} "
+        f"({participacion['tasa_participacion']}%).",
+        '',
+    ]
+    for m in momentos_analisis:
+        lineas.append(f"- {m['descripcion_general']}")
+    return _llamar_llm(system, '\n'.join(lineas), max_tokens=700, temperature=0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -343,19 +366,37 @@ def procesar_reporte(reporte_id):
         momentos = list(reporte.momentos.all()) or list(reporte.jornada.momentos.all())
         if not momentos:
             raise ValueError('La jornada no tiene momentos para analizar.')
+        momentos.sort(key=lambda m: m.orden)
 
-        estadisticas = calcular_estadisticas(reporte.jornada, momentos)
-        topicos = modelar_topicos(momentos)
+        from participantes.models import Participante, Respuesta
 
-        alcance_label = dict(Reporte.ALCANCE_CHOICES)[reporte.alcance]
-        contexto = _formatear_contexto(reporte.jornada, alcance_label, estadisticas, topicos)
-        texto, error_narrativa = generar_narrativa(reporte.plantilla, contexto)
+        from jornadas.models import Pregunta
 
-        reporte.estadisticas = estadisticas
-        reporte.topicos = topicos
+        total_participantes = Participante.objects.filter(jornada=reporte.jornada).count()
+        preguntas_scope = Pregunta.objects.filter(momento__in=momentos)
+        participantes_respondieron = set(
+            Respuesta.objects.filter(pregunta__in=preguntas_scope, participante__isnull=False)
+            .values_list('participante_id', flat=True)
+            .distinct()
+        )
+        tasa = (
+            round(len(participantes_respondieron) / total_participantes * 100, 1)
+            if total_participantes else 0.0
+        )
+        participacion = {
+            'total_participantes': total_participantes,
+            'participantes_que_respondieron': len(participantes_respondieron),
+            'tasa_participacion': tasa,
+        }
+
+        momentos_analisis = [analizar_momento(m) for m in momentos]
+
+        texto, error_narrativa = analizar_jornada(reporte.plantilla, momentos_analisis, participacion)
+
+        reporte.analisis = {'participacion': participacion, 'momentos': momentos_analisis}
         reporte.texto_reporte = texto or FALLBACK_TEXTO
         reporte.modelo_usado = DEFAULT_MODEL_FILE if texto else ''
-        reporte.error_mensaje = '' if texto else f'Narrativa no generada: {error_narrativa}'
+        reporte.error_mensaje = '' if texto else f'Síntesis de jornada no generada: {error_narrativa}'
         reporte.estado = Reporte.ESTADO_COMPLETO
         reporte.completado_en = timezone.now()
         reporte.save()

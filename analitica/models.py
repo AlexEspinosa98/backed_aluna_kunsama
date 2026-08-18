@@ -60,8 +60,11 @@ class Reporte(models.Model):
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     error_mensaje = models.TextField(blank=True)
 
-    estadisticas = models.JSONField(default=dict, blank=True)
-    topicos = models.JSONField(default=dict, blank=True)
+    analisis = models.JSONField(
+        default=dict, blank=True,
+        help_text='Estructura jerárquica: participación + análisis por momento y por pregunta '
+        '(descripción, tipo de gráfica, valores característicos). Ver analitica/analysis.py.',
+    )
     texto_reporte = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=150, blank=True)
 

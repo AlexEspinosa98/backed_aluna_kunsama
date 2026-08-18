@@ -70,16 +70,19 @@ Como administrador quiero crear y editar plantillas de prompt que definen el ton
 - Solo una plantilla puede quedar marcada `predeterminada=true` a la vez; marcar una nueva desmarca automáticamente la anterior.
 - El texto de la plantilla (`prompt_sistema`) son instrucciones de estilo/foco — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.
 
-### HU-13 — Generar un reporte de análisis (estadísticas + tópicos + narrativa con IA)
-Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y un reporte narrativo.
+### HU-13 — Generar un reporte de análisis jerárquico (jornada → momento → pregunta) con IA
+Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y una síntesis narrativa a tres niveles.
 - `POST /api/admin/reportes/` con `jornada` (obligatorio), `momentos` (opcional: vacío = jornada completa, uno = momento individual, varios = momentos combinados) y `plantilla` (opcional; si no se manda usa la marcada `predeterminada`).
 - Responde de inmediato (`201`) con el reporte en estado `procesando` — el análisis corre en segundo plano, no bloquea el request.
-- El análisis combina: estadísticas determinísticas (conteo por opción, tasa de participación), modelado de tópicos con BERTopic sobre las respuestas de cada pregunta abierta, y una narrativa redactada por un LLM local (sin depender de internet en producción).
-- El LLM nunca inventa cifras: solo redacta prosa sobre las estadísticas y tópicos ya calculados. Si falla o tarda demasiado, el reporte igual queda `completo` con los datos cuantitativos y un aviso en vez de la narrativa.
+- El análisis es **multiagente**: una llamada al LLM local por cada pregunta (redacta su `descripcion` a partir de sus estadísticas/tópicos ya calculados), una por cada momento (sintetiza las descripciones de sus preguntas) y una para la jornada completa (sintetiza las descripciones de sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima, así el tamaño del contexto no depende de cuántas preguntas tenga la jornada.
+- Para preguntas `abierta`: con muestra suficiente (≥8 respuestas) los `valores_caracteristicos` salen de BERTopic (determinístico); con muestra chica, el propio LLM extrae 3-5 frases características tomadas de las respuestas dadas (`metodo_valores: "llm"`) en vez de dejarlas vacías.
+- El LLM nunca inventa cifras: cada agente solo ve los datos ya calculados de su propio nivel. Si una llamada puntual falla o tarda demasiado, esa pieza queda con un aviso corto — no tumba el resto del reporte.
 
 ### HU-14 — Consultar el estado y el resultado de un reporte
 Como administrador quiero consultar el estado de un reporte y su resultado una vez listo, para hacer seguimiento del análisis sin bloquear mi sesión de trabajo.
-- `GET /api/admin/reportes/` (filtrable `?jornada=<id>`) y `GET /api/admin/reportes/{id}/` devuelven `estado` (`pendiente`/`procesando`/`completo`/`error`), `estadisticas`, `topicos`, `texto_reporte` y `modelo_usado`.
+- `GET /api/admin/reportes/` (filtrable `?jornada=<id>`) y `GET /api/admin/reportes/{id}/` devuelven `estado` (`pendiente`/`procesando`/`completo`/`error`), `analisis` y `texto_reporte`.
+- `analisis` trae `participacion` (totales) y `momentos[]`, cada uno con `descripcion_general` y `preguntas[]` — cada pregunta con `tipo`, `tipo_grafica` (`"pastel"`/`"barras"`/`null` según el tipo de pregunta), `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic"`/`"llm"`/`"conteo"`). No repite el texto de preguntas/momentos — se referencian por id contra `/api/admin/preguntas/` y `/api/admin/momentos/`.
+- `texto_reporte` es la síntesis del agente de jornada (el nivel más alto).
 - `DELETE /api/admin/reportes/{id}/` elimina un reporte.
 
 ## Participante / Usuario

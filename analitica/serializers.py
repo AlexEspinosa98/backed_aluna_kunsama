@@ -27,7 +27,7 @@ class ReporteSerializer(serializers.ModelSerializer):
         model = Reporte
         fields = [
             'id', 'jornada', 'momentos', 'alcance', 'plantilla', 'plantilla_nombre', 'estado',
-            'error_mensaje', 'estadisticas', 'topicos', 'texto_reporte', 'modelo_usado',
+            'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields

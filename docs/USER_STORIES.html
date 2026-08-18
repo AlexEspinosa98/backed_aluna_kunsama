@@ -669,16 +669,17 @@
     <article class="story">
       <div class="story-head">
         <span class="hu-id">HU-13</span>
-        <h3>Generar un reporte de análisis (estadísticas + tópicos + narrativa con IA)</h3>
+        <h3>Generar un reporte de análisis jerárquico (jornada → momento → pregunta) con IA</h3>
         <span class="role-tag admin">Admin</span>
       </div>
-      <p class="narrative">Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y un reporte narrativo.</p>
+      <p class="narrative">Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y una síntesis narrativa a tres niveles.</p>
       <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/reportes/</span></span></div>
       <ul class="criteria">
         <li><code>jornada</code> obligatorio; <code>momentos</code> opcional (vacío = jornada completa, uno = momento individual, varios = combinados); <code>plantilla</code> opcional (usa la predeterminada si no se manda).</li>
         <li>Responde de inmediato (<code>201</code>) con el reporte en estado <code>procesando</code> — el análisis corre en segundo plano, no bloquea el request.</li>
-        <li>Combina estadísticas determinísticas, modelado de tópicos con BERTopic sobre las preguntas abiertas, y una narrativa de un LLM local (sin depender de internet en producción).</li>
-        <li>El LLM nunca inventa cifras: solo redacta sobre datos ya calculados. Si falla o tarda, el reporte igual queda <code>completo</code> con los datos cuantitativos.</li>
+        <li><strong>Multiagente:</strong> una llamada al LLM local por cada pregunta (redacta su <code>descripcion</code> desde sus propias estadísticas/tópicos), una por cada momento (sintetiza sus preguntas) y una para la jornada completa (sintetiza sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima, así el contexto no depende de cuántas preguntas tenga.</li>
+        <li>Preguntas <code>abierta</code> con muestra suficiente (≥8): <code>valores_caracteristicos</code> vía BERTopic (determinístico). Con muestra chica: el propio LLM extrae frases características tomadas de las respuestas dadas (<code>metodo_valores: "llm"</code>) en vez de dejarlas vacías.</li>
+        <li>El LLM nunca inventa cifras: cada agente solo ve los datos ya calculados de su propio nivel. Si una llamada puntual falla, esa pieza queda con un aviso — no tumba el resto del reporte.</li>
       </ul>
     </article>
 
@@ -695,6 +696,8 @@
         <span class="ep delete"><span class="m">DELETE</span><span class="path">/api/admin/reportes/{id}/</span></span>
       </div>
       <ul class="criteria">
+        <li><code>analisis</code> trae <code>participacion</code> (totales) y <code>momentos[]</code>, cada uno con <code>descripcion_general</code> y <code>preguntas[]</code> (<code>tipo</code>, <code>tipo_grafica</code>: <code>"pastel"</code>/<code>"barras"</code>/<code>null</code>, <code>descripcion</code>, <code>valores_caracteristicos</code>, <code>metodo_valores</code>). No repite texto de preguntas/momentos — se referencian por id.</li>
+        <li><code>texto_reporte</code> es la síntesis del agente de jornada, el nivel más alto.</li>
         <li>Devuelve <code>estado</code> (<code>pendiente</code>/<code>procesando</code>/<code>completo</code>/<code>error</code>), <code>estadisticas</code>, <code>topicos</code>, <code>texto_reporte</code> y <code>modelo_usado</code>.</li>
       </ul>
     </article>

@@ -14,5 +14,5 @@ class ReporteAdmin(admin.ModelAdmin):
     list_display = ['id', 'jornada', 'alcance', 'estado', 'plantilla', 'creado_en']
     list_filter = ['jornada', 'alcance', 'estado']
     readonly_fields = [
-        'estadisticas', 'topicos', 'texto_reporte', 'modelo_usado', 'error_mensaje', 'completado_en',
+        'analisis', 'texto_reporte', 'modelo_usado', 'error_mensaje', 'completado_en',
     ]
