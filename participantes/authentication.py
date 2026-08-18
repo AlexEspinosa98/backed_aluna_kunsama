@@ -1,3 +1,6 @@
+import uuid
+
+from django.core.exceptions import ValidationError
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from rest_framework import exceptions
 from rest_framework.authentication import BaseAuthentication
@@ -18,8 +21,13 @@ class ParticipanteTokenAuthentication(BaseAuthentication):
             return None
 
         try:
-            participante = Participante.objects.select_related('jornada').get(token=parts[1])
-        except (Participante.DoesNotExist, ValueError):
+            token = uuid.UUID(parts[1])
+        except ValueError:
+            raise exceptions.AuthenticationFailed('Token de participante inválido.')
+
+        try:
+            participante = Participante.objects.select_related('jornada').get(token=token)
+        except (Participante.DoesNotExist, ValidationError):
             raise exceptions.AuthenticationFailed('Token de participante inválido.')
 
         return (participante, None)

@@ -7,6 +7,15 @@ from jornadas.models import Jornada, OpcionPregunta, Pregunta
 
 
 class Participante(models.Model):
+    # DRF permission classes (IsAdminUser, IsAuthenticated, etc.) leen estos
+    # atributos asumiendo un modelo tipo User. Sin ellos, si un token de
+    # participante llega a un endpoint de admin, la autenticación igual
+    # sucede y la verificación de permiso revienta con AttributeError (500)
+    # en vez de negar el acceso limpiamente (403).
+    is_staff = False
+    is_active = True
+    is_authenticated = True
+
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='participantes')
     correo_institucional = models.EmailField()
     nombre = models.CharField(max_length=150)
