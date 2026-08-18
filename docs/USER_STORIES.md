@@ -14,7 +14,7 @@ Como administrador quiero crear una jornada indicando slug, nombre, descripción
 ### HU-02 — Editar o desactivar una jornada
 Como administrador quiero editar los datos de una jornada o marcarla como inactiva, para corregir información o cerrar su inscripción.
 - `PATCH /api/admin/jornadas/{slug}/` permite editar cualquier campo.
-- Al poner `activa=false`, la jornada deja de aparecer en `GET /api/jornadas/` y no se pueden hacer nuevos registros de participantes.
+- Al poner `activa=false`, la jornada **sigue apareciendo** en `GET /api/jornadas/` (con `activa: false` en la respuesta, para que el frontend la muestre marcada como desactivada) pero su detalle deja de ser accesible (`GET /api/jornadas/{slug}/` responde 404) y no se pueden hacer nuevos registros de participantes.
 - `DELETE /api/admin/jornadas/{slug}/` la elimina por completo (en cascada, con sus momentos, preguntas, participantes y respuestas) — distinto de desactivarla; úsese con cuidado.
 
 ### HU-03 — Crear momentos dentro de una jornada
@@ -85,12 +85,13 @@ Como administrador quiero consultar el estado de un reporte y su resultado una v
 ## Participante / Usuario
 
 ### HU-15 — Ver jornadas disponibles
-Como usuario quiero ver la lista de jornadas activas con su descripción y fechas, para elegir a cuál inscribirme.
-- `GET /api/jornadas/` no requiere autenticación y solo muestra jornadas con `activa=true`.
+Como usuario quiero ver la lista de todas las jornadas (activas e inactivas) con su descripción, fechas y estado, para elegir a cuál inscribirme y para que la interfaz pueda mostrar las cerradas como desactivadas en vez de simplemente ocultarlas.
+- `GET /api/jornadas/` no requiere autenticación y devuelve **todas** las jornadas, incluida la key `activa` en cada una para que el cliente decida cómo representarla (p. ej. deshabilitar el botón de inscripción).
 
 ### HU-16 — Ver el detalle de una jornada
-Como usuario quiero consultar el detalle de una jornada activa (nombre, descripción, fechas), para decidir si me inscribo antes de dar mis datos.
+Como usuario quiero consultar el detalle de una jornada (nombre, descripción, fechas), para decidir si me inscribo antes de dar mis datos.
 - `GET /api/jornadas/{slug}/` no requiere autenticación.
+- Solo devuelve el detalle de jornadas **activas**; una jornada inactiva responde `404` aunque siga apareciendo en el listado de HU-15.
 
 ### HU-17 — Registrarme en una jornada (momento 0)
 Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido y teléfono, para inscribirme.

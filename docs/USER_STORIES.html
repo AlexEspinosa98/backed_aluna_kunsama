@@ -494,7 +494,7 @@
       </div>
       <ul class="criteria">
         <li>Permite editar cualquier campo de la jornada.</li>
-        <li>Al poner <code>activa=false</code>, la jornada deja de aparecer en el listado público y no se aceptan nuevos registros de participantes.</li>
+        <li>Al poner <code>activa=false</code>, la jornada <strong>sigue apareciendo</strong> en el listado público (con <code>activa: false</code>, para que el frontend la muestre desactivada) pero su detalle deja de ser accesible (<code>404</code>) y no se aceptan nuevos registros de participantes.</li>
         <li><code>DELETE</code> la elimina por completo en cascada (momentos, preguntas, participantes, respuestas) — distinto de desactivarla, úsese con cuidado.</li>
       </ul>
     </article>
@@ -722,10 +722,10 @@
         <h3>Ver jornadas disponibles</h3>
         <span class="role-tag usuario">Usuario</span>
       </div>
-      <p class="narrative">Como usuario quiero ver la lista de jornadas activas con su descripción y fechas, para elegir a cuál inscribirme.</p>
+      <p class="narrative">Como usuario quiero ver la lista de todas las jornadas (activas e inactivas) con su descripción, fechas y estado, para elegir a cuál inscribirme y para que la interfaz muestre las cerradas como desactivadas en vez de ocultarlas.</p>
       <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/jornadas/</span></span></div>
       <ul class="criteria">
-        <li>No requiere autenticación y solo muestra jornadas con <code>activa=true</code>.</li>
+        <li>No requiere autenticación y devuelve <strong>todas</strong> las jornadas, incluida la key <code>activa</code> en cada una para que el cliente decida cómo representarla.</li>
       </ul>
     </article>
 
@@ -735,10 +735,11 @@
         <h3>Ver el detalle de una jornada</h3>
         <span class="role-tag usuario">Usuario</span>
       </div>
-      <p class="narrative">Como usuario quiero consultar el detalle de una jornada activa (nombre, descripción, fechas), para decidir si me inscribo antes de dar mis datos.</p>
+      <p class="narrative">Como usuario quiero consultar el detalle de una jornada (nombre, descripción, fechas), para decidir si me inscribo antes de dar mis datos.</p>
       <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/jornadas/{slug}/</span></span></div>
       <ul class="criteria">
         <li>No requiere autenticación.</li>
+        <li>Solo devuelve el detalle de jornadas <strong>activas</strong>; una jornada inactiva responde <code>404</code> aunque siga apareciendo en el listado de HU-15.</li>
       </ul>
     </article>
 

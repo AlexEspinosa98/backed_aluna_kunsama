@@ -38,4 +38,4 @@ class JornadaAdminSerializer(serializers.ModelSerializer):
 class JornadaPublicaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Jornada
-        fields = ['slug', 'nombre', 'descripcion', 'fecha_inicio', 'fecha_fin']
+        fields = ['slug', 'nombre', 'descripcion', 'fecha_inicio', 'fecha_fin', 'activa']

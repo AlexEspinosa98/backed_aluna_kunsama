@@ -22,7 +22,7 @@ from .serializers import (
 
 
 class JornadaListaView(generics.ListAPIView):
-    queryset = Jornada.objects.filter(activa=True)
+    queryset = Jornada.objects.all()
     serializer_class = JornadaPublicaSerializer
     permission_classes = [AllowAny]
 
