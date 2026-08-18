@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Historias Aluna Kunsamu</title>
+<style>
+  :root {
+    --bg: #edf0e9;
+    --surface: #ffffff;
+    --surface-2: #e2e7dc;
+    --text: #16231d;
+    --text-muted: #4c5c51;
+    --border: #d3dac9;
+    --border-strong: #b7c1a9;
+
+    --admin: #a8721f;
+    --admin-ink: #5c3e0f;
+    --admin-soft: #f3e4c6;
+    --admin-soft-border: #e2c68e;
+
+    --usuario: #146b6e;
+    --usuario-ink: #0c4547;
+    --usuario-soft: #d9ecea;
+    --usuario-soft-border: #a9d1cd;
+
+    --get: #2f6f4e;
+    --get-soft: #dcefe2;
+    --post: #1c5f9c;
+    --post-soft: #dde9f6;
+    --patch: #9c6b1c;
+    --patch-soft: #f4e8d2;
+    --delete: #a13a3a;
+    --delete-soft: #f6dcdc;
+
+    --serif: Iowan Old Style, "Palatino Linotype", Palatino, Georgia, "Noto Serif", serif;
+    --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1712;
+      --surface: #16211a;
+      --surface-2: #1c2921;
+      --text: #e9efe6;
+      --text-muted: #a3b3a6;
+      --border: #2a3a2e;
+      --border-strong: #3c4f3f;
+
+      --admin: #e2a53f;
+      --admin-ink: #1b1206;
+      --admin-soft: #3a2c12;
+      --admin-soft-border: #5a4118;
+
+      --usuario: #5cc9c6;
+      --usuario-ink: #06201f;
+      --usuario-soft: #143331;
+      --usuario-soft-border: #1e4d49;
+
+      --get: #6fbf8f;
+      --get-soft: #16281d;
+      --post: #7cabe0;
+      --post-soft: #16273a;
+      --patch: #dab064;
+      --patch-soft: #33270f;
+      --delete: #e28787;
+      --delete-soft: #3a1c1c;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0f1712;
+    --surface: #16211a;
+    --surface-2: #1c2921;
+    --text: #e9efe6;
+    --text-muted: #a3b3a6;
+    --border: #2a3a2e;
+    --border-strong: #3c4f3f;
+
+    --admin: #e2a53f;
+    --admin-ink: #1b1206;
+    --admin-soft: #3a2c12;
+    --admin-soft-border: #5a4118;
+
+    --usuario: #5cc9c6;
+    --usuario-ink: #06201f;
+    --usuario-soft: #143331;
+    --usuario-soft-border: #1e4d49;
+
+    --get: #6fbf8f;
+    --get-soft: #16281d;
+    --post: #7cabe0;
+    --post-soft: #16273a;
+    --patch: #dab064;
+    --patch-soft: #33270f;
+    --delete: #e28787;
+    --delete-soft: #3a1c1c;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+  }
+
+  header.top {
+    margin-bottom: 3rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0 0 0.9rem;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(2rem, 4vw, 2.75rem);
+    line-height: 1.15;
+    margin: 0 0 0.85rem;
+    text-wrap: balance;
+  }
+
+  .lede {
+    font-size: 1.0625rem;
+    color: var(--text-muted);
+    max-width: 60ch;
+    margin: 0 0 1.75rem;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    padding: 0.9rem 1.1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+  }
+  .legend strong { color: var(--text); font-weight: 600; }
+  .legend .item { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+  .swatch { width: 0.65rem; height: 0.65rem; border-radius: 2px; display: inline-block; }
+
+  nav.toc {
+    position: sticky;
+    top: 1rem;
+    z-index: 5;
+    display: flex;
+    gap: 0.6rem;
+    margin: 2.25rem 0 0;
+    padding: 0.5rem;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  nav.toc a {
+    flex: 1;
+    text-align: center;
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 600;
+    padding: 0.6rem 0.75rem;
+    border-radius: 5px;
+    color: var(--text-muted);
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  nav.toc a:hover { background: var(--surface-2); color: var(--text); }
+  nav.toc a.admin-link:hover { color: var(--admin-ink); background: var(--admin-soft); }
+  nav.toc a.usuario-link:hover { color: var(--usuario-ink); background: var(--usuario-soft); }
+
+  section.role {
+    margin-top: 4rem;
+  }
+
+  .role-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 2px solid var(--border-strong);
+    padding-bottom: 0.9rem;
+    margin-bottom: 1.75rem;
+    scroll-margin-top: 5rem;
+  }
+  .role-head h2 {
+    font-family: var(--serif);
+    font-size: 1.65rem;
+    font-weight: 600;
+    margin: 0;
+  }
+  .role-count {
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    color: var(--text-muted);
+  }
+  section.role[data-role="admin"] .role-head { border-bottom-color: var(--admin-soft-border); }
+  section.role[data-role="usuario"] .role-head { border-bottom-color: var(--usuario-soft-border); }
+
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0;
+    margin: 0 0 2.25rem;
+    font-size: 0.875rem;
+  }
+  .flow .step {
+    padding: 0.45rem 0.85rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 5px;
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  .flow .arrow {
+    padding: 0 0.5rem;
+    color: var(--text-muted);
+  }
+  section.role[data-role="admin"] .flow .step { border-color: var(--admin-soft-border); }
+  section.role[data-role="usuario"] .flow .step { border-color: var(--usuario-soft-border); }
+
+  .story {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem 1.6rem 1.6rem;
+    margin-bottom: 1.1rem;
+  }
+
+  .story-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .hu-id {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.03em;
+  }
+
+  .story h3 {
+    font-family: var(--serif);
+    font-size: 1.1875rem;
+    font-weight: 600;
+    margin: 0;
+    flex: 1 1 auto;
+  }
+
+  .role-tag {
+    font-family: var(--mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .role-tag.admin { color: var(--admin-ink); background: var(--admin-soft); border: 1px solid var(--admin-soft-border); }
+  .role-tag.usuario { color: var(--usuario-ink); background: var(--usuario-soft); border: 1px solid var(--usuario-soft-border); }
+
+  .narrative {
+    color: var(--text-muted);
+    font-size: 0.98rem;
+    margin: 0 0 0.95rem;
+  }
+  .narrative b { color: var(--text); font-weight: 600; }
+
+  .endpoints {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+  }
+  .ep {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: var(--mono);
+    font-size: 0.8125rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid transparent;
+  }
+  .ep .m {
+    font-weight: 700;
+    font-size: 0.6875rem;
+    letter-spacing: 0.03em;
+  }
+  .ep.get { background: var(--get-soft); color: var(--get); border-color: var(--get); }
+  .ep.post { background: var(--post-soft); color: var(--post); border-color: var(--post); }
+  .ep.patch { background: var(--patch-soft); color: var(--patch); border-color: var(--patch); }
+  .ep.delete { background: var(--delete-soft); color: var(--delete); border-color: var(--delete); }
+  .ep .path { color: var(--text); opacity: 0.85; }
+
+  .rule-tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    border: 1px dashed var(--border-strong);
+    border-radius: 4px;
+    padding: 0.3rem 0.6rem;
+    margin-bottom: 1rem;
+  }
+
+  ul.criteria {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  ul.criteria li {
+    position: relative;
+    padding-left: 1.35rem;
+    font-size: 0.925rem;
+  }
+  ul.criteria li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.5em;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 1px;
+    background: var(--border-strong);
+  }
+  section.role[data-role="admin"] ul.criteria li::before { background: var(--admin-soft-border); }
+  section.role[data-role="usuario"] ul.criteria li::before { background: var(--usuario-soft-border); }
+  ul.criteria code {
+    font-family: var(--mono);
+    font-size: 0.85em;
+    background: var(--surface-2);
+    padding: 0.05em 0.35em;
+    border-radius: 3px;
+  }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.75rem;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  footer code {
+    font-family: var(--mono);
+    background: var(--surface-2);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+  }
+
+  @media (max-width: 560px) {
+    .wrap { padding: 2.25rem 1.1rem 4rem; }
+    nav.toc { position: static; }
+    .role-head { flex-direction: column; align-items: flex-start; gap: 0.25rem; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <p class="eyebrow">Aluna Kunsamu · API REST · docs/USER_STORIES.md</p>
+    <h1>Historias de usuario</h1>
+    <p class="lede">
+      Las 21 historias que definen la API: cómo un <b>administrador</b> arma una jornada de principio a fin,
+      y cómo un <b>participante</b> se inscribe y la recorre. Cada una lista su criterio de aceptación y el
+      endpoint exacto que lo implementa.
+    </p>
+    <div class="legend">
+      <span class="item"><strong>Métodos:</strong></span>
+      <span class="item"><span class="swatch" style="background:var(--get)"></span>GET lectura</span>
+      <span class="item"><span class="swatch" style="background:var(--post)"></span>POST creación</span>
+      <span class="item"><span class="swatch" style="background:var(--patch)"></span>PATCH edición</span>
+      <span class="item"><span class="swatch" style="background:var(--delete)"></span>DELETE borrado</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <a class="admin-link" href="#admin">Administrador · HU-01–11</a>
+    <a class="usuario-link" href="#usuario">Participante · HU-12–21</a>
+  </nav>
+
+  <!-- ============ ADMINISTRADOR ============ -->
+  <section class="role" data-role="admin" id="admin">
+    <div class="role-head">
+      <h2>Administrador</h2>
+      <span class="role-count">11 historias · HU-01 a HU-11</span>
+    </div>
+
+    <div class="flow">
+      <span class="step">Crear jornada</span><span class="arrow">→</span>
+      <span class="step">Definir momentos</span><span class="arrow">→</span>
+      <span class="step">Cargar preguntas y opciones</span><span class="arrow">→</span>
+      <span class="step">Publicar (activa)</span><span class="arrow">→</span>
+      <span class="step">Revisar participantes y respuestas</span>
+    </div>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-01</span>
+        <h3>Crear una jornada</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero crear una jornada indicando slug, nombre, descripción y fechas de inicio/fin, para publicar un nuevo evento.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/jornadas/</span></span></div>
+      <ul class="criteria">
+        <li>El <code>slug</code> es único; si ya existe, la API responde <code>400</code>.</li>
+        <li><code>fecha_fin</code> no puede ser anterior a <code>fecha_inicio</code>.</li>
+        <li>Solo un usuario <code>staff</code> autenticado puede crear jornadas.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-02</span>
+        <h3>Editar o desactivar una jornada</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero editar los datos de una jornada o marcarla como inactiva, para corregir información o cerrar su inscripción.</p>
+      <div class="endpoints"><span class="ep patch"><span class="m">PATCH</span><span class="path">/api/admin/jornadas/{slug}/</span></span></div>
+      <ul class="criteria">
+        <li>Permite editar cualquier campo de la jornada.</li>
+        <li>Al poner <code>activa=false</code>, la jornada deja de aparecer en el listado público y no se aceptan nuevos registros de participantes.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-03</span>
+        <h3>Crear momentos dentro de una jornada</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero crear momentos definiendo su orden, título, contexto y tipo (<code>individual</code> o <code>mesa</code>), para estructurar el recorrido del evento.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/momentos/</span></span></div>
+      <ul class="criteria">
+        <li><code>orden</code> es único dentro de la jornada.</li>
+        <li>El tipo determina cómo se guardan las respuestas: por participante o por mesa.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-04</span>
+        <h3>Editar, reordenar o eliminar momentos</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero editar, reordenar o eliminar momentos de una jornada, para ajustar la agenda.</p>
+      <div class="endpoints">
+        <span class="ep patch"><span class="m">PATCH</span><span class="path">/api/admin/momentos/{id}/</span></span>
+        <span class="ep delete"><span class="m">DELETE</span><span class="path">/api/admin/momentos/{id}/</span></span>
+      </div>
+      <ul class="criteria">
+        <li>Eliminar un momento elimina en cascada sus preguntas, opciones y respuestas asociadas.</li>
+        <li>Cambiar <code>orden</code> falla con <code>400</code> si colisiona con otro momento de la misma jornada.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-05</span>
+        <h3>Crear preguntas dentro de un momento</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero crear preguntas eligiendo tipo (<code>abierta</code>, <code>unica</code> o <code>multiple</code>), texto, orden y si son obligatorias, para recolectar información de los participantes.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/preguntas/</span></span></div>
+      <ul class="criteria">
+        <li>Preguntas <code>unica</code>/<code>multiple</code> requieren luego al menos una opción para ser respondibles.</li>
+        <li><code>orden</code> es único dentro del momento.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-06</span>
+        <h3>Definir opciones de respuesta</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero definir las opciones de respuesta de una pregunta <code>unica</code> o <code>multiple</code>, para que los participantes elijan entre ellas.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/opciones/</span></span></div>
+      <ul class="criteria">
+        <li>Cada opción tiene texto y orden únicos dentro de la pregunta.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-07</span>
+        <h3>Editar o eliminar preguntas y opciones</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero editar o eliminar preguntas y sus opciones existentes, para corregir o actualizar el cuestionario.</p>
+      <div class="endpoints">
+        <span class="ep patch"><span class="m">PATCH</span><span class="path">/api/admin/preguntas/{id}/</span></span>
+        <span class="ep delete"><span class="m">DELETE</span><span class="path">/api/admin/opciones/{id}/</span></span>
+      </div>
+      <ul class="criteria">
+        <li>Eliminar una opción quita su referencia de las respuestas ya enviadas que la incluían.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-08</span>
+        <h3>Mover preguntas entre momentos</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero reasignar el momento (y por lo tanto la jornada) al que pertenece una pregunta, para reorganizar el contenido.</p>
+      <div class="endpoints"><span class="ep patch"><span class="m">PATCH</span><span class="path">/api/admin/preguntas/{id}/</span></span></div>
+      <ul class="criteria">
+        <li>Enviar un nuevo <code>momento</code> mueve la pregunta; sus respuestas previas quedan asociadas al nuevo momento.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-09</span>
+        <h3>Autenticarse como administrador</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero autenticarme con usuario y contraseña y obtener un token, para usar la API de administración de forma segura.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/login/</span></span></div>
+      <ul class="criteria">
+        <li>Devuelve un token si las credenciales son válidas y el usuario es <code>staff</code>.</li>
+        <li>Todos los endpoints <code>/api/admin/**</code> exigen ese token vía <code>Authorization: Token &lt;token&gt;</code>.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-10</span>
+        <h3>Ver participantes inscritos</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero ver la lista de participantes inscritos en una jornada, para hacer seguimiento de la asistencia.</p>
+      <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/admin/participantes/?jornada=&lt;id&gt;</span></span></div>
+      <ul class="criteria">
+        <li>Lista nombre, apellido, correo, teléfono y fecha de registro.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-11</span>
+        <h3>Ver / exportar respuestas</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero ver las respuestas registradas filtradas por momento o pregunta (incluidas las de mesa), para analizar los resultados.</p>
+      <div class="endpoints">
+        <span class="ep get"><span class="m">GET</span><span class="path">/api/admin/respuestas/?momento=&lt;id&gt;</span></span>
+        <span class="ep get"><span class="m">GET</span><span class="path">/api/admin/respuestas/?pregunta=&lt;id&gt;</span></span>
+      </div>
+      <ul class="criteria">
+        <li>Cada respuesta incluye su dueño (<code>participante</code> o <code>mesa</code>), texto libre y opciones elegidas.</li>
+      </ul>
+    </article>
+  </section>
+
+  <!-- ============ PARTICIPANTE ============ -->
+  <section class="role" data-role="usuario" id="usuario">
+    <div class="role-head">
+      <h2>Participante / Usuario</h2>
+      <span class="role-count">10 historias · HU-12 a HU-21</span>
+    </div>
+
+    <div class="flow">
+      <span class="step">Ver jornadas activas</span><span class="arrow">→</span>
+      <span class="step">Registrarme</span><span class="arrow">→</span>
+      <span class="step">Recibir token</span><span class="arrow">→</span>
+      <span class="step">Recorrer momentos</span><span class="arrow">→</span>
+      <span class="step">Responder</span>
+    </div>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-12</span>
+        <h3>Ver jornadas disponibles</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero ver la lista de jornadas activas con su descripción y fechas, para elegir a cuál inscribirme.</p>
+      <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/jornadas/</span></span></div>
+      <ul class="criteria">
+        <li>No requiere autenticación y solo muestra jornadas con <code>activa=true</code>.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-13</span>
+        <h3>Registrarme en una jornada (momento 0)</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido y teléfono, para inscribirme.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/jornadas/{slug}/registro/</span></span></div>
+      <ul class="criteria">
+        <li>Si el correo ya está registrado en esa jornada, la API responde <code>400</code> sin crear un duplicado.</li>
+        <li>Se genera automáticamente un <code>slug</code> a partir de nombre y apellido, con sufijo si hay colisión.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-14</span>
+        <h3>Recibir un token de sesión</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero recibir un token de sesión al registrarme, para autenticar mis siguientes solicitudes sin usuario/contraseña.</p>
+      <div class="rule-tag">incluido en la respuesta de HU-13 → header <code>Authorization: Participant &lt;token&gt;</code></div>
+      <ul class="criteria">
+        <li>El token es un UUID que el cliente reenvía en cada solicitud posterior a esa jornada.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-15</span>
+        <h3>Listar los momentos de mi jornada</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario ya registrado quiero consultar el índice de momentos de la jornada a la que pertenezco, para saber qué pasos debo recorrer.</p>
+      <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/jornadas/{slug}/momentos/</span></span></div>
+      <ul class="criteria">
+        <li>Requiere el token del registro y devuelve id, orden, título y tipo de cada momento activo, ordenados por <code>orden</code>.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-16</span>
+        <h3>Ver el detalle de un momento</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero consultar el contexto y las preguntas (con sus opciones) de un momento, para poder responderlo.</p>
+      <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/jornadas/{slug}/momentos/{id}/</span></span></div>
+      <ul class="criteria">
+        <li>Responde <code>403</code> si el token no pertenece a esa jornada.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-17</span>
+        <h3>Responder un momento individual</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero responder las preguntas de un momento <code>individual</code> (abiertas, únicas o de selección múltiple), para que mis respuestas queden guardadas asociadas a mí.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/jornadas/{slug}/momentos/{id}/respuestas/</span></span></div>
+      <ul class="criteria">
+        <li>Guarda una <code>Respuesta</code> por pregunta, asociada a mi <code>Participante</code>.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-18</span>
+        <h3>Responder un momento de tipo "mesa"</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario en un momento <code>mesa</code> quiero indicar el identificador de mi mesa y enviar una respuesta compartida, para que el resultado represente a todo el grupo.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/jornadas/{slug}/momentos/{id}/respuestas/</span></span></div>
+      <ul class="criteria">
+        <li>El body debe incluir <code>mesa</code> (texto libre); la API responde <code>400</code> si falta.</li>
+        <li>Si otro participante de la misma mesa vuelve a responder, la respuesta se actualiza (no se duplica); se registra quién la envió por última vez en <code>registrado_por</code>.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-19</span>
+        <h3>Corregir una respuesta ya enviada</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero poder reenviar mis respuestas a un momento antes de avanzar, para corregir errores.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/jornadas/{slug}/momentos/{id}/respuestas/</span></span></div>
+      <ul class="criteria">
+        <li>Un segundo envío al mismo momento actualiza (<code>update_or_create</code>) las respuestas existentes en vez de crear duplicados.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-20</span>
+        <h3>Validación de preguntas obligatorias</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero que el sistema valide que las preguntas obligatorias tengan respuesta, para evitar enviar información incompleta.</p>
+      <div class="rule-tag">valida en el mismo POST de respuestas, antes de guardar</div>
+      <ul class="criteria">
+        <li>Si falta una pregunta obligatoria, o su contenido no cumple el tipo (p. ej. <code>unica</code> con más de una opción, <code>abierta</code> vacía), la API responde <code>400</code> detallando el problema.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-21</span>
+        <h3>Aislamiento entre jornadas y protección por token</h3>
+        <span class="role-tag usuario">Usuario</span>
+      </div>
+      <p class="narrative">Como usuario quiero que se rechacen intentos de acceder a momentos de una jornada distinta a la mía o sin token válido, para proteger mis datos y los de otros participantes.</p>
+      <div class="rule-tag">regla transversal a todos los endpoints de participante</div>
+      <ul class="criteria">
+        <li>Sin header <code>Authorization</code> válido → <code>401</code>.</li>
+        <li>Con token de otra jornada → <code>403</code>.</li>
+        <li>Un <code>momento_id</code> que no pertenece a la jornada de la URL → <code>404</code>.</li>
+      </ul>
+    </article>
+  </section>
+
+  <footer>
+    <span>Fuente completa: <code>docs/USER_STORIES.md</code> · Esquema interactivo: <code>/api/docs/</code></span>
+    <span>Aluna Kunsamu API</span>
+  </footer>
+
+</div>
+</body>
+</html>
