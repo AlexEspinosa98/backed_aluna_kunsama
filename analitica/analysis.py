@@ -770,6 +770,7 @@ def analizar_pregunta(pregunta):
         descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(pregunta, estad, valores, metodo)
         return {
             'pregunta_id': pregunta.id,
+            'texto': pregunta.texto,
             'tipo': pregunta.tipo,
             'tipo_grafica': tipo_grafica,
             'nivel_acuerdo': nivel_acuerdo,
@@ -782,6 +783,7 @@ def analizar_pregunta(pregunta):
     descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad)
     return {
         'pregunta_id': pregunta.id,
+        'texto': pregunta.texto,
         'tipo': pregunta.tipo,
         'tipo_grafica': tipo_grafica,
         'nivel_acuerdo': None,
