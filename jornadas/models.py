@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils.text import slugify
 
 
 class Jornada(models.Model):
@@ -37,6 +38,7 @@ class Momento(models.Model):
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='momentos')
     orden = models.PositiveIntegerField()
     titulo = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=280, blank=True)
     contexto = models.TextField(blank=True)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default=TIPO_INDIVIDUAL)
     activo = models.BooleanField(default=True)
@@ -45,10 +47,21 @@ class Momento(models.Model):
 
     class Meta:
         ordering = ['orden']
-        unique_together = [('jornada', 'orden')]
+        unique_together = [('jornada', 'orden'), ('jornada', 'slug')]
 
     def __str__(self):
         return f'{self.jornada.slug} · {self.orden} · {self.titulo}'
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            base_slug = slugify(self.titulo)[:250] or 'momento'
+            slug = base_slug
+            contador = 1
+            while Momento.objects.filter(jornada=self.jornada, slug=slug).exclude(pk=self.pk).exists():
+                contador += 1
+                slug = f'{base_slug}-{contador}'
+            self.slug = slug
+        super().save(*args, **kwargs)
 
 
 class Pregunta(models.Model):

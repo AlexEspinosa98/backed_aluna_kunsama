@@ -48,7 +48,7 @@ class PreguntaSerializer(serializers.ModelSerializer):
 class MomentoIndiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Momento
-        fields = ['id', 'orden', 'titulo', 'tipo']
+        fields = ['id', 'orden', 'titulo', 'slug', 'tipo']
 
 
 class MomentoDetalleSerializer(serializers.ModelSerializer):
@@ -56,7 +56,7 @@ class MomentoDetalleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Momento
-        fields = ['id', 'orden', 'titulo', 'contexto', 'tipo', 'preguntas']
+        fields = ['id', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'preguntas']
 
 
 class RespuestaEntradaSerializer(serializers.Serializer):

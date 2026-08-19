@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 from jornadas.models import Jornada, Momento
 
@@ -54,6 +55,10 @@ class Reporte(models.Model):
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='reportes')
     momentos = models.ManyToManyField(Momento, blank=True, related_name='reportes')
     alcance = models.CharField(max_length=10, choices=ALCANCE_CHOICES)
+    slug = models.SlugField(max_length=250, blank=True, unique=True, help_text=(
+        'Autogenerado: jornada + alcance + fecha/hora local de Colombia — para poder '
+        'distinguir reportes a simple vista, no solo por id.'
+    ))
     plantilla = models.ForeignKey(
         PlantillaAnalisis, on_delete=models.SET_NULL, null=True, blank=True, related_name='reportes'
     )
@@ -80,4 +85,18 @@ class Reporte(models.Model):
         ordering = ['-creado_en']
 
     def __str__(self):
-        return f'Reporte {self.id} · {self.jornada.slug} · {self.alcance} · {self.estado}'
+        return self.slug or f'Reporte {self.id} · {self.jornada.slug} · {self.alcance} · {self.estado}'
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            # settings.TIME_ZONE = 'America/Bogota', así que timezone.localtime() ya da la hora
+            # de Colombia aunque el timestamp se guarde en UTC internamente.
+            ahora_bogota = timezone.localtime(timezone.now())
+            base_slug = f'{self.jornada.slug}-{self.alcance}-{ahora_bogota:%Y%m%d-%H%M}'
+            slug = base_slug
+            contador = 1
+            while Reporte.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                contador += 1
+                slug = f'{base_slug}-{contador}'
+            self.slug = slug
+        super().save(*args, **kwargs)

@@ -15,7 +15,7 @@ class PlantillaAnalisisSerializer(serializers.ModelSerializer):
 class MomentoResumenSerializer(serializers.ModelSerializer):
     class Meta:
         model = Momento
-        fields = ['id', 'titulo', 'orden']
+        fields = ['id', 'titulo', 'slug', 'orden']
 
 
 class ReporteSerializer(serializers.ModelSerializer):
@@ -26,8 +26,8 @@ class ReporteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Reporte
         fields = [
-            'id', 'jornada', 'momentos', 'alcance', 'plantilla', 'plantilla_nombre', 'estado',
-            'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado',
+            'id', 'slug', 'jornada', 'momentos', 'alcance', 'plantilla', 'plantilla_nombre',
+            'estado', 'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
