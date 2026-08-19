@@ -278,6 +278,12 @@ def _parsear_temas_y_clasificacion(texto):
             m = TEMA_ETIQUETA_RE.match(linea.strip().lstrip('-•*').strip())
             if m:
                 etiqueta = m.group(2).strip().strip('*').strip()
+                # Respaldo: el modelo a veces copia literalmente el marcador de formato ('<...>')
+                # o repite la línea "Palabras clave: ..." del prompt en vez de redactar su propia
+                # frase — ninguno de los dos es una etiqueta usable, se limpian aquí.
+                etiqueta = etiqueta.strip('<>').strip().strip('"\'').strip()
+                if etiqueta.lower().startswith('palabras clave'):
+                    etiqueta = etiqueta.split(':', 1)[-1].strip() if ':' in etiqueta else ''
                 if etiqueta:
                     etiquetas[int(m.group(1))] = etiqueta
 
@@ -305,10 +311,16 @@ def _etiquetar_y_clasificar(textos, temas_candidatos):
         "aislada). Luego, clasifica CADA una de las respuestas numeradas en el tema cuya etiqueta "
         "le quede mejor. SIEMPRE asigna uno de los temas dados a cada respuesta, incluso si el "
         "encaje no es perfecto — nunca inventes un tema nuevo ni dejes una respuesta sin "
-        "clasificar.\n\n"
-        "Responde EXACTAMENTE con este formato, sin texto adicional antes ni después:\n"
-        "TEMAS:\n1: <etiqueta>\n2: <etiqueta>\n...\n"
-        "CLASIFICACION:\n1: <número de tema>\n2: <número de tema>\n..."
+        "clasificar: la clasificación de cada respuesta es siempre un número de tema, nunca un "
+        "guion, un '?' ni la palabra 'ninguno'. Las etiquetas van en texto plano, nunca entre "
+        "símbolos como '<' '>' o comillas, y nunca repitas la lista de 'Palabras clave' tal cual "
+        "— redacta una frase propia.\n\n"
+        "Responde EXACTAMENTE con este formato (usa tus propias etiquetas y números, el ejemplo "
+        "de abajo es solo para mostrar la estructura — no la copies), sin texto adicional antes "
+        "ni después:\n"
+        "TEMAS:\n1: Transparencia en el manejo de datos\n2: Consentimiento informado de las "
+        "comunidades\n"
+        "CLASIFICACION:\n1: 2\n2: 1\n3: 1\n..."
     )
     lineas = ['GRUPOS CANDIDATOS:']
     for i, tema in enumerate(temas_candidatos, start=1):
