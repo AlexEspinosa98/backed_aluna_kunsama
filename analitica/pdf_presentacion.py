@@ -214,6 +214,22 @@ def _portada(reporte, participacion, estilos):
     ]
 
 
+def _fondo_portada(canvas, doc):
+    # SimpleDocTemplate no pinta el lienzo completo por sí solo — un Paragraph con texto blanco
+    # sin esto queda blanco sobre blanco, invisible. Se pinta la página ANTES de que Platypus
+    # dibuje los flowables encima, así que el rectángulo cubre toda la hoja, no solo el área con
+    # margen. onFirstPage solo aplica a la portada; el resto del documento queda en blanco normal.
+    canvas.saveState()
+    canvas.setFillColor(INSTITUCIONAL)
+    ancho, alto = doc.pagesize
+    canvas.rect(0, 0, ancho, alto, fill=1, stroke=0)
+    canvas.restoreState()
+
+
+def _fondo_normal(canvas, doc):
+    pass
+
+
 def construir_pdf(reporte):
     """Devuelve los bytes del PDF de este `Reporte` — ya `completo`, se arma directo desde
     `reporte.analisis` sin recalcular ni llamar a ningún servicio externo."""
@@ -282,7 +298,7 @@ def construir_pdf(reporte):
             ]
             flow.append(KeepTogether(bloque))
 
-    doc.build(flow)
+    doc.build(flow, onFirstPage=_fondo_portada, onLaterPages=_fondo_normal)
     return buffer.getvalue()
 
 
