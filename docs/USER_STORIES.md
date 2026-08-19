@@ -85,6 +85,7 @@ Como administrador quiero consultar el estado de un reporte y su resultado una v
 - `tipo_grafica` es `null` para preguntas `abierta`. Para `unica`/`multiple` es `"pastel"`, `"barras"` o `"radar"` — para estas, el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar cuando hay 4+ opciones y conviene ver la forma general de la inclinación entre todas); si el modelo no responde con una elección válida, se usa un respaldo determinístico según la cantidad de opciones.
 - `texto_reporte` es la síntesis del agente de jornada (el nivel más alto).
 - `slug` se autogenera como `{jornada}-{alcance}-{fecha y hora local de Colombia}` (ej. `jornada-agil-2-jornada-20260818-2043`) para poder distinguir reportes a simple vista sin decodificar timestamps.
+- `valores_caracteristicos` de una pregunta `abierta` siempre trae cualitativo y cuantitativo juntos (`{tema, tamano, porcentaje}`), nunca solo texto — ver `docs/REPORTE_ANALITICA_SCHEMA.html` para el detalle exacto de cada campo.
 - `DELETE /api/admin/reportes/{id}/` elimina un reporte.
 
 ## Participante / Usuario

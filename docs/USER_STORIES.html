@@ -700,6 +700,7 @@
         <li><code>tipo_grafica</code> es <code>null</code> para <code>abierta</code>. Para <code>unica</code>/<code>multiple</code> es <code>"pastel"</code>, <code>"barras"</code> o <code>"radar"</code> — el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar con 4+ opciones, para ver la forma general de la inclinación); si el modelo no responde con una elección válida, se usa un respaldo determinístico.</li>
         <li><code>texto_reporte</code> es la síntesis del agente de jornada, el nivel más alto.</li>
         <li><code>slug</code> se autogenera como <code>{jornada}-{alcance}-{fecha y hora local de Colombia}</code> (ej. <code>jornada-agil-2-jornada-20260818-2043</code>) para distinguir reportes a simple vista.</li>
+        <li><code>valores_caracteristicos</code> de una pregunta <code>abierta</code> siempre trae cualitativo y cuantitativo juntos (<code>{tema, tamano, porcentaje}</code>), nunca solo texto — ver <code>docs/REPORTE_ANALITICA_SCHEMA.html</code> para el detalle exacto.</li>
         <li>Devuelve <code>estado</code> (<code>pendiente</code>/<code>procesando</code>/<code>completo</code>/<code>error</code>), <code>estadisticas</code>, <code>topicos</code>, <code>texto_reporte</code> y <code>modelo_usado</code>.</li>
       </ul>
     </article>
