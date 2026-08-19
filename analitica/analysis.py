@@ -535,10 +535,15 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
     clave/categorías crudas), `insuficiente` o `sin_datos` ninguno de los dos se calcula, quedan
     `None`."""
     system = (
-        "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
-        "resultados de UNA pregunta de encuesta abierta, usando EXCLUSIVAMENTE los datos "
-        "entregados a continuación — nunca inventes cifras ni ideas que no estén ahí. Español, "
-        "prosa clara."
+        "Eres un analista de datos interpretando los resultados de UNA pregunta de encuesta "
+        "abierta para un informe institucional. Escribe 2 a 3 frases fluidas en español, como "
+        "haría un analista humano explicándole el hallazgo a un colega — no una ficha técnica. "
+        "Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados de la "
+        "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas frases "
+        "no aportan nada y suenan robóticas. En vez de solo enumerar temas y porcentajes, explica "
+        "qué significa esa distribución (¿hay consenso claro?, ¿está dividido?, ¿qué prioriza el "
+        "grupo?). Usa EXCLUSIVAMENTE los datos entregados a continuación — nunca inventes cifras "
+        "ni ideas que no estén ahí."
     )
     lineas = [
         f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
@@ -677,15 +682,19 @@ def _agente_pregunta_cerrada(pregunta, estad):
     una elección válida, se usa `_tipo_grafica_por_defecto` como respaldo."""
     opciones = estad.get('conteo_opciones', [])
     system = (
-        "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
-        "resultados de UNA pregunta de encuesta de opción cerrada, usando EXCLUSIVAMENTE los "
-        "datos entregados — nunca inventes cifras. Luego, en una última línea aparte, recomienda "
-        "la gráfica que mejor muestre hacia dónde se inclina el público entre las opciones, "
-        "escribiendo EXACTAMENTE una de estas tres líneas: 'GRAFICA: pastel' (pocas opciones "
-        "mutuamente excluyentes), 'GRAFICA: barras' (comparación simple de conteos), o "
-        "'GRAFICA: radar' (varias opciones — 4 o más — donde interesa ver la forma general de la "
-        "inclinación entre todas a la vez). Si se te da una nota con una recomendación, síguela "
-        "salvo que los datos digan claramente lo contrario. Español, prosa clara."
+        "Eres un analista de datos interpretando los resultados de UNA pregunta de encuesta de "
+        "opción cerrada para un informe institucional. Escribe 2 a 3 frases fluidas en español, "
+        "como haría un analista humano explicándole el hallazgo a un colega — no una ficha "
+        "técnica. Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados "
+        "de la encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
+        "frases no aportan nada y suenan robóticas. Usa EXCLUSIVAMENTE los datos entregados — "
+        "nunca inventes cifras. Luego, en una última línea aparte, recomienda la gráfica que mejor "
+        "muestre hacia dónde se inclina el público entre las opciones, escribiendo EXACTAMENTE una "
+        "de estas tres líneas: 'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), "
+        "'GRAFICA: barras' (comparación simple de conteos), o 'GRAFICA: radar' (varias opciones "
+        "— 4 o más — donde interesa ver la forma general de la inclinación entre todas a la vez). "
+        "Si se te da una nota con una recomendación, síguela salvo que los datos digan claramente "
+        "lo contrario."
     )
     lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
     for opcion in opciones:
@@ -803,10 +812,12 @@ def _sintetizar_momento(momento, analisis_preguntas):
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
     system = (
-        "Eres un analista de datos. Redacta una síntesis breve (2 a 4 frases) de UN momento de "
-        "una jornada participativa, integrando las descripciones ya redactadas de sus preguntas "
-        "— no repitas pregunta por pregunta, encuentra el hilo común. No agregues datos que no "
-        "estén en las descripciones dadas. Español."
+        "Eres un analista de datos. Redacta una síntesis breve (2 a 4 frases), en prosa fluida y "
+        "natural, de UN momento de una jornada participativa, integrando las descripciones ya "
+        "redactadas de sus preguntas — no repitas pregunta por pregunta, encuentra el hilo común e "
+        "interprétalo. Nunca empieces con muletillas como 'Resultados de la encuesta:' o "
+        "'Los resultados indican que'. No agregues datos que no estén en las descripciones dadas. "
+        "Español."
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
     descripcion_general, error = _llamar_llm(system, user, max_tokens=250, temperature=0.5)
