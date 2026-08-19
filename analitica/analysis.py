@@ -53,7 +53,24 @@ FALLBACK_TEXTO = (
     'análisis por momento y por pregunta.'
 )
 
-GRAFICA_TAG_RE = re.compile(r'\n?\s*GRAFICA:\s*(pastel|barras|radar)\s*\.?\s*$', re.IGNORECASE)
+GRAFICA_TAG_RE = re.compile(r'GRAFICA:\s*(pastel|barras|radar)\b', re.IGNORECASE)
+
+
+def _extraer_tipo_grafica(texto):
+    """Busca la etiqueta `GRAFICA: <tipo>` en cualquier parte del texto del LLM (no siempre
+    aparece en su propia línea final pese a la instrucción) y la retira junto con toda la
+    oración que la contiene, para que no queden fragmentos crudos como "GRAFICA: radar" en la
+    descripción mostrada al usuario. Devuelve (tipo_grafica_o_None, texto_limpio)."""
+    m = GRAFICA_TAG_RE.search(texto)
+    if not m:
+        return None, texto
+    tipo = m.group(1).lower()
+    inicio = texto.rfind('.', 0, m.start())
+    inicio = inicio + 1 if inicio != -1 else 0
+    fin = texto.find('.', m.end())
+    fin = fin + 1 if fin != -1 else len(texto)
+    limpio = re.sub(r'\s+', ' ', texto[:inicio] + texto[fin:]).strip()
+    return tipo, limpio
 
 
 def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
@@ -305,10 +322,7 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
 
     tipo_grafica = None
     if graficable and texto:
-        m = GRAFICA_TAG_RE.search(texto)
-        if m:
-            tipo_grafica = m.group(1).lower()
-            texto = GRAFICA_TAG_RE.sub('', texto).strip()
+        tipo_grafica, texto = _extraer_tipo_grafica(texto)
         if tipo_grafica not in ('pastel', 'barras', 'radar'):
             tipo_grafica = _tipo_grafica_por_defecto('unica', len(valores_caracteristicos))
 
@@ -370,10 +384,7 @@ def _agente_pregunta_cerrada(pregunta, estad):
 
     tipo_grafica = None
     if texto:
-        m = GRAFICA_TAG_RE.search(texto)
-        if m:
-            tipo_grafica = m.group(1).lower()
-            texto = GRAFICA_TAG_RE.sub('', texto).strip()
+        tipo_grafica, texto = _extraer_tipo_grafica(texto)
 
     if tipo_grafica not in ('pastel', 'barras', 'radar'):
         tipo_grafica = _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
