@@ -425,16 +425,23 @@ def _etiquetar_y_clasificar(textos, temas_candidatos, permitir_categoria_nueva=F
     if not texto_llm:
         return None, error
 
-    etiquetas, asignaciones = _parsear_temas_y_clasificacion(texto_llm)
-    if not etiquetas or not asignaciones:
-        return None, 'El modelo no devolvió el formato de clasificación esperado.'
+    etiquetas_llm, asignaciones = _parsear_temas_y_clasificacion(texto_llm)
 
     if permitir_categoria_nueva:
-        # Respaldo defensivo: si el modelo agregó más de una categoría nueva pese a la
-        # instrucción, se recortan las de más — como mucho 1 índice más allá de los candidatos
-        # dados sobrevive.
+        # Probado contra datos reales: pese a la instrucción de "reprodúcelas EXACTAMENTE", el
+        # modelo a veces reformula igual las categorías semilla en la sección TEMAS — así que no
+        # se confía en su reproducción. Las semilla se precargan aquí, tal cual las dio el equipo,
+        # sin depender de que el LLM las haya listado bien; el único texto que SÍ se toma del LLM
+        # es el de una eventual categoría inductiva (el índice justo después de las dadas).
+        etiquetas = {i: t['palabras_clave'][0] for i, t in enumerate(temas_candidatos, start=1)}
         limite = len(temas_candidatos) + 1
-        etiquetas = {idx: etq for idx, etq in etiquetas.items() if idx <= limite}
+        if limite in etiquetas_llm:
+            etiquetas[limite] = etiquetas_llm[limite]
+    else:
+        etiquetas = etiquetas_llm
+
+    if not etiquetas or not asignaciones:
+        return None, 'El modelo no devolvió el formato de clasificación esperado.'
 
     conteos = {idx: 0 for idx in etiquetas}
     for idx_respuesta, idx_tema in asignaciones.items():
