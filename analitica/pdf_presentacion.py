@@ -288,12 +288,13 @@ def construir_pdf(reporte):
                 Table([pills], style=TableStyle([
                     ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (0, 0), 6),
                 ])),
+                Spacer(1, 6),
+                _bloque_valores(p, estilos),
                 Spacer(1, 4),
                 Paragraph(
                     _md(p.get('descripcion') or '') +
                     f" <font color='#8c97a3' size=8>({p.get('total_respuestas', 0)} respuestas)</font>",
                     estilos['body']),
-                _bloque_valores(p, estilos),
                 Spacer(1, 12),
             ]
             flow.append(KeepTogether(bloque))

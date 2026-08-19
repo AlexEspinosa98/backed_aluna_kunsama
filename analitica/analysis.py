@@ -96,9 +96,12 @@ def _instrucciones_plantilla(plantilla):
 
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
-    "equipo organizador. Usa EXCLUSIVAMENTE los datos que se te entregan a continuación — nunca "
-    "inventes cifras, porcentajes, temas ni citas que no estén en esos datos. Si un dato no está "
-    "disponible, no lo menciones. Escribe en español, en prosa clara, sin viñetas innecesarias."
+    "equipo organizador. El informe debe ser profesional, conciso y centrado en cifras: prioriza "
+    "números y porcentajes concretos sobre prosa interpretativa, evita relleno y frases genéricas "
+    "— máximo 2 párrafos cortos. Usa EXCLUSIVAMENTE los datos que se te entregan a continuación — "
+    "nunca inventes cifras, porcentajes, temas ni citas que no estén en esos datos. Si un dato no "
+    "está disponible, no lo menciones. Escribe en español, en prosa clara y directa, sin viñetas "
+    "innecesarias."
 )
 
 FALLBACK_TEXTO = (
@@ -551,17 +554,17 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
     `None`."""
     system = (
         "Eres un analista de datos senior interpretando los resultados de UNA pregunta de "
-        "encuesta abierta para un informe institucional que va a leer la Rectoría. Escribe un "
-        "análisis robusto y sustancioso — un párrafo de 5 a 8 frases, nunca un resumen "
-        "telegráfico de 2 líneas — en español, como haría un analista humano explicándole el "
-        "hallazgo en detalle a un colega, no una ficha técnica. Ve directo a la interpretación: "
-        "nunca empieces con muletillas como 'Resultados de la encuesta:', 'Los resultados indican "
-        "que' o 'Descripción de los resultados:' — esas frases no aportan nada y suenan "
-        "robóticas. No te limites a enumerar temas y porcentajes: explica qué significa esa "
-        "distribución (¿hay consenso claro o está dividida la opinión?, ¿qué prioriza el grupo y "
-        "por qué podría ser así?, ¿cómo se relacionan entre sí los temas principales?, ¿qué "
-        "implicación práctica sugiere para la Universidad?). Usa EXCLUSIVAMENTE los datos "
-        "entregados a continuación — nunca inventes cifras ni ideas que no estén ahí." +
+        "encuesta abierta para un informe institucional que va a leer la Rectoría. El informe "
+        "debe ser profesional, conciso y muy descriptivo a nivel de cifras: la gráfica ya muestra "
+        "la distribución, tu texto es un complemento breve, no el protagonista. Escribe máximo 2 "
+        "a 3 frases cortas, en español, priorizando los números concretos (porcentajes, tamaños) "
+        "sobre interpretación extensa. Ve directo al dato: nunca empieces con muletillas como "
+        "'Resultados de la encuesta:', 'Los resultados indican que' o 'Descripción de los "
+        "resultados:' — esas frases no aportan nada y suenan robóticas. Señala el hallazgo "
+        "principal (qué tema domina o si la opinión está dividida, citando la cifra exacta) y, "
+        "solo si cabe en una frase corta, su implicación práctica — sin elaborar hipótesis "
+        "largas sobre el porqué. Usa EXCLUSIVAMENTE los datos entregados a continuación — nunca "
+        "inventes cifras ni ideas que no estén ahí." +
         _instrucciones_plantilla(plantilla)
     )
     lineas = [
@@ -618,7 +621,7 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         if pista_acuerdo:
             lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
 
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=480, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=200, temperature=0.5)
 
     tipo_grafica = None
     nivel_acuerdo = None
@@ -702,14 +705,15 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     opciones = estad.get('conteo_opciones', [])
     system = (
         "Eres un analista de datos senior interpretando los resultados de UNA pregunta de "
-        "encuesta de opción cerrada para un informe institucional que va a leer la Rectoría. "
-        "Escribe un análisis robusto — 4 a 6 frases, nunca un resumen telegráfico de 2 líneas — "
-        "en español, como haría un analista humano explicándole el hallazgo en detalle a un "
-        "colega. Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados "
-        "de la encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
-        "frases no aportan nada y suenan robóticas. No te limites a leer los números en voz alta: "
-        "explica qué revela esa inclinación sobre la prioridad del grupo y qué implicación "
-        "práctica sugiere. Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
+        "encuesta de opción cerrada para un informe institucional que va a leer la Rectoría. El "
+        "informe debe ser profesional, conciso y muy descriptivo a nivel de cifras: la gráfica ya "
+        "muestra la distribución, tu texto es un complemento breve. Escribe máximo 2 a 3 frases "
+        "cortas, en español, priorizando los números concretos (conteos, porcentajes) sobre la "
+        "prosa. Ve directo al dato: nunca empieces con muletillas como 'Resultados de la "
+        "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
+        "frases no aportan nada y suenan robóticas. Señala qué opción domina (o si está dividido, "
+        "citando las cifras exactas) y, solo si cabe en una frase corta, la implicación práctica. "
+        "Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
         "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
         "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
         "'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), 'GRAFICA: barras' (comparación "
@@ -724,7 +728,7 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=380, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=160, temperature=0.5)
 
     tipo_grafica = None
     if texto:
@@ -838,17 +842,18 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
     system = (
-        "Eres un analista de datos senior. Redacta una síntesis robusta (6 a 10 frases, no un "
-        "resumen de 2 líneas), en prosa fluida y natural, de UN momento de una jornada "
+        "Eres un analista de datos senior. Redacta una síntesis breve (3 a 5 frases, nunca más), "
+        "profesional, concisa y centrada en cifras, en prosa clara, de UN momento de una jornada "
         "participativa, integrando las descripciones ya redactadas de sus preguntas — no repitas "
-        "pregunta por pregunta, encuentra el hilo común, compara los temas más y menos "
-        "recurrentes entre preguntas, y explica qué implicación práctica sugiere el conjunto. "
-        "Nunca empieces con muletillas como 'Resultados de la encuesta:' o 'Los resultados "
-        "indican que'. No agregues datos que no estén en las descripciones dadas. Español." +
+        "pregunta por pregunta, señala el hilo común y los datos más relevantes (qué tema domina, "
+        "dónde hay consenso o división, citando cifras concretas cuando estén disponibles), sin "
+        "elaborar hipótesis largas. Nunca empieces con muletillas como 'Resultados de la "
+        "encuesta:' o 'Los resultados indican que'. No agregues datos que no estén en las "
+        "descripciones dadas. Español." +
         _instrucciones_plantilla(plantilla)
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
-    descripcion_general, error = _llamar_llm(system, user, max_tokens=550, temperature=0.5)
+    descripcion_general, error = _llamar_llm(system, user, max_tokens=240, temperature=0.5)
 
     return {
         'momento_id': momento.id,
@@ -873,7 +878,7 @@ def analizar_jornada(plantilla, momentos_analisis, participacion):
     ]
     for m in momentos_analisis:
         lineas.append(f"- {m['descripcion_general']}")
-    return _llamar_llm(system, '\n'.join(lineas), max_tokens=900, temperature=0.5)
+    return _llamar_llm(system, '\n'.join(lineas), max_tokens=420, temperature=0.5)
 
 
 # ---------------------------------------------------------------------------
