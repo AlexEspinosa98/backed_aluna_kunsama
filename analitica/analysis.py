@@ -346,18 +346,23 @@ def _etiquetar_y_clasificar(textos, temas_candidatos):
         return None, 'El modelo no devolvió el formato de clasificación esperado.'
 
     conteos = {idx: 0 for idx in etiquetas}
-    for idx_tema in asignaciones.values():
-        if idx_tema in conteos:
+    for idx_respuesta, idx_tema in asignaciones.items():
+        # El modelo a veces "alucina" líneas de clasificación para índices de respuesta que no
+        # existen (más allá de `muestra`) — sin este chequeo, esas líneas fantasma inflan el
+        # conteo total por encima del número real de respuestas.
+        if idx_tema in conteos and 1 <= idx_respuesta <= len(muestra):
             conteos[idx_tema] += 1
-    total_clasificadas = sum(conteos.values())
-    if not total_clasificadas:
+    if not sum(conteos.values()):
         return None, 'El modelo no clasificó ninguna respuesta en un tema válido.'
 
+    # El porcentaje se calcula sobre el tamaño real de la muestra, no sobre lo que el modelo
+    # alcanzó a clasificar — así una clasificación incompleta (el modelo se saltó respuestas) no
+    # infla artificialmente el % de los temas que sí alcanzó a asignar.
     temas_final = [
         {
             'tema': etiquetas[idx],
             'tamano': conteos[idx],
-            'porcentaje': round(conteos[idx] / total_clasificadas * 100, 1),
+            'porcentaje': round(conteos[idx] / len(muestra) * 100, 1),
         }
         for idx in sorted(etiquetas, key=lambda i: conteos[i], reverse=True)
         if conteos[idx] > 0
