@@ -16,14 +16,21 @@ llegó a superar la ventana de contexto del modelo con una jornada real de 34 pr
       directa por LLM)         ─┐          de sus preguntas])           sus momentos])
       agente_pregunta(datos) ───┴──────────────┴──────────────────────────┘
 
-    Total: N (preguntas) + M (momentos) + 1 llamadas al LLM, todas secuenciales sobre la misma
-    instancia de `Llama` cacheada. Cada agente falla de forma aislada (nunca tumba el reporte
-    completo): si una llamada falla o se pasa del tiempo, esa pieza queda con un aviso corto en
-    vez de descripción generada, y el resto del análisis sigue su curso.
+    Total: N (preguntas) + M (momentos) + 1 llamadas al LLM. Como cada agente solo ve los datos de
+    su propio nivel, las N preguntas de TODA la jornada son independientes entre sí (igual que,
+    después, las M síntesis de momento) — así que corren en paralelo sobre un pool de
+    `LLM_POOL_SIZE` instancias de `Llama` (una sola instancia solo puede atender una inferencia a
+    la vez; instancias distintas sí pueden hacerlo en simultáneo). Solo la síntesis final de
+    jornada, que necesita las M síntesis de momento ya listas, sigue siendo una llamada aislada al
+    final. Cada agente falla de forma aislada (nunca tumba el reporte completo): si una llamada
+    falla o se pasa del tiempo, esa pieza queda con un aviso corto en vez de descripción generada,
+    y el resto del análisis sigue su curso.
 """
 import os
+import queue
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from django.db import close_old_connections
@@ -47,6 +54,13 @@ MAX_RESPUESTAS_CLASIFICACION = 60
 # Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
 # resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
 GENERATION_TIMEOUT_SECONDS = 90
+# Preguntas y momentos son independientes entre sí (cada uno solo ve sus propios datos, ver nota
+# de diseño arriba), así que no hay razón para analizarlos uno a la vez: el servidor tiene núcleos
+# de sobra, así que en vez de una sola instancia del modelo usando todos los hilos para UNA
+# llamada a la vez, se reparten entre varias instancias que procesan preguntas EN PARALELO. Esto
+# no cambia una sola palabra de lo que se genera — mismo contenido, mismos prompts — solo cuánto
+# tarda en generarse.
+LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '8'))
 
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
@@ -94,39 +108,48 @@ def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
 
 
 # ---------------------------------------------------------------------------
-# Modelo LLM (llama.cpp) — carga perezosa y única por proceso.
+# Modelo LLM (llama.cpp) — pool de instancias perezoso y único por proceso.
 # ---------------------------------------------------------------------------
 
-_llm_lock = threading.Lock()
-_llm_instance = None
-# Aparte del lock de arriba (que solo protege la creación de la instancia): llama.cpp no soporta
-# llamadas concurrentes de inferencia sobre la misma instancia de Llama — dos hilos del mismo
-# proceso llamando create_chat_completion() al mismo tiempo corrompen el estado interno del
-# contexto y lo hacen abortar con un GGML_ASSERT (crash nativo, tumba todo el worker; no es un
-# error de Python, no hay try/except que lo pueda atajar). Pasó en producción: se creó un segundo
-# reporte mientras el primero seguía procesando, dos hilos en background llamaron al modelo a la
-# vez, y el worker murió dejando ambos reportes huérfanos en 'procesando' para siempre. Este lock
-# serializa toda inferencia dentro del proceso — junto con el guard a nivel de API en
-# ReporteViewSet.create que ya evita disparar un segundo reporte mientras hay uno en curso.
-_inference_lock = threading.Lock()
+_llm_pool = None
+_llm_pool_lock = threading.Lock()
 
 
-def _get_llm():
-    global _llm_instance
-    if _llm_instance is None:
-        with _llm_lock:
-            if _llm_instance is None:
-                from llama_cpp import Llama
-                if not MODEL_PATH.exists():
-                    raise FileNotFoundError(
-                        f'No se encontró el modelo en {MODEL_PATH}. Corre '
-                        "'python manage.py download_llm_model' primero."
-                    )
-                _llm_instance = Llama(
-                    model_path=str(MODEL_PATH), n_ctx=4096,
-                    n_threads=os.cpu_count(), verbose=False,
-                )
-    return _llm_instance
+def _crear_instancia_llm():
+    from llama_cpp import Llama
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f'No se encontró el modelo en {MODEL_PATH}. Corre '
+            "'python manage.py download_llm_model' primero."
+        )
+    # Los hilos disponibles se reparten entre las instancias del pool en vez de dárselos todos a
+    # una sola — con LLM_POOL_SIZE llamadas corriendo de verdad en paralelo, cada una individual
+    # tarda un poco más que si tuviera el CPU entero para ella (ver más abajo), pero el conjunto
+    # avanza LLM_POOL_SIZE veces más rápido, que es lo que importa para el tiempo total del reporte.
+    hilos = max(1, (os.cpu_count() or LLM_POOL_SIZE) // LLM_POOL_SIZE)
+    return Llama(model_path=str(MODEL_PATH), n_ctx=4096, n_threads=hilos, verbose=False)
+
+
+def _get_llm_pool():
+    """Pool de `LLM_POOL_SIZE` instancias `Llama` independientes, una por 'carril' de paralelismo.
+    llama.cpp no soporta llamadas concurrentes de inferencia sobre la MISMA instancia — corrompen
+    el contexto interno y crashean el proceso entero con un GGML_ASSERT nativo (no es una excepción
+    de Python, ningún try/except lo detiene). Esto pasó en producción una vez: dos hilos llamando
+    al modelo a la vez tumbaron el worker y dejaron dos reportes huérfanos en 'procesando' para
+    siempre. La lección de ese incidente NO era "nunca paralelizar" sino "nunca compartir una
+    instancia entre hilos" — instancias DISTINTAS sí pueden inferir al mismo tiempo sin problema.
+    El `queue.Queue` es el mecanismo de exclusión: sacar una instancia (`get`) se la reserva a ese
+    hilo hasta que la devuelve (`put`), así nunca hay dos hilos usando la misma instancia a la vez,
+    sin necesidad de un lock global que serialice todo el pool."""
+    global _llm_pool
+    if _llm_pool is None:
+        with _llm_pool_lock:
+            if _llm_pool is None:
+                pool = queue.Queue()
+                for _ in range(LLM_POOL_SIZE):
+                    pool.put(_crear_instancia_llm())
+                _llm_pool = pool
+    return _llm_pool
 
 
 def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
@@ -135,19 +158,21 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
     resultado = {}
 
     def _run():
+        pool = _get_llm_pool()
+        llm = pool.get()
         try:
-            llm = _get_llm()
-            with _inference_lock:
-                salida = llm.create_chat_completion(
-                    messages=[
-                        {'role': 'system', 'content': system},
-                        {'role': 'user', 'content': user},
-                    ],
-                    max_tokens=max_tokens, temperature=temperature,
-                )
+            salida = llm.create_chat_completion(
+                messages=[
+                    {'role': 'system', 'content': system},
+                    {'role': 'user', 'content': user},
+                ],
+                max_tokens=max_tokens, temperature=temperature,
+            )
             resultado['texto'] = salida['choices'][0]['message']['content'].strip()
         except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
             resultado['error'] = str(exc)
+        finally:
+            pool.put(llm)
 
     hilo = threading.Thread(target=_run, daemon=True)
     hilo.start()
@@ -605,10 +630,10 @@ def analizar_pregunta(pregunta):
 # Agente de momento.
 # ---------------------------------------------------------------------------
 
-def analizar_momento(momento):
-    preguntas = momento.preguntas.all().order_by('orden')
-    analisis_preguntas = [analizar_pregunta(p) for p in preguntas]
-
+def _sintetizar_momento(momento, analisis_preguntas):
+    """La síntesis en sí (una llamada al LLM) — separada de analizar las preguntas del momento
+    para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
+    `procesar_reporte`), no solo dentro de cada uno."""
     system = (
         "Eres un analista de datos. Redacta una síntesis breve (2 a 4 frases) de UN momento de "
         "una jornada participativa, integrando las descripciones ya redactadas de sus preguntas "
@@ -685,7 +710,28 @@ def procesar_reporte(reporte_id):
             'tasa_participacion': tasa,
         }
 
-        momentos_analisis = [analizar_momento(m) for m in momentos]
+        preguntas_por_momento = {m.id: list(m.preguntas.all().order_by('orden')) for m in momentos}
+        todas_las_preguntas = [p for m in momentos for p in preguntas_por_momento[m.id]]
+
+        def _analizar_pregunta_en_hilo(pregunta):
+            # Cada pregunta corre en un hilo nuevo del pool de abajo — necesita su propia
+            # conexión a la base de datos (Django abre una por hilo; esto la deja limpia si el
+            # hilo se reutiliza) antes de tocar el ORM.
+            close_old_connections()
+            return pregunta.id, analizar_pregunta(pregunta)
+
+        resultados_pregunta = {}
+        with ThreadPoolExecutor(max_workers=LLM_POOL_SIZE) as executor:
+            for pregunta_id, resultado in executor.map(_analizar_pregunta_en_hilo, todas_las_preguntas):
+                resultados_pregunta[pregunta_id] = resultado
+
+        def _sintetizar_momento_en_hilo(momento):
+            close_old_connections()
+            analisis_preguntas = [resultados_pregunta[p.id] for p in preguntas_por_momento[momento.id]]
+            return _sintetizar_momento(momento, analisis_preguntas)
+
+        with ThreadPoolExecutor(max_workers=min(LLM_POOL_SIZE, len(momentos))) as executor:
+            momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))
 
         texto, error_narrativa = analizar_jornada(reporte.plantilla, momentos_analisis, participacion)
 
