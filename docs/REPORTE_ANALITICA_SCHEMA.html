@@ -357,6 +357,11 @@
           <tr><td class="campo">analisis</td><td class="tipo">object</td><td class="desc">El cuerpo jerárquico — ver abajo.</td></tr>
           <tr><td class="campo">texto_reporte</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de jornada</b> (el nivel más alto, integra todos los momentos).</td></tr>
           <tr><td class="campo">modelo_usado</td><td class="tipo">string</td><td class="desc">Nombre del archivo <code>.gguf</code>, o <code>""</code> si la síntesis final no llegó a generarse.</td></tr>
+          <tr><td class="campo">presentacion_html</td><td class="tipo">string</td><td class="desc">HTML autocontenido generado por OpenAI (ver <code>POST .../generar-presentacion/</code>). Vacío si nunca se pidió.</td></tr>
+          <tr><td class="campo">presentacion_estado</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">pendiente</span> <span class="enum-pill">procesando</span> <span class="enum-pill">completo</span> <span class="enum-pill">error</span> — estado independiente de <code>estado</code> (el del análisis local).</td></tr>
+          <tr><td class="campo">presentacion_error</td><td class="tipo">string</td><td class="desc">Motivo si <code>presentacion_estado="error"</code> (ej. falta <code>OPENAI_API_KEY</code> en el servidor).</td></tr>
+          <tr><td class="campo">presentacion_modelo</td><td class="tipo">string</td><td class="desc">Modelo de OpenAI usado (ej. <code>gpt-4o</code>).</td></tr>
+          <tr><td class="campo">presentacion_generada_en</td><td class="tipo">datetime | null</td><td class="desc">ISO 8601.</td></tr>
           <tr><td class="campo">solicitado_por</td><td class="tipo">int</td><td class="desc">ID del usuario admin que lo pidió.</td></tr>
           <tr><td class="campo">creado_en / actualizado_en / completado_en</td><td class="tipo">datetime | null</td><td class="desc">ISO 8601.</td></tr>
         </tbody>
@@ -373,7 +378,7 @@
           <tr><td class="campo">participacion.total_participantes</td><td class="tipo">int</td><td class="desc">Inscritos en la jornada.</td></tr>
           <tr><td class="campo">participacion.participantes_que_respondieron</td><td class="tipo">int</td><td class="desc">Respondieron algo dentro del alcance.</td></tr>
           <tr><td class="campo">participacion.tasa_participacion</td><td class="tipo">float</td><td class="desc">Porcentaje.</td></tr>
-          <tr><td class="campo">momentos</td><td class="tipo">array&lt;MomentoAnalisis&gt;</td><td class="desc">Uno por cada momento del alcance.</td></tr>
+          <tr><td class="campo">momentos</td><td class="tipo">array&lt;MomentoAnalisis&gt;</td><td class="desc">Uno por cada momento del alcance. Esta misma estructura es lo que un frontend puede renderizar directo como tabla por momento, sin necesidad de descargar el PDF.</td></tr>
         </tbody>
       </table>
       </div>
@@ -386,6 +391,7 @@
         <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
         <tbody>
           <tr><td class="campo">momento_id</td><td class="tipo">int</td><td class="desc">Referencia — sin título; búscalo en <code>/api/admin/momentos/{id}/</code> si lo necesitas.</td></tr>
+          <tr><td class="campo">tipo</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">individual</span> <span class="enum-pill">mesa</span> — determina si sus preguntas pueden traer <code>nivel_acuerdo</code>.</td></tr>
           <tr><td class="campo">descripcion_general</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de momento</b>, integra las descripciones de sus preguntas.</td></tr>
           <tr><td class="campo">preguntas</td><td class="tipo">array&lt;PreguntaAnalisis&gt;</td><td class="desc">—</td></tr>
         </tbody>
@@ -399,19 +405,21 @@
       <table>
         <thead><tr><th>Campo</th><th>Tipo</th><th>Descripción</th></tr></thead>
         <tbody>
-          <tr><td class="campo">pregunta_id</td><td class="tipo">int</td><td class="desc">Referencia — sin texto; búscalo en <code>/api/admin/preguntas/{id}/</code>.</td></tr>
+          <tr><td class="campo">pregunta_id</td><td class="tipo">int</td><td class="desc">Referencia — también búscalo en <code>/api/admin/preguntas/{id}/</code> si necesitas más metadatos.</td></tr>
+          <tr><td class="campo">texto</td><td class="tipo">string</td><td class="desc">El enunciado real de la pregunta — ya no hace falta resolver <code>pregunta_id</code> aparte para mostrarlo.</td></tr>
           <tr><td class="campo">tipo</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">abierta</span> <span class="enum-pill">unica</span> <span class="enum-pill">multiple</span> — tipo real de la pregunta.</td></tr>
           <tr><td class="campo">tipo_grafica</td><td class="tipo">enum | null</td><td class="desc"><span class="enum-pill">pastel</span> · <span class="enum-pill">barras</span> · <span class="enum-pill">radar</span> · <code>null</code> — la elige el propio agente de pregunta viendo los conteos reales; ver nota abajo (aplica a unica/multiple siempre, y a abierta cuando hay 2+ temas con conteo real).</td></tr>
+          <tr><td class="campo">nivel_acuerdo</td><td class="tipo">enum | null</td><td class="desc"><span class="enum-pill">consenso_fuerte</span> <span class="enum-pill">consenso_moderado</span> <span class="enum-pill">tension_estrategica</span> <span class="enum-pill">tema_emergente</span> <span class="enum-pill">asunto_pendiente</span> · <code>null</code> — solo se calcula para preguntas de momentos tipo <code>mesa</code>; qué tan de acuerdo estuvieron las mesas entre sí, según la distribución real de temas más la lectura del LLM.</td></tr>
           <tr><td class="campo">total_respuestas</td><td class="tipo">int</td><td class="desc">—</td></tr>
-          <tr><td class="campo">descripcion</td><td class="tipo">string</td><td class="desc">Síntesis del <b>agente de pregunta</b>.</td></tr>
-          <tr><td class="campo">metodo_valores</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">bertopic</span> <span class="enum-pill">llm</span> <span class="enum-pill">conteo</span> — cómo se calculó <code>valores_caracteristicos</code>.</td></tr>
+          <tr><td class="campo">descripcion</td><td class="tipo">string</td><td class="desc">Análisis interpretativo del <b>agente de pregunta</b> (varias frases, no un resumen telegráfico).</td></tr>
+          <tr><td class="campo">metodo_valores</td><td class="tipo">enum</td><td class="desc"><span class="enum-pill">bertopic_llm</span> <span class="enum-pill">bertopic_sin_clasificar</span> <span class="enum-pill">llm</span> <span class="enum-pill">conteo</span> — cómo se calculó <code>valores_caracteristicos</code>. <code>bertopic_llm</code> es el caso normal: BERTopic (o <code>categorias_semilla</code>) propone los temas y el LLM clasifica cada respuesta real en uno de ellos, de ahí sale el conteo. <code>bertopic_sin_clasificar</code> aparece si la clasificación puntual falló (ver <code>error_mensaje</code>) — los temas quedan como etiquetas sin conteo confiable.</td></tr>
           <tr><td class="campo">valores_caracteristicos</td><td class="tipo">forma variable ↓</td><td class="desc">Depende de <code>tipo</code> — ver nota abajo.</td></tr>
         </tbody>
       </table>
       </div>
       <div class="variant-note">
         <span class="variant-tag abierta">abierta</span>
-        <p><code>{tema: string, tamano: int|null, porcentaje: float|null}[]</code> — cualitativo (la frase del tema) y cuantitativo (tamaño/porcentaje) juntos, nunca solo texto. Con <code>metodo_valores="bertopic"</code> (≥8 respuestas) <code>tamano</code>/<code>porcentaje</code> son reales (BERTopic agrupó las respuestas). Con <code>metodo_valores="llm"</code> (muestra chica, típico en preguntas de mesa) el LLM extrae frases libres sin clustering — no hay un conteo real por frase que reportar honestamente, así que quedan en <code>null</code> en vez de inventarse un número; ahí solo <code>total_respuestas</code> (a nivel de la pregunta) es el dato cuantitativo disponible. Con 2 o más temas de <code>bertopic</code>, <code>tipo_grafica</code> se decide igual que en unica/multiple (pastel/barras/radar según qué tan parejos son los tamaños).</p>
+        <p><code>{tema: string, tamano: int|null, porcentaje: float|null, origen: string}[]</code> — cualitativo (la frase del tema) y cuantitativo (tamaño/porcentaje) juntos, nunca solo texto. Con <code>metodo_valores="bertopic_llm"</code> <code>tamano</code>/<code>porcentaje</code> son reales (el LLM clasificó cada respuesta en uno de los temas). <code>origen</code> es <code>"semilla"</code> si el tema vino de <code>categorias_semilla</code> del momento (ver HU-03), o <code>"inductivo"</code> si el LLM lo agregó porque ninguna semilla encajaba (como máximo uno por pregunta). Con <code>metodo_valores="llm"</code> (muestra chica, típico en preguntas de mesa) el LLM extrae frases libres sin clasificar — no hay conteo real por frase que reportar honestamente, así que quedan en <code>null</code>; ahí solo <code>total_respuestas</code> es el dato cuantitativo disponible. Con 2 o más temas clasificados, <code>tipo_grafica</code> se decide igual que en unica/multiple.</p>
       </div>
       <div class="variant-note">
         <span class="variant-tag cerrada">unica / multiple</span>
@@ -465,135 +473,162 @@
         "preguntas": [
           {
             "tipo": "abierta",
+            "texto": "¿Qué principio ético debería ser irrenunciable en toda actividad de investigación, innovación, creación y transferencia que se desarrolle en UNIMAGDALENA?",
             "descripcion": "Resultados: El público apoya firmemente la idea de comunidades irrenunciables y participativas, así como el consentimiento informado y la protección de datos. También destaca la importancia de la honestidad, el manejo de datos y la transparencia central.",
             "pregunta_id": 4,
             "tipo_grafica": "barras",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "comunidades, consentimiento, comunidades irrenunciable, comunidades participantes, consentimiento informado, protección",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               },
               {
                 "tema": "honestidad manejo, honestidad, datos información, datos, central transparencia, central",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿En qué momentos del ciclo de una investigación —formulación, evaluación, ejecución, manejo de datos, publicación, transferencia o apropiación— considera que existen hoy los mayores riesgos éticos o de integridad científica?",
             "descripcion": "Los resultados indican que la mayoría de los participantes se enfocó en temas relacionados con el manejo de datos y los riesgos, así como la comercialización y los resultados. Se inclinó claramente hacia el manejo de datos y los riesgos con 50.0% de respuestas.",
             "pregunta_id": 5,
             "tipo_grafica": "pastel",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "manejo, manejo datos, riesgos, datos, datos fase, ejecución riesgos",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               },
               {
                 "tema": "comercialización, comercialización resultados, concentra mayores, concentra, comunidades riesgosa, comunidades",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿Qué dilema o conflicto ético considera más urgente prevenir o gestionar en la Universidad: conflictos de interés, autoría, propiedad intelectual, manejo de datos, consentimiento informado, relación con comunidades, uso de inteligencia artificial, evaluación, publicación u otro?",
             "descripcion": "Los resultados indican que el tema de consentimiento informado y relaciones de comunidades es un tema de gran preocupación para la mayoría de los encuestados, con un 58.3% de respuestas. Además, el tema de urgencia y la necesidad de resolver conflictos recibe un 33.3%.",
             "pregunta_id": 6,
             "tipo_grafica": "barras",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "consentimiento informado, comunidades consentimiento, comunidades, urgente relación, sensible urgente, protección información",
                 "tamano": 7,
-                "porcentaje": 58.3
+                "porcentaje": 58.3,
+                "origen": "inductivo"
               },
               {
                 "tema": "urgente, resolver conflictos, aplicada, asunto urgente, asunto, artificial criterios",
                 "tamano": 4,
-                "porcentaje": 33.3
+                "porcentaje": 33.3,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿Qué debería cambiar en el Comité de Ética en Investigación y sus subcomités para responder de manera oportuna, especializada y proporcional a la diversidad de investigaciones, disciplinas y niveles de riesgo de la Universidad?",
             "descripcion": "Las respuestas más recurrentes fueron los temas de tener y comité, con 50.0% de menciones cada uno. Recomiendo la gráfica 'GRAFICA: barras' para comparar claramente los dos temas más populares.",
             "pregunta_id": 7,
             "tipo_grafica": "pastel",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "tener, comité, comité tener, comunidades, especializados, especializados área",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               },
               {
                 "tema": "ética, comité ética, comité, cortos hace, cortos, capacite mejor",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿Cuáles conocimientos y capacidades mínimas en ética de la investigación, bioética e integridad científica deberían desarrollar toda persona que participe en actividades de investigación y creación en UNIMAGDALENA?",
             "descripcion": "Los resultados indican que la mayor parte de los respondientes (50.0%) se refieren a temas relacionados con la capacitación ética y el consentimiento informado en el contexto de la formación.",
             "pregunta_id": 8,
             "tipo_grafica": "barras",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "artificial investigadores, artificial, capacitación, capacitación ética, consentimiento informado, consentimiento",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               },
               {
                 "tema": "formación, básica integridad, bioética obligatoria, básica, bioética, obligatoria",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿Cuáles responsabilidades tienen los investigadores en una investigación que involucre personas, comunidades, pueblos y saberes tradicionales, animales, biodiversidad, datos sensibles o tecnologías emergentes, para asegurar respeto, participación, reconocimiento, beneficios y protección frente a posibles daños?",
             "descripcion": "Las respuestas más recurrentes fueron comunidades y biodiversidad, cada uno con 6 respuestas del total de 12. Ambos temas obtuvieron un 50.0% de respuestas.",
             "pregunta_id": 9,
             "tipo_grafica": "barras",
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": [
               {
                 "tema": "comunidades, asegurar reconocimiento, activa comunidades, asegurar, activa, reconocimiento",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               },
               {
                 "tema": "biodiversidad, biodiversidad seres, datos sensibles, datos, central investigadores, central",
                 "tamano": 6,
-                "porcentaje": 50.0
+                "porcentaje": 50.0,
+                "origen": "inductivo"
               }
             ]
           },
           {
             "tipo": "abierta",
+            "texto": "¿Cuál es el principio ético fundamental que debe orientar toda actividad de investigación, innovación, creación y transferencia en Unimagdalena, y cuáles deberían ser los tres compromisos irrenunciables de investigadores y de la Universidad cuando se transita de investigación académica a innovación, empresa, emprendimiento o spin-off?",
             "descripcion": "Las respuestas no vacías a la pregunta de encuesta abierta fueron 12, de las 12 recibidas, pero no se identificaron patrones claros en ellas.",
             "pregunta_id": 10,
             "tipo_grafica": null,
-            "metodo_valores": "bertopic",
+            "nivel_acuerdo": null,
+            "metodo_valores": "bertopic_llm",
             "total_respuestas": 12,
             "valores_caracteristicos": []
           }
         ],
         "momento_id": 3,
+        "tipo": "individual",
         "descripcion_general": "En la jornada participativa, los participantes destacaron la importancia del manejo de datos y los riesgos, así como el consentimiento informado y la protección de datos. Además, se expresaron preocupaciones sobre comunidades y relaciones de confianza, y la urgencia de resolver conflictos. Los temas de capacitación ética, comunidades irrenunciables y biodiversidad también obtuvieron respuestas significativas."
       }
     ],
@@ -605,6 +640,11 @@
   },
   "texto_reporte": "Synopsis ejecutiva para la Rectoría de la Universidad del Magdalena:\n\nEn la jornada participativa recientemente organizada, se registró una participación total de 14 personas, de las cuales 12 (85.7%) respondieron a los cuestionarios. Esta alta respuesta sugiere un interés significativo en el tema y una voluntad de contribuir al diálogo y análisis.\n\nLos participantes destacaron la importancia del manejo de datos, los riesgos asociados y el consentimiento informado. También se expresaron preocupaciones sobre comunidades y relaciones de confianza, así como la urgencia de resolver conflictos. Las temáticas de capacitación ética, comunidades irrenunciables y biodiversidad obtuvieron respuestas significativas, lo que indica un interés en estos campos.\n\nLas principales convergencias identificadas son la importancia de los temas mencionados y la preocupación por el manejo de datos y la protección de datos. Las tensiones o divergencias relevantes se reflejan en las preocupaciones sobre comunidades y relaciones de confianza, y la urgencia de resolver conflictos. \n\nPara profundizar en estos temas, se recomienda realizar un análisis más detallado sobre las comunidades irrenunciables y el manejo de datos, así como explorar más profundamente las relaciones de confianza y la resolución de conflictos.",
   "modelo_usado": "qwen2.5-3b-instruct-q4_k_m.gguf",
+  "presentacion_html": "",
+  "presentacion_estado": "pendiente",
+  "presentacion_error": "",
+  "presentacion_modelo": "",
+  "presentacion_generada_en": null,
   "solicitado_por": 3,
   "creado_en": "2026-08-18T22:42:04.372702-05:00",
   "actualizado_en": "2026-08-18T22:43:58.590336-05:00",

@@ -440,7 +440,7 @@
   </header>
 
   <nav class="toc">
-    <a class="admin-link" href="#admin">Administrador · HU-01–14</a>
+    <a class="admin-link" href="#admin">Administrador · HU-01–14c</a>
     <a class="usuario-link" href="#usuario">Participante · HU-15–25</a>
     <a class="tech-link" href="#tech">Documentación técnica</a>
   </nav>
@@ -449,7 +449,7 @@
   <section class="role" data-role="admin" id="admin">
     <div class="role-head">
       <h2>Administrador</h2>
-      <span class="role-count">14 historias · HU-01 a HU-14</span>
+      <span class="role-count">16 historias · HU-01 a HU-14c</span>
     </div>
 
     <div class="flow">
@@ -513,6 +513,7 @@
       <ul class="criteria">
         <li><code>orden</code> es único dentro de la jornada.</li>
         <li>El tipo determina cómo se guardan las respuestas: por participante o por mesa.</li>
+        <li><code>categorias_semilla</code> (opcional, lista de strings) predefine las categorías temáticas de este momento para el análisis con IA (HU-13) — se repite la misma lista en momentos que comparten un eje temático. Vacía = los temas se descubren automáticamente.</li>
       </ul>
     </article>
 
@@ -653,7 +654,7 @@
         <h3>Configurar plantillas de análisis con IA</h3>
         <span class="role-tag admin">Admin</span>
       </div>
-      <p class="narrative">Como administrador quiero crear y editar plantillas de prompt que definen el tono y el foco con el que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.</p>
+      <p class="narrative">Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.</p>
       <div class="endpoints">
         <span class="ep post"><span class="m">POST</span><span class="path">/api/admin/plantillas-analisis/</span></span>
         <span class="ep get"><span class="m">GET</span><span class="path">/api/admin/plantillas-analisis/</span></span>
@@ -662,7 +663,8 @@
       </div>
       <ul class="criteria">
         <li>Solo una plantilla puede quedar marcada <code>predeterminada=true</code> a la vez; marcar una nueva desmarca la anterior.</li>
-        <li>El <code>prompt_sistema</code> son instrucciones de estilo/foco — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.</li>
+        <li>El <code>prompt_sistema</code> son instrucciones de estilo/foco/profundidad — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.</li>
+        <li><strong>Aplica en TODOS los niveles</strong> — cada pregunta, cada momento y la jornada completa — no solo en la síntesis final: editar la plantilla activa y pedir un reporte nuevo cambia el tono/profundidad de principio a fin, sin redeploy.</li>
       </ul>
     </article>
 
@@ -672,13 +674,14 @@
         <h3>Generar un reporte de análisis jerárquico (jornada → momento → pregunta) con IA</h3>
         <span class="role-tag admin">Admin</span>
       </div>
-      <p class="narrative">Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y una síntesis narrativa a tres niveles.</p>
+      <p class="narrative">Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y un análisis narrativo robusto a tres niveles.</p>
       <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/reportes/</span></span></div>
       <ul class="criteria">
-        <li><code>jornada</code> obligatorio; <code>momentos</code> opcional (vacío = jornada completa, uno = momento individual, varios = combinados); <code>plantilla</code> opcional (usa la predeterminada si no se manda).</li>
-        <li>Responde de inmediato (<code>201</code>) con el reporte en estado <code>procesando</code> — el análisis corre en segundo plano, no bloquea el request.</li>
-        <li><strong>Multiagente:</strong> una llamada al LLM local por cada pregunta (redacta su <code>descripcion</code> desde sus propias estadísticas/tópicos), una por cada momento (sintetiza sus preguntas) y una para la jornada completa (sintetiza sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima, así el contexto no depende de cuántas preguntas tenga.</li>
-        <li>Preguntas <code>abierta</code> con muestra suficiente (≥8): <code>valores_caracteristicos</code> vía BERTopic (determinístico). Con muestra chica: el propio LLM extrae frases características tomadas de las respuestas dadas (<code>metodo_valores: "llm"</code>) en vez de dejarlas vacías.</li>
+        <li><code>jornada</code> obligatorio; <code>momentos</code> opcional (vacío = jornada completa, uno = momento individual, varios = combinados); <code>plantilla</code> opcional (usa la predeterminada si no se manda). Como el reporte solo cubre los momentos pedidos, se puede generar apenas esté lista la información de al menos uno.</li>
+        <li>Responde de inmediato (<code>201</code>) con el reporte en estado <code>procesando</code> — el análisis corre en segundo plano y sus preguntas se procesan <strong>en paralelo</strong> (pool de instancias del modelo local), sin bloquear el request.</li>
+        <li><strong>Multiagente:</strong> una llamada al LLM local por cada pregunta (redacta un análisis interpretativo, no un resumen telegráfico), una por cada momento (sintetiza e interpreta sus preguntas) y una para la jornada completa (sintetiza sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima.</li>
+        <li>Preguntas <code>abierta</code>: si el momento trae <code>categorias_semilla</code> (HU-03), esas categorías predefinidas son los candidatos de tema (el modelo suma como máximo una categoría nueva por pregunta si de verdad ninguna encaja). Sin semillas y con muestra suficiente (≥8): temas descubiertos automáticamente (BERTopic, determinístico). Con muestra chica: el LLM extrae frases características de las respuestas dadas (<code>metodo_valores: "llm"</code>). El LLM clasifica cada respuesta real en un tema — el conteo/porcentaje sale de esa clasificación, nunca del clustering crudo.</li>
+        <li>Para preguntas de momentos tipo <code>mesa</code>, además se calcula <code>nivel_acuerdo</code> por tema (<code>consenso_fuerte</code>/<code>consenso_moderado</code>/<code>tension_estrategica</code>/<code>tema_emergente</code>/<code>asunto_pendiente</code>) — qué tan de acuerdo estuvieron las mesas entre sí.</li>
         <li>El LLM nunca inventa cifras: cada agente solo ve los datos ya calculados de su propio nivel. Si una llamada puntual falla, esa pieza queda con un aviso — no tumba el resto del reporte.</li>
       </ul>
     </article>
@@ -686,22 +689,53 @@
     <article class="story">
       <div class="story-head">
         <span class="hu-id">HU-14</span>
-        <h3>Consultar el estado y el resultado de un reporte</h3>
+        <h3>Consultar el estado y el resultado de un reporte (incluida vista tabular)</h3>
         <span class="role-tag admin">Admin</span>
       </div>
-      <p class="narrative">Como administrador quiero consultar el estado de un reporte y su resultado una vez listo, para hacer seguimiento del análisis sin bloquear mi sesión de trabajo.</p>
+      <p class="narrative">Como administrador quiero consultar el estado de un reporte y su resultado ya en formato estructurado, para revisarlo con claridad sin tener que descargar nada.</p>
       <div class="endpoints">
         <span class="ep get"><span class="m">GET</span><span class="path">/api/admin/reportes/?jornada=&lt;id&gt;</span></span>
         <span class="ep get"><span class="m">GET</span><span class="path">/api/admin/reportes/{id}/</span></span>
         <span class="ep delete"><span class="m">DELETE</span><span class="path">/api/admin/reportes/{id}/</span></span>
       </div>
       <ul class="criteria">
-        <li><code>analisis</code> trae <code>participacion</code> (totales) y <code>momentos[]</code>, cada uno con <code>descripcion_general</code> y <code>preguntas[]</code> (<code>tipo</code>, <code>tipo_grafica</code>, <code>descripcion</code>, <code>valores_caracteristicos</code>, <code>metodo_valores</code>). No repite texto de preguntas/momentos — se referencian por id.</li>
-        <li><code>tipo_grafica</code> es <code>null</code> para <code>abierta</code>. Para <code>unica</code>/<code>multiple</code> es <code>"pastel"</code>, <code>"barras"</code> o <code>"radar"</code> — el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar con 4+ opciones, para ver la forma general de la inclinación); si el modelo no responde con una elección válida, se usa un respaldo determinístico.</li>
+        <li><strong><code>analisis</code> ya es la vista tabular</strong> — no hace falta descargar el PDF para verlo claro: trae <code>participacion</code> (totales) y <code>momentos[]</code>, cada uno con <code>tipo</code> (<code>individual</code>/<code>mesa</code>), <code>descripcion_general</code> y <code>preguntas[]</code> — cada pregunta con <code>texto</code> (el enunciado real), <code>tipo</code>, <code>tipo_grafica</code>, <code>nivel_acuerdo</code>, <code>descripcion</code>, <code>valores_caracteristicos</code> y <code>metodo_valores</code> (<code>"bertopic_llm"</code>/<code>"bertopic_sin_clasificar"</code>/<code>"llm"</code>/<code>"conteo"</code>). Un frontend puede renderizar esto directo como tabla por momento.</li>
+        <li>Cada tema de <code>valores_caracteristicos</code> (cuando <code>metodo_valores: "bertopic_llm"</code>) trae además <code>origen</code> (<code>"semilla"</code> o <code>"inductivo"</code>).</li>
+        <li><code>tipo_grafica</code> es <code>null</code> cuando no aplica. Cuando aplica: <code>"pastel"</code>, <code>"barras"</code> o <code>"radar"</code> — elegido por el propio agente de pregunta; si el modelo no responde con una elección válida, se usa un respaldo determinístico.</li>
         <li><code>texto_reporte</code> es la síntesis del agente de jornada, el nivel más alto.</li>
         <li><code>slug</code> se autogenera como <code>{jornada}-{alcance}-{fecha y hora local de Colombia}</code> (ej. <code>jornada-agil-2-jornada-20260818-2043</code>) para distinguir reportes a simple vista.</li>
-        <li><code>valores_caracteristicos</code> de una pregunta <code>abierta</code> siempre trae cualitativo y cuantitativo juntos (<code>{tema, tamano, porcentaje}</code>), nunca solo texto — ver <code>docs/REPORTE_ANALITICA_SCHEMA.html</code> para el detalle exacto.</li>
-        <li>Devuelve <code>estado</code> (<code>pendiente</code>/<code>procesando</code>/<code>completo</code>/<code>error</code>), <code>estadisticas</code>, <code>topicos</code>, <code>texto_reporte</code> y <code>modelo_usado</code>.</li>
+        <li>Ver <code>docs/REPORTE_ANALITICA_SCHEMA.html</code> para el detalle exacto de cada campo.</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-14b</span>
+        <h3>Descargar un PDF listo para entregar, sin depender de una IA externa</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero descargar un PDF ya maquetado (portada, síntesis ejecutiva, secciones por momento con gráficos reales, badges de nivel de acuerdo) de un reporte ya completo, para tener un documento presentable sin esperas ni riesgo de que salga mal armado.</p>
+      <div class="endpoints"><span class="ep get"><span class="m">GET</span><span class="path">/api/admin/reportes/{id}/pdf/</span></span></div>
+      <ul class="criteria">
+        <li>Responde en la misma petición — no es asíncrono, no hay estado que consultar después. <code>400</code> si el análisis todavía no está <code>completo</code>.</li>
+        <li>Se arma 100% en el servidor (reportlab) a partir de <code>analisis</code> — no llama a ningún servicio externo, así que es rápido y sale igual cada vez.</li>
+        <li>Portada institucional a página completa, resumen ejecutivo con el markdown convertido a formato real, una sección por momento con su tipo, y una tarjeta por pregunta con su enunciado real, análisis y gráfico (con todos los temas, nunca solo los principales).</li>
+      </ul>
+    </article>
+
+    <article class="story">
+      <div class="story-head">
+        <span class="hu-id">HU-14c</span>
+        <h3>Generar una presentación HTML alternativa con IA externa (experimental)</h3>
+        <span class="role-tag admin">Admin</span>
+      </div>
+      <p class="narrative">Como administrador quiero pedir opcionalmente que una IA externa (OpenAI) redacte y maquete una presentación HTML a partir del mismo análisis ya calculado, para explorar una alternativa de diseño más libre cuando el PDF determinístico no sea suficiente.</p>
+      <div class="endpoints"><span class="ep post"><span class="m">POST</span><span class="path">/api/admin/reportes/{id}/generar-presentacion/</span></span></div>
+      <ul class="criteria">
+        <li>Asíncrono (<code>202</code>, hay que consultar el estado después, a diferencia de HU-14b). <code>400</code> si el análisis no está <code>completo</code>; <code>409</code> si ya hay una presentación en curso (se auto-sana si quedó huérfana &gt;10 min).</li>
+        <li>Requiere <code>OPENAI_API_KEY</code> configurada en el servidor — si falta, queda <code>presentacion_estado: "error"</code> con mensaje claro, no revienta.</li>
+        <li><code>presentacion_html</code>, <code>presentacion_estado</code>, <code>presentacion_error</code>, <code>presentacion_modelo</code> y <code>presentacion_generada_en</code> se consultan en el mismo <code>GET .../reportes/{id}/</code> de HU-14.</li>
+        <li>A diferencia del PDF, la IA externa arma el HTML/CSS/gráficos completos por su cuenta — más flexible visualmente, pero sin la garantía de armado determinístico; se recomienda el PDF (HU-14b) como vía confiable por defecto.</li>
       </ul>
     </article>
   </section>
