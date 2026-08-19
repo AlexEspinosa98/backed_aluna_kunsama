@@ -79,6 +79,17 @@ GENERATION_TIMEOUT_SECONDS = 90
 # velocidad por instancia. 6 es el punto validado que da paralelismo real sin arriesgar timeouts.
 LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '6'))
 
+def _instrucciones_plantilla(plantilla):
+    """Instrucciones adicionales de la plantilla activa (`PlantillaAnalisis.prompt_sistema`,
+    editable por el equipo vía POST/PATCH /api/admin/plantillas-analisis/) — se aplican en TODOS
+    los niveles del análisis (pregunta, momento, jornada), no solo en la síntesis final, para que
+    ajustar tono o profundidad desde la plantilla tenga efecto real en todo el reporte, no solo en
+    su último párrafo."""
+    if plantilla and plantilla.prompt_sistema:
+        return '\n\nInstrucciones adicionales del equipo organizador:\n' + plantilla.prompt_sistema
+    return ''
+
+
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
     "equipo organizador. Usa EXCLUSIVAMENTE los datos que se te entregan a continuación — nunca "
@@ -523,7 +534,7 @@ NIVELES_ACUERDO_VALIDOS = (
 )
 
 
-def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_valores):
+def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_valores, plantilla=None):
     """Devuelve (descripcion, tipo_grafica, nivel_acuerdo). `tipo_grafica` solo se decide cuando
     hay datos cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos,
     que salen de que el LLM haya clasificado las respuestas en los temas candidatos (método
@@ -535,15 +546,19 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
     clave/categorías crudas), `insuficiente` o `sin_datos` ninguno de los dos se calcula, quedan
     `None`."""
     system = (
-        "Eres un analista de datos interpretando los resultados de UNA pregunta de encuesta "
-        "abierta para un informe institucional. Escribe 2 a 3 frases fluidas en español, como "
-        "haría un analista humano explicándole el hallazgo a un colega — no una ficha técnica. "
-        "Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados de la "
-        "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas frases "
-        "no aportan nada y suenan robóticas. En vez de solo enumerar temas y porcentajes, explica "
-        "qué significa esa distribución (¿hay consenso claro?, ¿está dividido?, ¿qué prioriza el "
-        "grupo?). Usa EXCLUSIVAMENTE los datos entregados a continuación — nunca inventes cifras "
-        "ni ideas que no estén ahí."
+        "Eres un analista de datos senior interpretando los resultados de UNA pregunta de "
+        "encuesta abierta para un informe institucional que va a leer la Rectoría. Escribe un "
+        "análisis robusto y sustancioso — un párrafo de 5 a 8 frases, nunca un resumen "
+        "telegráfico de 2 líneas — en español, como haría un analista humano explicándole el "
+        "hallazgo en detalle a un colega, no una ficha técnica. Ve directo a la interpretación: "
+        "nunca empieces con muletillas como 'Resultados de la encuesta:', 'Los resultados indican "
+        "que' o 'Descripción de los resultados:' — esas frases no aportan nada y suenan "
+        "robóticas. No te limites a enumerar temas y porcentajes: explica qué significa esa "
+        "distribución (¿hay consenso claro o está dividida la opinión?, ¿qué prioriza el grupo y "
+        "por qué podría ser así?, ¿cómo se relacionan entre sí los temas principales?, ¿qué "
+        "implicación práctica sugiere para la Universidad?). Usa EXCLUSIVAMENTE los datos "
+        "entregados a continuación — nunca inventes cifras ni ideas que no estén ahí." +
+        _instrucciones_plantilla(plantilla)
     )
     lineas = [
         f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
@@ -599,7 +614,7 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         if pista_acuerdo:
             lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
 
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=260, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=480, temperature=0.5)
 
     tipo_grafica = None
     nivel_acuerdo = None
@@ -674,7 +689,7 @@ def _pista_nivel_acuerdo(valores_caracteristicos, num_mesas):
     return None
 
 
-def _agente_pregunta_cerrada(pregunta, estad):
+def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     """Para preguntas `unica`/`multiple`: además de la descripción, el propio LLM elige el tipo
     de gráfica que mejor muestre hacia dónde se inclina el público entre las opciones — pastel
     (pocas, mutuamente excluyentes), barras (comparación simple de conteos) o radar (varias
@@ -682,19 +697,22 @@ def _agente_pregunta_cerrada(pregunta, estad):
     una elección válida, se usa `_tipo_grafica_por_defecto` como respaldo."""
     opciones = estad.get('conteo_opciones', [])
     system = (
-        "Eres un analista de datos interpretando los resultados de UNA pregunta de encuesta de "
-        "opción cerrada para un informe institucional. Escribe 2 a 3 frases fluidas en español, "
-        "como haría un analista humano explicándole el hallazgo a un colega — no una ficha "
-        "técnica. Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados "
+        "Eres un analista de datos senior interpretando los resultados de UNA pregunta de "
+        "encuesta de opción cerrada para un informe institucional que va a leer la Rectoría. "
+        "Escribe un análisis robusto — 4 a 6 frases, nunca un resumen telegráfico de 2 líneas — "
+        "en español, como haría un analista humano explicándole el hallazgo en detalle a un "
+        "colega. Ve directo a la interpretación: nunca empieces con muletillas como 'Resultados "
         "de la encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
-        "frases no aportan nada y suenan robóticas. Usa EXCLUSIVAMENTE los datos entregados — "
-        "nunca inventes cifras. Luego, en una última línea aparte, recomienda la gráfica que mejor "
-        "muestre hacia dónde se inclina el público entre las opciones, escribiendo EXACTAMENTE una "
-        "de estas tres líneas: 'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), "
-        "'GRAFICA: barras' (comparación simple de conteos), o 'GRAFICA: radar' (varias opciones "
-        "— 4 o más — donde interesa ver la forma general de la inclinación entre todas a la vez). "
-        "Si se te da una nota con una recomendación, síguela salvo que los datos digan claramente "
-        "lo contrario."
+        "frases no aportan nada y suenan robóticas. No te limites a leer los números en voz alta: "
+        "explica qué revela esa inclinación sobre la prioridad del grupo y qué implicación "
+        "práctica sugiere. Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
+        "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
+        "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
+        "'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), 'GRAFICA: barras' (comparación "
+        "simple de conteos), o 'GRAFICA: radar' (varias opciones — 4 o más — donde interesa ver la "
+        "forma general de la inclinación entre todas a la vez). Si se te da una nota con una "
+        "recomendación, síguela salvo que los datos digan claramente lo contrario." +
+        _instrucciones_plantilla(plantilla)
     )
     lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
     for opcion in opciones:
@@ -702,7 +720,7 @@ def _agente_pregunta_cerrada(pregunta, estad):
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=380, temperature=0.5)
 
     tipo_grafica = None
     if texto:
@@ -735,10 +753,13 @@ def _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva):
     return valores, 'bertopic_sin_clasificar'
 
 
-def analizar_pregunta(pregunta):
+def analizar_pregunta(pregunta, plantilla=None):
     """Analiza una pregunta de forma aislada: estadísticas + (para abiertas) tópicos/frases +
     descripción del agente de pregunta. Nunca lanza excepción — una falla puntual del LLM solo
-    deja un aviso corto en `descripcion`, no tumba el resto del análisis."""
+    deja un aviso corto en `descripcion`, no tumba el resto del análisis. `plantilla` (opcional,
+    `PlantillaAnalisis` editable vía /api/admin/plantillas-analisis/) se reenvía a los agentes de
+    redacción para que sus instrucciones de tono/profundidad apliquen también a nivel de
+    pregunta, no solo en la síntesis final de la jornada."""
     estad = _estadisticas_pregunta(pregunta)
 
     if pregunta.tipo == 'abierta':
@@ -776,7 +797,8 @@ def analizar_pregunta(pregunta):
             valores = [{'tema': frase, 'tamano': None, 'porcentaje': None} for frase in frases]
             metodo = 'llm' if valores else 'insuficiente'
 
-        descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(pregunta, estad, valores, metodo)
+        descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(
+            pregunta, estad, valores, metodo, plantilla)
         return {
             'pregunta_id': pregunta.id,
             'texto': pregunta.texto,
@@ -789,7 +811,7 @@ def analizar_pregunta(pregunta):
             'metodo_valores': metodo,
         }
 
-    descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad)
+    descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, plantilla)
     return {
         'pregunta_id': pregunta.id,
         'texto': pregunta.texto,
@@ -807,20 +829,22 @@ def analizar_pregunta(pregunta):
 # Agente de momento.
 # ---------------------------------------------------------------------------
 
-def _sintetizar_momento(momento, analisis_preguntas):
+def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
     """La síntesis en sí (una llamada al LLM) — separada de analizar las preguntas del momento
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
     system = (
-        "Eres un analista de datos. Redacta una síntesis breve (2 a 4 frases), en prosa fluida y "
-        "natural, de UN momento de una jornada participativa, integrando las descripciones ya "
-        "redactadas de sus preguntas — no repitas pregunta por pregunta, encuentra el hilo común e "
-        "interprétalo. Nunca empieces con muletillas como 'Resultados de la encuesta:' o "
-        "'Los resultados indican que'. No agregues datos que no estén en las descripciones dadas. "
-        "Español."
+        "Eres un analista de datos senior. Redacta una síntesis robusta (6 a 10 frases, no un "
+        "resumen de 2 líneas), en prosa fluida y natural, de UN momento de una jornada "
+        "participativa, integrando las descripciones ya redactadas de sus preguntas — no repitas "
+        "pregunta por pregunta, encuentra el hilo común, compara los temas más y menos "
+        "recurrentes entre preguntas, y explica qué implicación práctica sugiere el conjunto. "
+        "Nunca empieces con muletillas como 'Resultados de la encuesta:' o 'Los resultados "
+        "indican que'. No agregues datos que no estén en las descripciones dadas. Español." +
+        _instrucciones_plantilla(plantilla)
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
-    descripcion_general, error = _llamar_llm(system, user, max_tokens=250, temperature=0.5)
+    descripcion_general, error = _llamar_llm(system, user, max_tokens=550, temperature=0.5)
 
     return {
         'momento_id': momento.id,
@@ -835,9 +859,7 @@ def _sintetizar_momento(momento, analisis_preguntas):
 # ---------------------------------------------------------------------------
 
 def analizar_jornada(plantilla, momentos_analisis, participacion):
-    system = BASE_SYSTEM_PROMPT
-    if plantilla and plantilla.prompt_sistema:
-        system += '\n\nInstrucciones adicionales de estilo del equipo organizador:\n' + plantilla.prompt_sistema
+    system = BASE_SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
 
     lineas = [
         f"Participantes totales: {participacion['total_participantes']}.",
@@ -847,7 +869,7 @@ def analizar_jornada(plantilla, momentos_analisis, participacion):
     ]
     for m in momentos_analisis:
         lineas.append(f"- {m['descripcion_general']}")
-    return _llamar_llm(system, '\n'.join(lineas), max_tokens=700, temperature=0.5)
+    return _llamar_llm(system, '\n'.join(lineas), max_tokens=900, temperature=0.5)
 
 
 # ---------------------------------------------------------------------------
@@ -898,7 +920,7 @@ def procesar_reporte(reporte_id):
             # conexión a la base de datos (Django abre una por hilo; esto la deja limpia si el
             # hilo se reutiliza) antes de tocar el ORM.
             close_old_connections()
-            return pregunta.id, analizar_pregunta(pregunta)
+            return pregunta.id, analizar_pregunta(pregunta, reporte.plantilla)
 
         resultados_pregunta = {}
         with ThreadPoolExecutor(max_workers=LLM_POOL_SIZE) as executor:
@@ -908,7 +930,7 @@ def procesar_reporte(reporte_id):
         def _sintetizar_momento_en_hilo(momento):
             close_old_connections()
             analisis_preguntas = [resultados_pregunta[p.id] for p in preguntas_por_momento[momento.id]]
-            return _sintetizar_momento(momento, analisis_preguntas)
+            return _sintetizar_momento(momento, analisis_preguntas, reporte.plantilla)
 
         with ThreadPoolExecutor(max_workers=min(LLM_POOL_SIZE, len(momentos))) as executor:
             momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))

@@ -267,10 +267,10 @@ def construir_pdf(reporte):
 
         for p in m.get('preguntas') or []:
             metodo_tag = {
-                'bertopic_llm': 'Tópicos · clasificación LLM',
-                'llm': 'Temas · LLM',
-                'conteo': 'Conteo real',
-                'bertopic_sin_clasificar': 'Tópicos (sin clasificar)',
+                'bertopic_llm': 'Análisis temático',
+                'llm': 'Temas recurrentes',
+                'conteo': 'Resultados',
+                'bertopic_sin_clasificar': 'Temas identificados',
                 'insuficiente': 'Muestra insuficiente',
                 'sin_datos': 'Sin respuestas',
             }.get(p.get('metodo_valores'), p.get('metodo_valores') or '')
