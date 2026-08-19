@@ -9,3 +9,4 @@ llama-cpp-python
 huggingface_hub
 bertopic
 sentence-transformers
+reportlab
