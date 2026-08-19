@@ -65,19 +65,23 @@ GRAFICA_TAG_RE = re.compile(r'GRAFICA:\s*(pastel|barras|radar)\b', re.IGNORECASE
 
 def _extraer_tipo_grafica(texto):
     """Busca la etiqueta `GRAFICA: <tipo>` en cualquier parte del texto del LLM (no siempre
-    aparece en su propia línea final pese a la instrucción) y la retira junto con toda la
-    oración que la contiene, para que no queden fragmentos crudos como "GRAFICA: radar" en la
-    descripción mostrada al usuario. Devuelve (tipo_grafica_o_None, texto_limpio)."""
-    m = GRAFICA_TAG_RE.search(texto)
-    if not m:
-        return None, texto
-    tipo = m.group(1).lower()
-    inicio = texto.rfind('.', 0, m.start())
-    inicio = inicio + 1 if inicio != -1 else 0
-    fin = texto.find('.', m.end())
-    fin = fin + 1 if fin != -1 else len(texto)
-    limpio = re.sub(r'\s+', ' ', texto[:inicio] + texto[fin:]).strip()
-    return tipo, limpio
+    aparece en su propia línea final pese a la instrucción, y a veces el modelo la repite más de
+    una vez) y retira TODAS las apariciones, cada una junto con la oración que la contiene, para
+    que no queden fragmentos crudos como "GRAFICA: radar" en la descripción mostrada al usuario.
+    Devuelve (tipo_grafica_o_None, texto_limpio) — `tipo_grafica` es el de la primera aparición."""
+    tipo = None
+    while True:
+        m = GRAFICA_TAG_RE.search(texto)
+        if not m:
+            break
+        if tipo is None:
+            tipo = m.group(1).lower()
+        inicio = texto.rfind('.', 0, m.start())
+        inicio = inicio + 1 if inicio != -1 else 0
+        fin = texto.find('.', m.end())
+        fin = fin + 1 if fin != -1 else len(texto)
+        texto = texto[:inicio] + texto[fin:]
+    return tipo, re.sub(r'\s+', ' ', texto).strip()
 
 
 def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
