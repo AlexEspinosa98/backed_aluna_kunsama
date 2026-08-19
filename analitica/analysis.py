@@ -207,7 +207,11 @@ def _run_bertopic(textos):
         if row['Topic'] == -1:
             continue
         palabras = [palabra for palabra, _peso in modelo.get_topic(row['Topic'])][:6]
-        temas.append({'palabras_clave': palabras, 'tamano': int(row['Count'])})
+        temas.append({
+            'palabras_clave': palabras,
+            'tamano': int(row['Count']),
+            'porcentaje': round(row['Count'] / n * 100, 1),
+        })
     temas.sort(key=lambda t: t['tamano'], reverse=True)
     return temas
 
@@ -254,6 +258,10 @@ def _estadisticas_pregunta(pregunta):
 
 
 def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
+    """Devuelve (descripcion, tipo_grafica). `tipo_grafica` solo se decide cuando hay datos
+    cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos (método
+    `bertopic`). Con `llm` (muestra chica, temas extraídos libremente sin conteo por tema),
+    `insuficiente` o `sin_datos` no hay nada cuantificable que graficar, así que queda `None`."""
     system = (
         "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
         "resultados de UNA pregunta de encuesta abierta, usando EXCLUSIVAMENTE los datos "
@@ -264,39 +272,71 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
         f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
         f"(de {estad['total_respuestas']} recibidas)."
     ]
+    graficable = metodo_valores == 'bertopic' and len(valores_caracteristicos) >= 2
     if metodo_valores == 'sin_datos':
         lineas.append('No se recibieron respuestas.')
     elif metodo_valores == 'insuficiente':
         lineas.append('Muestra insuficiente para identificar patrones robustos.')
-    elif valores_caracteristicos:
-        lineas.append('Temas/frases recurrentes: ' + '; '.join(valores_caracteristicos) + '.')
-    else:
+    elif not valores_caracteristicos:
         lineas.append('No se identificaron patrones claros en las respuestas.')
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=200, temperature=0.5)
-    return texto or f'(Sin descripción automática — {error})'
+    elif metodo_valores == 'bertopic':
+        for tema in valores_caracteristicos:
+            lineas.append(f"- Tema: {tema['tema']} ({tema['tamano']} respuestas, {tema['porcentaje']}%).")
+    else:  # metodo_valores == 'llm' — frases sin conteo por tema
+        lineas.append('Temas/frases recurrentes: ' + '; '.join(
+            t['tema'] for t in valores_caracteristicos
+        ) + '.')
+
+    if graficable:
+        system += (
+            " Luego, en una última línea aparte, recomienda la gráfica que mejor muestre hacia "
+            "dónde se inclina el público entre los temas encontrados, escribiendo EXACTAMENTE "
+            "una de estas líneas: 'GRAFICA: pastel' (pocos temas, uno domina claramente), "
+            "'GRAFICA: barras' (comparación simple de tamaños), o 'GRAFICA: radar' (varios temas "
+            "— 4 o más — donde interesa ver la forma general de la inclinación entre todos). Si "
+            "se te da una nota con una recomendación, síguela salvo que los datos digan "
+            "claramente lo contrario."
+        )
+        pista = _pista_equilibrio([t['tamano'] for t in valores_caracteristicos], sujeto='los temas')
+        if pista:
+            lineas.append(pista)
+
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
+
+    tipo_grafica = None
+    if graficable and texto:
+        m = GRAFICA_TAG_RE.search(texto)
+        if m:
+            tipo_grafica = m.group(1).lower()
+            texto = GRAFICA_TAG_RE.sub('', texto).strip()
+        if tipo_grafica not in ('pastel', 'barras', 'radar'):
+            tipo_grafica = _tipo_grafica_por_defecto('unica', len(valores_caracteristicos))
+
+    descripcion = texto or f'(Sin descripción automática — {error})'
+    return descripcion, tipo_grafica
 
 
-def _pista_equilibrio(opciones):
+def _pista_equilibrio(conteos, sujeto='las opciones'):
     """Un LLM chico (3B) razona mal 'a ojo' sobre la forma de una distribución a partir de una
     tabla de conteos — en pruebas, con instrucciones neutrales terminaba recomendando 'barras'
     casi siempre, sin importar qué tan pareja o desbalanceada fuera. En vez de pedirle que infiera
     el equilibrio, se lo calculamos aquí (determinístico) y se lo entregamos como dato explícito
     — así solo tiene que reaccionar a una pista ya lista, que es una tarea mucho más confiable
-    para un modelo de este tamaño."""
-    conteos = [o['conteo'] for o in opciones]
+    para un modelo de este tamaño. `sujeto` es solo para que la nota se lea natural ("opciones" o
+    "temas")."""
     maximo = max(conteos) if conteos else 0
-    if maximo == 0 or len(opciones) < 4:
+    if maximo == 0 or len(conteos) < 4:
         return None
     minimo = min(conteos)
     parejo = minimo / maximo >= 0.4
     if parejo:
         return (
-            'Nota: los conteos están relativamente parejos entre las opciones (ninguna domina '
-            'claramente) — con 4 o más opciones así, casi siempre conviene GRAFICA: radar para '
-            'mostrar la forma general de la inclinación entre todas a la vez.'
+            f'Nota: los conteos están relativamente parejos entre {sujeto} (ninguna domina '
+            'claramente) — con 4 o más así, casi siempre conviene GRAFICA: radar para mostrar la '
+            'forma general de la inclinación entre todas a la vez.'
         )
     return (
-        'Nota: los conteos están desbalanceados — una o pocas opciones concentran las '
+        f'Nota: los conteos están desbalanceados entre {sujeto} — una o pocas concentran las '
         'respuestas — eso suele mostrarse mejor con GRAFICA: barras o GRAFICA: pastel que con '
         'un radar.'
     )
@@ -323,7 +363,7 @@ def _agente_pregunta_cerrada(pregunta, estad):
     lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
     for opcion in opciones:
         lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
-    pista = _pista_equilibrio(opciones)
+    pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
@@ -359,17 +399,29 @@ def analizar_pregunta(pregunta):
             valores, metodo = [], 'sin_datos'
         elif len(textos) >= MIN_RESPUESTAS_TOPICOS:
             temas = _run_bertopic(textos)
-            valores = [', '.join(t['palabras_clave']) for t in temas]
+            # Cualitativo (la frase del tema) Y cuantitativo (tamaño/porcentaje) — nunca solo
+            # texto: es justo el dato que un análisis "de analista de datos" necesita para
+            # graficar y comparar, no solo para leer.
+            valores = [
+                {'tema': ', '.join(t['palabras_clave']), 'tamano': t['tamano'], 'porcentaje': t['porcentaje']}
+                for t in temas
+            ]
             metodo = 'bertopic'
         else:
-            valores, error = _extraer_valores_llm(textos)
+            frases, error = _extraer_valores_llm(textos)
+            # Con muestra chica el LLM extrae frases libres, no clusters — no hay un conteo real
+            # por frase que asignar (una respuesta puede tocar varias a la vez), así que tamano/
+            # porcentaje quedan en None en vez de inventar un número. La forma del dato se
+            # mantiene igual (lista de objetos) para que el consumidor no tenga que distinguir
+            # dos formas distintas de valores_caracteristicos según el método.
+            valores = [{'tema': frase, 'tamano': None, 'porcentaje': None} for frase in frases]
             metodo = 'llm' if valores else 'insuficiente'
 
-        descripcion = _agente_pregunta_abierta(estad, valores, metodo)
+        descripcion, tipo_grafica = _agente_pregunta_abierta(estad, valores, metodo)
         return {
             'pregunta_id': pregunta.id,
             'tipo': pregunta.tipo,
-            'tipo_grafica': None,
+            'tipo_grafica': tipo_grafica,
             'total_respuestas': estad['total_respuestas'],
             'descripcion': descripcion,
             'valores_caracteristicos': valores,
