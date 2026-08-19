@@ -25,6 +25,16 @@ llegó a superar la ventana de contexto del modelo con una jornada real de 34 pr
     final. Cada agente falla de forma aislada (nunca tumba el reporte completo): si una llamada
     falla o se pasa del tiempo, esa pieza queda con un aviso corto en vez de descripción generada,
     y el resto del análisis sigue su curso.
+
+Metodología de codificación temática del equipo: un `Momento` puede traer `categorias_semilla`
+(lista de categorías predefinidas por eje temático, ej. EIBIC o Innovación y Emprendimiento). Si
+las trae, se usan como candidatos de tema en vez de dejar que BERTopic los descubra desde cero —
+el LLM las clasifica igual, pero solo puede agregar como máximo una categoría nueva por pregunta
+si de verdad ninguna encaja (`_etiquetar_y_clasificar(permitir_categoria_nueva=True)`), y cada
+tema resultante queda marcado con `origen` ('semilla' o 'inductivo'). Además, para preguntas de
+momentos `tipo='mesa'` (consenso, no reflexión individual) se calcula `nivel_acuerdo` —qué tan de
+acuerdo estuvieron las mesas entre sí para cada tema— con el mismo patrón de pista determinística +
+confirmación del LLM que ya usa `tipo_grafica` (`_pista_nivel_acuerdo` / `_extraer_nivel_acuerdo`).
 """
 import os
 import queue
@@ -82,27 +92,42 @@ FALLBACK_TEXTO = (
 )
 
 GRAFICA_TAG_RE = re.compile(r'GRAFICA:\s*(pastel|barras|radar)\b', re.IGNORECASE)
+NIVEL_ACUERDO_RE = re.compile(
+    r'NIVEL_ACUERDO:\s*(consenso_fuerte|consenso_moderado|tension_estrategica|tema_emergente|'
+    r'asunto_pendiente)\b',
+    re.IGNORECASE,
+)
 
 
-def _extraer_tipo_grafica(texto):
-    """Busca la etiqueta `GRAFICA: <tipo>` en cualquier parte del texto del LLM (no siempre
-    aparece en su propia línea final pese a la instrucción, y a veces el modelo la repite más de
-    una vez) y retira TODAS las apariciones, cada una junto con la oración que la contiene, para
-    que no queden fragmentos crudos como "GRAFICA: radar" en la descripción mostrada al usuario.
-    Devuelve (tipo_grafica_o_None, texto_limpio) — `tipo_grafica` es el de la primera aparición."""
-    tipo = None
+def _extraer_etiqueta(texto, patron):
+    """Busca la etiqueta que matchea `patron` (con un grupo de captura) en cualquier parte del
+    texto del LLM (no siempre aparece en su propia línea final pese a la instrucción, y a veces el
+    modelo la repite más de una vez) y retira TODAS las apariciones, cada una junto con la oración
+    que la contiene, para que no queden fragmentos crudos como "GRAFICA: radar" en la descripción
+    mostrada al usuario. Devuelve (valor_o_None, texto_limpio) — el valor es el de la primera
+    aparición. Genérica: la misma mecánica sirve para cualquier tag `ETIQUETA: valor`, no solo
+    `GRAFICA:` — ver `_extraer_tipo_grafica` y `_extraer_nivel_acuerdo`."""
+    valor = None
     while True:
-        m = GRAFICA_TAG_RE.search(texto)
+        m = patron.search(texto)
         if not m:
             break
-        if tipo is None:
-            tipo = m.group(1).lower()
+        if valor is None:
+            valor = m.group(1).lower()
         inicio = texto.rfind('.', 0, m.start())
         inicio = inicio + 1 if inicio != -1 else 0
         fin = texto.find('.', m.end())
         fin = fin + 1 if fin != -1 else len(texto)
         texto = texto[:inicio] + texto[fin:]
-    return tipo, re.sub(r'\s+', ' ', texto).strip()
+    return valor, re.sub(r'\s+', ' ', texto).strip()
+
+
+def _extraer_tipo_grafica(texto):
+    return _extraer_etiqueta(texto, GRAFICA_TAG_RE)
+
+
+def _extraer_nivel_acuerdo(texto):
+    return _extraer_etiqueta(texto, NIVEL_ACUERDO_RE)
 
 
 def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
@@ -333,24 +358,48 @@ def _parsear_temas_y_clasificacion(texto):
     return etiquetas, asignaciones
 
 
-def _etiquetar_y_clasificar(textos, temas_candidatos):
-    """Le da a cada tema candidato (descubierto por BERTopic) una etiqueta corta y natural (3 a 5
-    palabras), y clasifica CADA una de las respuestas dadas en el tema cuya etiqueta le quede
-    mejor — esta clasificación, no el clustering crudo, es la que determina el tamaño/porcentaje
-    final de cada tema. Devuelve (lista_de_temas_con_conteo_o_None, error)."""
+def _etiquetar_y_clasificar(textos, temas_candidatos, permitir_categoria_nueva=False):
+    """Le da a cada tema candidato una etiqueta corta y natural, y clasifica CADA una de las
+    respuestas dadas en el tema cuya etiqueta le quede mejor — esta clasificación, no el
+    clustering crudo, es la que determina el tamaño/porcentaje final de cada tema.
+
+    Dos modos, según de dónde vinieron `temas_candidatos`:
+    - `permitir_categoria_nueva=False` (por defecto): los candidatos los descubrió BERTopic desde
+      cero (`_descubrir_topicos_bertopic`) — se le pide al LLM que les redacte una etiqueta
+      natural a partir de sus palabras clave/ejemplos.
+    - `permitir_categoria_nueva=True`: los candidatos son categorías SEMILLA predefinidas por el
+      equipo (`Momento.categorias_semilla`, ver metodología de codificación temática) — sus
+      nombres ya son la etiqueta final, no se reformulan; el LLM solo puede agregar como máximo
+      UNA categoría nueva si de verdad ninguna de las dadas encaja (codificación inductiva
+      acotada). Cada tema resultante queda marcado con `origen`: `'semilla'` si es uno de los
+      dados, `'inductivo'` si es el que el LLM agregó.
+
+    Devuelve (lista_de_temas_con_conteo_o_None, error)."""
     muestra = textos[:MAX_RESPUESTAS_CLASIFICACION]
+
+    if permitir_categoria_nueva:
+        instrucciones_etiquetas = (
+            "Los nombres de los temas ya están dados (son categorías predefinidas del eje "
+            "temático) — reprodúcelos EXACTAMENTE en la sección TEMAS, sin reformularlos. Solo si "
+            "una respuesta no encaja razonablemente en NINGUNA, puedes agregar UNA categoría "
+            "nueva y breve al final de la lista de TEMAS — como máximo una, y solo si es "
+            "genuinamente necesario."
+        )
+    else:
+        instrucciones_etiquetas = (
+            "Primero, dale a cada grupo una etiqueta corta y natural en español (3 a 5 palabras, "
+            "una frase con sentido — nunca una palabra clave aislada). Las etiquetas van en texto "
+            "plano, nunca entre símbolos como '<' '>' o comillas, y nunca repitas la lista de "
+            "'Palabras clave' tal cual — redacta una frase propia."
+        )
+
     system = (
         "Eres un analista de datos clasificando respuestas abiertas de una encuesta. Se te dan "
-        f"{len(temas_candidatos)} grupos candidatos de tema, cada uno con sus palabras clave y "
-        "hasta 2 respuestas de ejemplo reales. Primero, dale a cada grupo una etiqueta corta y "
-        "natural en español (3 a 5 palabras, una frase con sentido — nunca una palabra clave "
-        "aislada). Luego, clasifica CADA una de las respuestas numeradas en el tema cuya etiqueta "
-        "le quede mejor. SIEMPRE asigna uno de los temas dados a cada respuesta, incluso si el "
-        "encaje no es perfecto — nunca inventes un tema nuevo ni dejes una respuesta sin "
-        "clasificar: la clasificación de cada respuesta es siempre un número de tema, nunca un "
-        "guion, un '?' ni la palabra 'ninguno'. Las etiquetas van en texto plano, nunca entre "
-        "símbolos como '<' '>' o comillas, y nunca repitas la lista de 'Palabras clave' tal cual "
-        "— redacta una frase propia.\n\n"
+        f"{len(temas_candidatos)} grupos candidatos de tema. " + instrucciones_etiquetas + " "
+        "Luego, clasifica CADA una de las respuestas numeradas en el tema cuya etiqueta le quede "
+        "mejor. SIEMPRE asigna uno de los temas a cada respuesta, incluso si el encaje no es "
+        "perfecto — nunca dejes una respuesta sin clasificar: la clasificación de cada respuesta "
+        "es siempre un número de tema, nunca un guion, un '?' ni la palabra 'ninguno'.\n\n"
         "Responde EXACTAMENTE con este formato (usa tus propias etiquetas y números, el ejemplo "
         "de abajo es solo para mostrar la estructura — no la copies), sin texto adicional antes "
         "ni después:\n"
@@ -360,9 +409,12 @@ def _etiquetar_y_clasificar(textos, temas_candidatos):
     )
     lineas = ['GRUPOS CANDIDATOS:']
     for i, tema in enumerate(temas_candidatos, start=1):
-        lineas.append(f"{i}. Palabras clave: {', '.join(tema['palabras_clave'])}.")
-        for ejemplo in tema.get('ejemplos') or []:
-            lineas.append(f'   Ejemplo: "{ejemplo}"')
+        if permitir_categoria_nueva:
+            lineas.append(f"{i}. {tema['palabras_clave'][0]}")
+        else:
+            lineas.append(f"{i}. Palabras clave: {', '.join(tema['palabras_clave'])}.")
+            for ejemplo in tema.get('ejemplos') or []:
+                lineas.append(f'   Ejemplo: "{ejemplo}"')
     lineas.append('')
     lineas.append('RESPUESTAS A CLASIFICAR:')
     for i, texto in enumerate(muestra, start=1):
@@ -377,6 +429,13 @@ def _etiquetar_y_clasificar(textos, temas_candidatos):
     if not etiquetas or not asignaciones:
         return None, 'El modelo no devolvió el formato de clasificación esperado.'
 
+    if permitir_categoria_nueva:
+        # Respaldo defensivo: si el modelo agregó más de una categoría nueva pese a la
+        # instrucción, se recortan las de más — como mucho 1 índice más allá de los candidatos
+        # dados sobrevive.
+        limite = len(temas_candidatos) + 1
+        etiquetas = {idx: etq for idx, etq in etiquetas.items() if idx <= limite}
+
     conteos = {idx: 0 for idx in etiquetas}
     for idx_respuesta, idx_tema in asignaciones.items():
         # El modelo a veces "alucina" líneas de clasificación para índices de respuesta que no
@@ -390,15 +449,21 @@ def _etiquetar_y_clasificar(textos, temas_candidatos):
     # El porcentaje se calcula sobre el tamaño real de la muestra, no sobre lo que el modelo
     # alcanzó a clasificar — así una clasificación incompleta (el modelo se saltó respuestas) no
     # infla artificialmente el % de los temas que sí alcanzó a asignar.
-    temas_final = [
-        {
+    temas_final = []
+    for idx in sorted(etiquetas, key=lambda i: conteos[i], reverse=True):
+        if conteos[idx] <= 0:
+            continue
+        tema = {
             'tema': etiquetas[idx],
             'tamano': conteos[idx],
             'porcentaje': round(conteos[idx] / len(muestra) * 100, 1),
         }
-        for idx in sorted(etiquetas, key=lambda i: conteos[i], reverse=True)
-        if conteos[idx] > 0
-    ]
+        if permitir_categoria_nueva:
+            # Posicional, no por texto: los candidatos semilla siempre ocupan los índices
+            # 1..len(temas_candidatos) en el prompt — cualquier índice más allá de eso solo puede
+            # ser la categoría inductiva que el LLM agregó (ya recortada a como mucho 1 arriba).
+            tema['origen'] = 'semilla' if idx <= len(temas_candidatos) else 'inductivo'
+        temas_final.append(tema)
     if not temas_final:
         return None, 'Ningún tema candidato recibió respuestas clasificadas.'
     return temas_final, None
@@ -445,13 +510,23 @@ def _estadisticas_pregunta(pregunta):
     }
 
 
-def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
-    """Devuelve (descripcion, tipo_grafica). `tipo_grafica` solo se decide cuando hay datos
-    cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos, que salen de
-    que el LLM haya clasificado las respuestas en los temas descubiertos por BERTopic (método
-    `bertopic_llm`). Con `llm` (muestra chica, frases extraídas libremente sin conteo por tema),
-    `bertopic_sin_clasificar` (la clasificación falló y solo quedan las palabras clave crudas),
-    `insuficiente` o `sin_datos` no hay nada cuantificable que graficar, así que queda `None`."""
+NIVELES_ACUERDO_VALIDOS = (
+    'consenso_fuerte', 'consenso_moderado', 'tension_estrategica', 'tema_emergente',
+    'asunto_pendiente',
+)
+
+
+def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_valores):
+    """Devuelve (descripcion, tipo_grafica, nivel_acuerdo). `tipo_grafica` solo se decide cuando
+    hay datos cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos,
+    que salen de que el LLM haya clasificado las respuestas en los temas candidatos (método
+    `bertopic_llm`). `nivel_acuerdo` además solo aplica en preguntas de momentos de tipo `mesa`
+    (comparar "acuerdo entre mesas" no tiene sentido para reflexión individual) — clasifica qué
+    tan de acuerdo estuvieron las mesas entre sí para este tema, según la metodología de
+    codificación temática del equipo. Con `llm` (muestra chica, frases extraídas libremente sin
+    conteo por tema), `bertopic_sin_clasificar` (la clasificación falló y solo quedan las palabras
+    clave/categorías crudas), `insuficiente` o `sin_datos` ninguno de los dos se calcula, quedan
+    `None`."""
     system = (
         "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
         "resultados de UNA pregunta de encuesta abierta, usando EXCLUSIVAMENTE los datos "
@@ -463,6 +538,8 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
         f"(de {estad['total_respuestas']} recibidas)."
     ]
     graficable = metodo_valores == 'bertopic_llm' and len(valores_caracteristicos) >= 2
+    es_momento_mesa = pregunta.momento.tipo == 'mesa'
+    calcula_acuerdo = graficable and es_momento_mesa
     if metodo_valores == 'sin_datos':
         lineas.append('No se recibieron respuestas.')
     elif metodo_valores == 'insuficiente':
@@ -479,7 +556,7 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
 
     if graficable:
         system += (
-            " Luego, en una última línea aparte, recomienda la gráfica que mejor muestre hacia "
+            " Luego, en una línea aparte, recomienda la gráfica que mejor muestre hacia "
             "dónde se inclina el público entre los temas encontrados, escribiendo EXACTAMENTE "
             "una de estas líneas: 'GRAFICA: pastel' (pocos temas, uno domina claramente), "
             "'GRAFICA: barras' (comparación simple de tamaños), o 'GRAFICA: radar' (varios temas "
@@ -487,20 +564,48 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
             "se te da una nota con una recomendación, síguela salvo que los datos digan "
             "claramente lo contrario."
         )
-        pista = _pista_equilibrio([t['tamano'] for t in valores_caracteristicos], sujeto='los temas')
-        if pista:
-            lineas.append(pista)
+        pista_grafica = _pista_equilibrio([t['tamano'] for t in valores_caracteristicos], sujeto='los temas')
+        if pista_grafica:
+            lineas.append(pista_grafica)
 
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=220, temperature=0.5)
+    pista_acuerdo = None
+    if calcula_acuerdo:
+        pista_acuerdo = _pista_nivel_acuerdo(valores_caracteristicos, estad['total_respuestas'])
+        system += (
+            " Además, en otra línea aparte, clasifica el nivel de acuerdo ENTRE LAS MESAS para "
+            "este tema, escribiendo EXACTAMENTE una de estas líneas: 'NIVEL_ACUERDO: "
+            "consenso_fuerte' (casi todas las mesas coinciden, sin divergencias sustantivas), "
+            "'NIVEL_ACUERDO: consenso_moderado' (la mayoría coincide, con diferencias de alcance "
+            "o formulación), 'NIVEL_ACUERDO: tension_estrategica' (hay posiciones claramente "
+            "distintas entre mesas que requieren decisión o profundización), 'NIVEL_ACUERDO: "
+            "tema_emergente' (aparece en pocas mesas pero introduce un asunto relevante no "
+            "previsto), o 'NIVEL_ACUERDO: asunto_pendiente' (el tema requiere información "
+            "adicional —análisis jurídico, técnico, financiero o institucional— antes de poder "
+            "concluir algo). Si se te da una nota con una recomendación, síguela salvo que los "
+            "datos digan claramente lo contrario."
+        )
+        if pista_acuerdo:
+            lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
+
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=260, temperature=0.5)
 
     tipo_grafica = None
-    if graficable and texto:
-        tipo_grafica, texto = _extraer_tipo_grafica(texto)
-        if tipo_grafica not in ('pastel', 'barras', 'radar'):
-            tipo_grafica = _tipo_grafica_por_defecto('unica', len(valores_caracteristicos))
+    nivel_acuerdo = None
+    if texto:
+        if graficable:
+            tipo_grafica, texto = _extraer_tipo_grafica(texto)
+            if tipo_grafica not in ('pastel', 'barras', 'radar'):
+                tipo_grafica = _tipo_grafica_por_defecto('unica', len(valores_caracteristicos))
+        if calcula_acuerdo:
+            nivel_acuerdo, texto = _extraer_nivel_acuerdo(texto)
+            if nivel_acuerdo not in NIVELES_ACUERDO_VALIDOS:
+                # Sin respaldo universal (a diferencia de tipo_grafica): asunto_pendiente no se
+                # puede derivar de la forma de la distribución, así que si el LLM no devolvió un
+                # tag válido, solo hay pista determinística para 4 de los 5 niveles.
+                nivel_acuerdo = pista_acuerdo
 
     descripcion = texto or f'(Sin descripción automática — {error})'
-    return descripcion, tipo_grafica
+    return descripcion, tipo_grafica, nivel_acuerdo
 
 
 def _pista_equilibrio(conteos, sujeto='las opciones'):
@@ -527,6 +632,34 @@ def _pista_equilibrio(conteos, sujeto='las opciones'):
         'respuestas — eso suele mostrarse mejor con GRAFICA: barras o GRAFICA: pastel que con '
         'un radar.'
     )
+
+
+def _pista_nivel_acuerdo(valores_caracteristicos, num_mesas):
+    """Mismo espíritu que `_pista_equilibrio`: calcular determinísticamente la forma de la
+    distribución de temas entre mesas y entregarla como hint textual, en vez de pedirle al LLM que
+    la infiera de una tabla cruda. Solo cubre los 4 niveles derivables del tamaño relativo de cada
+    tema — `asunto_pendiente` es un juicio sobre el CONTENIDO del tema (si requiere análisis
+    jurídico/técnico/financiero adicional), no sobre su forma, así que no tiene hint aquí: sin pista
+    clara, el LLM decide libremente entre los 5 niveles."""
+    if not valores_caracteristicos or not num_mesas:
+        return None
+    principal = valores_caracteristicos[0]
+    resto = valores_caracteristicos[1:]
+    cobertura_principal = principal['porcentaje']
+    # Umbral relativo, no absoluto: con pocas mesas (4-8, lo típico) una sola dissidencia ya pesa
+    # 12-25% del total — un umbral fijo tipo "segundo puesto < 15%" clasificaría un 5-contra-1
+    # genuino como 'moderado' en vez de 'fuerte'. 80% de cobertura principal ya es mayoría
+    # aplastante sin importar cuántas mesas dejó afuera.
+    segundo = resto[0]['porcentaje'] if resto else 0
+    if cobertura_principal >= 80:
+        return 'consenso_fuerte'
+    if cobertura_principal >= 50 and segundo < 30:
+        return 'consenso_moderado'
+    if segundo >= 30:
+        return 'tension_estrategica'
+    if resto and resto[-1]['porcentaje'] <= 15:
+        return 'tema_emergente'
+    return None
 
 
 def _agente_pregunta_cerrada(pregunta, estad):
@@ -566,6 +699,26 @@ def _agente_pregunta_cerrada(pregunta, estad):
     return descripcion, tipo_grafica
 
 
+def _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva):
+    """Envoltorio compartido para el par 'clasificar o degradar a palabras clave crudas' — usado
+    tanto para temas descubiertos por BERTopic como para categorías semilla predefinidas, así el
+    respaldo (`bertopic_sin_clasificar`) se comporta igual sin importar de dónde salieron los
+    candidatos. Devuelve (valores, metodo)."""
+    if not temas_candidatos:
+        return [], 'insuficiente'
+    valores, _error = _etiquetar_y_clasificar(textos, temas_candidatos, permitir_categoria_nueva)
+    if valores:
+        return valores, 'bertopic_llm'
+    # Respaldo: si la clasificación del LLM falló, se muestran las palabras clave/categorías
+    # crudas de cada candidato sin conteo (mejor que no mostrar nada) en vez de tumbar el
+    # análisis de la pregunta.
+    valores = [
+        {'tema': ', '.join(t['palabras_clave']), 'tamano': None, 'porcentaje': None}
+        for t in temas_candidatos
+    ]
+    return valores, 'bertopic_sin_clasificar'
+
+
 def analizar_pregunta(pregunta):
     """Analiza una pregunta de forma aislada: estadísticas + (para abiertas) tópicos/frases +
     descripción del agente de pregunta. Nunca lanza excepción — una falla puntual del LLM solo
@@ -579,27 +732,24 @@ def analizar_pregunta(pregunta):
             .exclude(texto_libre='')
             .values_list('texto_libre', flat=True)
         )
+        categorias_semilla = pregunta.momento.categorias_semilla
         if not textos:
             valores, metodo = [], 'sin_datos'
+        elif categorias_semilla and len(textos) >= 2:
+            # Categorías predefinidas por el equipo (metodología de codificación temática): no
+            # hace falta descubrirlas con BERTopic, así que tampoco aplica el piso de muestra que
+            # protege la calidad del clustering (MIN_RESPUESTAS_TOPICOS) — con solo 2+ respuestas
+            # ya hay algo que clasificar. Esto es clave para preguntas de momentos `mesa`, donde
+            # la muestra es una por mesa (normalmente pocas, casi nunca llega a
+            # MIN_RESPUESTAS_TOPICOS) pero es exactamente donde se necesita nivel_acuerdo.
+            temas_candidatos = [{'palabras_clave': [c], 'ejemplos': []} for c in categorias_semilla]
+            valores, metodo = _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva=True)
         elif len(textos) >= MIN_RESPUESTAS_TOPICOS:
             # BERTopic solo descubre de 3 a 5 temas candidatos (palabras clave + ejemplos); el
             # propio LLM les da una etiqueta natural y clasifica CADA respuesta en uno de ellos —
             # el tamaño/porcentaje final sale de esa clasificación, no del clustering crudo.
             temas_candidatos = _descubrir_topicos_bertopic(textos)
-            valores, metodo = None, None
-            if temas_candidatos:
-                valores, _error_clas = _etiquetar_y_clasificar(textos, temas_candidatos)
-                if valores:
-                    metodo = 'bertopic_llm'
-            if not valores:
-                # Respaldo: si BERTopic no encontró candidatos o la clasificación del LLM falló,
-                # se muestran las palabras clave crudas de cada candidato sin conteo (mejor que no
-                # mostrar nada) en vez de tumbar el análisis de la pregunta.
-                valores = [
-                    {'tema': ', '.join(t['palabras_clave']), 'tamano': None, 'porcentaje': None}
-                    for t in temas_candidatos
-                ]
-                metodo = 'bertopic_sin_clasificar' if valores else 'insuficiente'
+            valores, metodo = _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva=False)
         else:
             frases, error = _extraer_valores_llm(textos)
             # Con muestra chica el LLM extrae frases libres, no clusters — no hay un conteo real
@@ -610,11 +760,12 @@ def analizar_pregunta(pregunta):
             valores = [{'tema': frase, 'tamano': None, 'porcentaje': None} for frase in frases]
             metodo = 'llm' if valores else 'insuficiente'
 
-        descripcion, tipo_grafica = _agente_pregunta_abierta(estad, valores, metodo)
+        descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(pregunta, estad, valores, metodo)
         return {
             'pregunta_id': pregunta.id,
             'tipo': pregunta.tipo,
             'tipo_grafica': tipo_grafica,
+            'nivel_acuerdo': nivel_acuerdo,
             'total_respuestas': estad['total_respuestas'],
             'descripcion': descripcion,
             'valores_caracteristicos': valores,
@@ -626,6 +777,7 @@ def analizar_pregunta(pregunta):
         'pregunta_id': pregunta.id,
         'tipo': pregunta.tipo,
         'tipo_grafica': tipo_grafica,
+        'nivel_acuerdo': None,
         'total_respuestas': estad['total_respuestas'],
         'descripcion': descripcion,
         'valores_caracteristicos': estad['conteo_opciones'],
@@ -652,6 +804,7 @@ def _sintetizar_momento(momento, analisis_preguntas):
 
     return {
         'momento_id': momento.id,
+        'tipo': momento.tipo,
         'descripcion_general': descripcion_general or f'(Sin síntesis automática — {error})',
         'preguntas': analisis_preguntas,
     }

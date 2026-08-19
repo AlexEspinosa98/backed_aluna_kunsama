@@ -22,7 +22,10 @@ class MomentoAdminSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Momento
-        fields = ['id', 'jornada', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'activo', 'preguntas']
+        fields = [
+            'id', 'jornada', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'categorias_semilla',
+            'activo', 'preguntas',
+        ]
         read_only_fields = ['slug']
 
 

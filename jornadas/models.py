@@ -41,6 +41,11 @@ class Momento(models.Model):
     slug = models.SlugField(max_length=280, blank=True)
     contexto = models.TextField(blank=True)
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default=TIPO_INDIVIDUAL)
+    categorias_semilla = models.JSONField(default=list, blank=True, help_text=(
+        'Lista opcional de categorías temáticas predefinidas para este momento (ej. '
+        '["principios", "riesgos y dilemas", ...]). Si está vacía, los temas se descubren '
+        'automáticamente con BERTopic, igual que hoy.'
+    ))
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
