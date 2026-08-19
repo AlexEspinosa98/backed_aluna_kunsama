@@ -60,7 +60,14 @@ GENERATION_TIMEOUT_SECONDS = 90
 # llamada a la vez, se reparten entre varias instancias que procesan preguntas EN PARALELO. Esto
 # no cambia una sola palabra de lo que se genera — mismo contenido, mismos prompts — solo cuánto
 # tarda en generarse.
-LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '8'))
+# Probado contra datos reales: con 8 instancias (6 hilos c/u en un servidor de 48 núcleos) las
+# llamadas individuales se vuelven tan lentas que varias chocan con GENERATION_TIMEOUT_SECONDS y
+# la clasificación falla (cae a resultado sin conteo) — con 6 (8 hilos c/u) el mismo lote de
+# preguntas terminó sin ningún fallo. El rendimiento total no mejora mucho más allá de este punto
+# porque el CPU total es fijo (48 núcleos): más instancias == menos hilos cada una == llamadas
+# individuales más lentas, así que la ganancia de más paralelismo se cancela con la pérdida de
+# velocidad por instancia. 6 es el punto validado que da paralelismo real sin arriesgar timeouts.
+LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '6'))
 
 BASE_SYSTEM_PROMPT = (
     "Eres un analista de datos que redacta el reporte de una jornada participativa para su "
