@@ -9,7 +9,10 @@ Diferencias del flujo "mejorado" frente al actual:
   tener, poder...) — la de producción ya filtra verbos modales (debe, debería...) pero se siguen
   colando auxiliares como "hay", "hace".
 - `ngram_range=(1, 3)` en vez de `(1, 2)` — permite tri-términos.
-- `min_df=2` en vez de `1` — un n-grama que aparece en una sola respuesta no es un patrón.
+  (`min_df` se deja en 1 como en producción: BERTopic corre el vectorizador sobre los documentos
+  ya agrupados por tema, no sobre las respuestas crudas — con solo 2-3 temas, `min_df=2` exige que
+  un término aparezca en 2 de esos 2-3 "documentos" y termina podando todo. La reducción de ruido
+  viene de las stopwords ampliadas y de que ahora las etiquetas las redacta el LLM, no de min_df.)
 - En vez de concatenar las palabras clave crudas de c-TF-IDF, un LLM redacta una frase natural
   por tema a partir de 2-3 respuestas reales representativas de ese tema
   (`BERTopic.get_representative_docs`), y clasifica si los temas de la pregunta se contradicen
@@ -57,7 +60,7 @@ def _run_bertopic_mejorado(textos):
         metric='euclidean', cluster_selection_method='eom', prediction_data=True,
     )
     vectorizer_model = CountVectorizer(
-        stop_words=STOPWORDS_ES_AMPLIADAS, ngram_range=(1, 3), min_df=2,
+        stop_words=STOPWORDS_ES_AMPLIADAS, ngram_range=(1, 3), min_df=1,
     )
     modelo = BERTopic(
         embedding_model=_get_embedder(), umap_model=umap_model, hdbscan_model=hdbscan_model,
