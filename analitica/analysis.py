@@ -71,6 +71,16 @@ def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
 
 _llm_lock = threading.Lock()
 _llm_instance = None
+# Aparte del lock de arriba (que solo protege la creación de la instancia): llama.cpp no soporta
+# llamadas concurrentes de inferencia sobre la misma instancia de Llama — dos hilos del mismo
+# proceso llamando create_chat_completion() al mismo tiempo corrompen el estado interno del
+# contexto y lo hacen abortar con un GGML_ASSERT (crash nativo, tumba todo el worker; no es un
+# error de Python, no hay try/except que lo pueda atajar). Pasó en producción: se creó un segundo
+# reporte mientras el primero seguía procesando, dos hilos en background llamaron al modelo a la
+# vez, y el worker murió dejando ambos reportes huérfanos en 'procesando' para siempre. Este lock
+# serializa toda inferencia dentro del proceso — junto con el guard a nivel de API en
+# ReporteViewSet.create que ya evita disparar un segundo reporte mientras hay uno en curso.
+_inference_lock = threading.Lock()
 
 
 def _get_llm():
@@ -99,13 +109,14 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
     def _run():
         try:
             llm = _get_llm()
-            salida = llm.create_chat_completion(
-                messages=[
-                    {'role': 'system', 'content': system},
-                    {'role': 'user', 'content': user},
-                ],
-                max_tokens=max_tokens, temperature=temperature,
-            )
+            with _inference_lock:
+                salida = llm.create_chat_completion(
+                    messages=[
+                        {'role': 'system', 'content': system},
+                        {'role': 'user', 'content': user},
+                    ],
+                    max_tokens=max_tokens, temperature=temperature,
+                )
             resultado['texto'] = salida['choices'][0]['message']['content'].strip()
         except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
             resultado['error'] = str(exc)
