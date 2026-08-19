@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from .analysis import procesar_reporte
 from .models import PlantillaAnalisis, Reporte
+from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .serializers import PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer
 
@@ -131,3 +132,17 @@ class ReporteViewSet(
 
         salida = ReporteSerializer(reporte)
         return Response(salida.data, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def pdf(self, request, pk=None):
+        """PDF del reporte, armado 100% en el servidor con reportlab a partir de `analisis` —
+        sin llamar a ningún servicio externo, así que es rápido y sale igual cada vez. A
+        diferencia de `generar-presentacion` (OpenAI, asíncrono), esto responde en la misma
+        petición: no hay nada que "generar" de antemano ni estado que consultar después."""
+        reporte = self.get_object()
+        if reporte.estado != Reporte.ESTADO_COMPLETO:
+            return Response(
+                {'detail': 'El análisis de este reporte todavía no está completo.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return construir_pdf_response(reporte)
