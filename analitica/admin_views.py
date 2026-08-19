@@ -17,6 +17,12 @@ from .serializers import PlantillaAnalisisSerializer, ReporteCrearSerializer, Re
 # tomaría por un reporte legítimo en curso y bloquearía la creación de reportes nuevos de forma
 # permanente. Pasado este tiempo se asume huérfano y se marca error automáticamente.
 UMBRAL_HUERFANO = timedelta(minutes=30)
+# La presentación (OpenAI, ver analitica/presentacion.py) es mucho más rápida que el análisis
+# local — su propio timeout interno es de 4 minutos — así que un umbral de huérfano más corto
+# alcanza para no bloquear reintentos legítimos por mucho tiempo tras un redeploy a mitad de
+# generación (nos pasó probando esto mismo: un restart del servicio dejó una presentación
+# 'procesando' para siempre).
+UMBRAL_HUERFANO_PRESENTACION = timedelta(minutes=10)
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
@@ -101,6 +107,20 @@ class ReporteViewSet(
                            'presentación se genera a partir de datos ya calculados.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Auto-sanación, mismo espíritu que en create(): si quedó 'procesando' hace más de
+        # UMBRAL_HUERFANO_PRESENTACION, el worker que la generaba ya no existe (crash, redeploy) —
+        # se marca error para no bloquear un reintento legítimo para siempre.
+        if (
+            reporte.presentacion_estado == Reporte.PRESENTACION_ESTADO_PROCESANDO
+            and reporte.actualizado_en < timezone.now() - UMBRAL_HUERFANO_PRESENTACION
+        ):
+            reporte.presentacion_estado = Reporte.PRESENTACION_ESTADO_ERROR
+            reporte.presentacion_error = (
+                'La presentación quedó procesando más de 10 minutos sin completarse '
+                '(probablemente el worker que la generaba se reinició o falló) y se marcó '
+                'como error automáticamente.'
+            )
+            reporte.save(update_fields=['presentacion_estado', 'presentacion_error'])
         if reporte.presentacion_estado == Reporte.PRESENTACION_ESTADO_PROCESANDO:
             return Response(
                 {'detail': 'Ya hay una presentación en proceso para este reporte.'},
