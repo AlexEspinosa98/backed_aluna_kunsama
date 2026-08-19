@@ -63,7 +63,11 @@ MAX_TEMAS_CANDIDATOS = 5
 MAX_RESPUESTAS_CLASIFICACION = 60
 # Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
 # resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
-GENERATION_TIMEOUT_SECONDS = 90
+# Subido de 90s a 150s cuando se aumentaron los max_tokens de cada agente (análisis más robusto,
+# ver los distintos `max_tokens=` más abajo): con el presupuesto de tokens más alto, 90s hacía que
+# la mayoría de las preguntas de un reporte real cayeran a "(Sin descripción automática...)" por
+# timeout — validado contra datos reales (reporte #26, jornada-agil-2).
+GENERATION_TIMEOUT_SECONDS = 150
 # Preguntas y momentos son independientes entre sí (cada uno solo ve sus propios datos, ver nota
 # de diseño arriba), así que no hay razón para analizarlos uno a la vez: el servidor tiene núcleos
 # de sobra, así que en vez de una sola instancia del modelo usando todos los hilos para UNA

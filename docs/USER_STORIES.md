@@ -22,6 +22,7 @@ Como administrador quiero crear momentos definiendo su orden, título, contexto 
 - `POST /api/admin/momentos/`. `orden` es único dentro de la jornada.
 - El tipo determina cómo se guardan las respuestas de sus preguntas (por participante o por mesa).
 - `GET /api/admin/momentos/` (filtrable `?jornada=<id>`) y `GET /api/admin/momentos/{id}/` consultan los momentos ya creados.
+- `categorias_semilla` (opcional, lista de strings, ej. `["principios", "riesgos y dilemas", ...]`) predefine las categorías temáticas de este momento para el análisis con IA (HU-13) — se repite la misma lista en los momentos que comparten un eje temático (ej. individual + mesa + dinámica de un mismo bloque). Si se deja vacía, los temas se descubren automáticamente sin partir de una lista fija.
 
 ### HU-04 — Editar, reordenar o eliminar momentos
 Como administrador quiero editar, reordenar o eliminar momentos de una jornada, para ajustar la agenda.
@@ -65,28 +66,44 @@ Como administrador quiero ver las respuestas registradas filtradas por momento o
 - `GET /api/admin/respuestas/{id}/` consulta el detalle de una respuesta puntual.
 
 ### HU-12 — Configurar plantillas de análisis con IA
-Como administrador quiero crear y editar plantillas de prompt que definen el tono y el foco con el que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
+Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
 - CRUD completo en `/api/admin/plantillas-analisis/` (`GET`, `POST`) y `/api/admin/plantillas-analisis/{id}/` (`GET`, `PATCH`, `DELETE`).
 - Solo una plantilla puede quedar marcada `predeterminada=true` a la vez; marcar una nueva desmarca automáticamente la anterior.
-- El texto de la plantilla (`prompt_sistema`) son instrucciones de estilo/foco — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.
+- El texto de la plantilla (`prompt_sistema`) son instrucciones de estilo/foco/profundidad — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.
+- **La plantilla aplica en TODOS los niveles del análisis** — cada pregunta, cada momento y la jornada completa — no solo en la síntesis final: editar la plantilla activa y volver a pedir un reporte cambia el tono/profundidad de principio a fin, sin tocar código ni redeploy.
 
 ### HU-13 — Generar un reporte de análisis jerárquico (jornada → momento → pregunta) con IA
-Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y una síntesis narrativa a tres niveles.
-- `POST /api/admin/reportes/` con `jornada` (obligatorio), `momentos` (opcional: vacío = jornada completa, uno = momento individual, varios = momentos combinados) y `plantilla` (opcional; si no se manda usa la marcada `predeterminada`).
-- Responde de inmediato (`201`) con el reporte en estado `procesando` — el análisis corre en segundo plano, no bloquea el request.
-- El análisis es **multiagente**: una llamada al LLM local por cada pregunta (redacta su `descripcion` a partir de sus estadísticas/tópicos ya calculados), una por cada momento (sintetiza las descripciones de sus preguntas) y una para la jornada completa (sintetiza las descripciones de sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima, así el tamaño del contexto no depende de cuántas preguntas tenga la jornada.
-- Para preguntas `abierta`: con muestra suficiente (≥8 respuestas) los `valores_caracteristicos` salen de BERTopic (determinístico); con muestra chica, el propio LLM extrae 3-5 frases características tomadas de las respuestas dadas (`metodo_valores: "llm"`) en vez de dejarlas vacías.
+Como administrador quiero pedir un análisis de una jornada completa, un momento individual o varios momentos combinados, para convertir las respuestas cualitativas en estadísticas cuantitativas y un análisis narrativo robusto a tres niveles.
+- `POST /api/admin/reportes/` con `jornada` (obligatorio), `momentos` (opcional: vacío = jornada completa, uno = momento individual, varios = momentos combinados) y `plantilla` (opcional; si no se manda usa la marcada `predeterminada`). Como el reporte solo cubre los momentos pedidos, se puede generar apenas esté lista la información de al menos uno — no hace falta esperar a que toda la jornada esté cerrada.
+- Responde de inmediato (`201`) con el reporte en estado `procesando` — el análisis corre en segundo plano, no bloquea el request, y sus preguntas se procesan **en paralelo** (pool de instancias del modelo local) para no escalar linealmente con la cantidad de preguntas de la jornada.
+- El análisis es **multiagente**: una llamada al LLM local por cada pregunta (redacta un análisis interpretativo — no un resumen telegráfico — a partir de sus estadísticas/tópicos ya calculados), una por cada momento (sintetiza e interpreta el conjunto de sus preguntas) y una para la jornada completa (sintetiza sus momentos) — nunca una sola llamada con todo el detalle de la jornada encima, así el tamaño del contexto no depende de cuántas preguntas tenga la jornada.
+- Para preguntas `abierta`: si el momento trae `categorias_semilla` (HU-03), esas categorías predefinidas son los candidatos de tema — el modelo solo puede sumar como máximo una categoría nueva por pregunta si de verdad ninguna encaja. Si no hay categorías semilla y la muestra alcanza (≥8 respuestas), los temas se descubren automáticamente (BERTopic, determinístico). Con muestra chica, el propio LLM extrae 3-5 frases características tomadas de las respuestas dadas (`metodo_valores: "llm"`) en vez de dejarlas vacías. En cualquiera de los dos primeros casos, es el propio LLM quien clasifica CADA respuesta real en uno de los temas — el conteo/porcentaje de cada tema sale de esa clasificación, nunca del clustering crudo.
+- Para preguntas de momentos tipo `mesa`, además se calcula `nivel_acuerdo` por tema (`consenso_fuerte`/`consenso_moderado`/`tension_estrategica`/`tema_emergente`/`asunto_pendiente`) — qué tan de acuerdo estuvieron las mesas entre sí, según la metodología de codificación temática del equipo.
 - El LLM nunca inventa cifras: cada agente solo ve los datos ya calculados de su propio nivel. Si una llamada puntual falla o tarda demasiado, esa pieza queda con un aviso corto — no tumba el resto del reporte.
 
-### HU-14 — Consultar el estado y el resultado de un reporte
-Como administrador quiero consultar el estado de un reporte y su resultado una vez listo, para hacer seguimiento del análisis sin bloquear mi sesión de trabajo.
+### HU-14 — Consultar el estado y el resultado de un reporte (incluida vista tabular)
+Como administrador quiero consultar el estado de un reporte y su resultado una vez listo en formato estructurado, para revisarlo con claridad sin tener que descargar nada.
 - `GET /api/admin/reportes/` (filtrable `?jornada=<id>`) y `GET /api/admin/reportes/{id}/` devuelven `estado` (`pendiente`/`procesando`/`completo`/`error`), `analisis` y `texto_reporte`.
-- `analisis` trae `participacion` (totales) y `momentos[]`, cada uno con `descripcion_general` y `preguntas[]` — cada pregunta con `tipo`, `tipo_grafica`, `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic"`/`"llm"`/`"conteo"`). No repite el texto de preguntas/momentos — se referencian por id contra `/api/admin/preguntas/` y `/api/admin/momentos/`.
-- `tipo_grafica` es `null` para preguntas `abierta`. Para `unica`/`multiple` es `"pastel"`, `"barras"` o `"radar"` — para estas, el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar cuando hay 4+ opciones y conviene ver la forma general de la inclinación entre todas); si el modelo no responde con una elección válida, se usa un respaldo determinístico según la cantidad de opciones.
+- **`analisis` ya es la vista tabular** — no hace falta descargar el PDF para verlo claro: trae `participacion` (totales) y `momentos[]`, cada uno con `tipo` (`individual`/`mesa`), `descripcion_general` y `preguntas[]` — cada pregunta con `texto` (el enunciado real, no solo su id), `tipo`, `tipo_grafica`, `nivel_acuerdo`, `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic_llm"`/`"bertopic_sin_clasificar"`/`"llm"`/`"conteo"`). Un frontend puede renderizar esto directamente como tabla por momento, sin transformación adicional.
+- Cada tema de `valores_caracteristicos` (para preguntas con `metodo_valores: "bertopic_llm"`) trae además `origen` (`"semilla"` si vino de `categorias_semilla`, `"inductivo"` si el LLM lo agregó porque nada más encajaba).
+- `tipo_grafica` es `null` para preguntas `abierta` sin suficientes temas cuantificados. Cuando aplica, es `"pastel"`, `"barras"` o `"radar"` — elegido por el propio agente de pregunta según hacia dónde le parece que se inclina el público (radar cuando hay 4+ temas/opciones parejos); si el modelo no responde con una elección válida, se usa un respaldo determinístico.
 - `texto_reporte` es la síntesis del agente de jornada (el nivel más alto).
 - `slug` se autogenera como `{jornada}-{alcance}-{fecha y hora local de Colombia}` (ej. `jornada-agil-2-jornada-20260818-2043`) para poder distinguir reportes a simple vista sin decodificar timestamps.
-- `valores_caracteristicos` de una pregunta `abierta` siempre trae cualitativo y cuantitativo juntos (`{tema, tamano, porcentaje}`), nunca solo texto — ver `docs/REPORTE_ANALITICA_SCHEMA.html` para el detalle exacto de cada campo.
+- Ver `docs/REPORTE_ANALITICA_SCHEMA.html` para el detalle exacto de cada campo.
 - `DELETE /api/admin/reportes/{id}/` elimina un reporte.
+
+### HU-14b — Descargar un PDF listo para entregar, sin depender de una IA externa
+Como administrador quiero descargar un PDF ya maquetado (portada, síntesis ejecutiva, secciones por momento con gráficos reales, badges de nivel de acuerdo) de un reporte ya completo, para tener un documento presentable sin esperas ni riesgo de que salga mal armado.
+- `GET /api/admin/reportes/{id}/pdf/` — responde en la misma petición (no es asíncrono: no hay nada que generar de antemano ni estado que consultar después). 400 si el análisis del reporte todavía no está `completo`.
+- Se arma 100% en el servidor a partir de `analisis` (mismo dato de HU-14) — no llama a ningún servicio externo, así que es rápido y sale igual cada vez.
+- Incluye portada institucional a página completa, resumen ejecutivo con el markdown de la síntesis convertido a formato real, una sección por momento con su tipo (individual/mesa), y una tarjeta por pregunta con su enunciado real, análisis y gráfico (barras u pastel, con todos los temas — nunca solo los principales) o etiquetas de temas cuando no hay conteo.
+
+### HU-14c — Generar una presentación HTML alternativa con IA externa (experimental)
+Como administrador quiero pedir opcionalmente que una IA externa (OpenAI) redacte y maquete una presentación HTML a partir del mismo análisis ya calculado, para explorar una alternativa de diseño más libre cuando el PDF determinístico no sea suficiente.
+- `POST /api/admin/reportes/{id}/generar-presentacion/` — asíncrono (`202`, hay que consultar el estado después, a diferencia del PDF de HU-14b). 400 si el análisis no está `completo`; 409 si ya hay una presentación en curso para ese reporte (se auto-sana sola si quedó huérfana por más de 10 minutos, ej. tras un redeploy a mitad de generación).
+- Requiere `OPENAI_API_KEY` configurada en el servidor (variable de entorno, nunca en el repo) — si falta, el reporte queda con `presentacion_estado: "error"` y un mensaje claro, no revienta.
+- `presentacion_html`, `presentacion_estado` (`pendiente`/`procesando`/`completo`/`error`), `presentacion_error`, `presentacion_modelo` y `presentacion_generada_en` se consultan en el mismo `GET /api/admin/reportes/{id}/` de HU-14.
+- A diferencia del PDF, la IA externa arma el HTML/CSS/gráficos SVG completos por su cuenta — más flexible visualmente, pero sin la garantía de armado determinístico del PDF; se recomienda el PDF (HU-14b) como la vía confiable por defecto.
 
 ## Participante / Usuario
 
