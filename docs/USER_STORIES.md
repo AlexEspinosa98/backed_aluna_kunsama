@@ -84,6 +84,7 @@ Como administrador quiero consultar el estado de un reporte y su resultado una v
 - `analisis` trae `participacion` (totales) y `momentos[]`, cada uno con `descripcion_general` y `preguntas[]` — cada pregunta con `tipo`, `tipo_grafica`, `descripcion`, `valores_caracteristicos` y `metodo_valores` (`"bertopic"`/`"llm"`/`"conteo"`). No repite el texto de preguntas/momentos — se referencian por id contra `/api/admin/preguntas/` y `/api/admin/momentos/`.
 - `tipo_grafica` es `null` para preguntas `abierta`. Para `unica`/`multiple` es `"pastel"`, `"barras"` o `"radar"` — para estas, el propio agente de pregunta lo elige según hacia dónde le parece que se inclina el público entre las opciones (radar cuando hay 4+ opciones y conviene ver la forma general de la inclinación entre todas); si el modelo no responde con una elección válida, se usa un respaldo determinístico según la cantidad de opciones.
 - `texto_reporte` es la síntesis del agente de jornada (el nivel más alto).
+- `slug` se autogenera como `{jornada}-{alcance}-{fecha y hora local de Colombia}` (ej. `jornada-agil-2-jornada-20260818-2043`) para poder distinguir reportes a simple vista sin decodificar timestamps.
 - `DELETE /api/admin/reportes/{id}/` elimina un reporte.
 
 ## Participante / Usuario
@@ -109,7 +110,7 @@ Como usuario quiero recibir un token de sesión al registrarme, para autenticar 
 
 ### HU-19 — Listar los momentos de mi jornada
 Como usuario ya registrado quiero consultar el índice de momentos de la jornada a la que pertenezco, para saber qué pasos debo recorrer.
-- `GET /api/jornadas/{slug}/momentos/` requiere el token del paso anterior y devuelve `id`, `orden`, `título` y `tipo` de cada momento activo, ordenados por `orden`.
+- `GET /api/jornadas/{slug}/momentos/` requiere el token del paso anterior y devuelve `id`, `orden`, `título`, `slug` (autogenerado del título, único dentro de la jornada) y `tipo` de cada momento activo, ordenados por `orden`.
 
 ### HU-20 — Ver el detalle de un momento
 Como usuario quiero consultar el contexto y las preguntas (con sus opciones) de un momento, para poder responderlo.
