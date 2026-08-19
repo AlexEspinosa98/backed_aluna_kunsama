@@ -37,6 +37,13 @@ MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_FILE
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 
 MIN_RESPUESTAS_TOPICOS = 8
+# BERTopic solo DESCUBRE temas candidatos (nunca más de estos) — la cuantificación real de cada
+# uno viene después, de que el LLM clasifique cada respuesta (ver `_etiquetar_y_clasificar`).
+MAX_TEMAS_CANDIDATOS = 5
+# Tope de respuestas que se envían en la llamada de clasificación, para que el prompt nunca escale
+# sin límite con el tamaño de la jornada (mismo espíritu que ya obligó a acotar el resto del
+# pipeline — ver la nota de diseño al inicio del archivo).
+MAX_RESPUESTAS_CLASIFICACION = 60
 # Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
 # resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
 GENERATION_TIMEOUT_SECONDS = 90
@@ -192,10 +199,31 @@ STOPWORDS_ES = [
     'debe', 'deben', 'debería', 'deberían', 'debemos', 'debiera', 'debieran',
     'puede', 'pueden', 'podría', 'podrían', 'podemos', 'quiero', 'quiere', 'quieren', 'creo',
     'considero', 'considera', 'consideran', 'pienso', 'siento', 'debía', 'debían',
+    # Verbos auxiliares/genéricos de alta frecuencia (haber, hacer, tener, ver, dar, ir, decir,
+    # saber, conjugados) — no discriminan tema, solo rellenan casi cualquier respuesta.
+    'haber', 'había', 'habían', 'habrá', 'habría', 'hube', 'hubo', 'hubiera', 'haya',
+    'hemos', 'han', 'he', 'has', 'ha',
+    'hacer', 'hace', 'hacen', 'hacía', 'hacían', 'hizo', 'hicieron', 'haciendo', 'hecho', 'haremos',
+    'tener', 'tiene', 'tienen', 'tenía', 'tenían', 'tuvo', 'tuvieron', 'teniendo', 'tengo', 'tenemos',
+    'ver', 'vemos', 'ven', 'veo', 'vio', 'vieron', 'veía',
+    'dar', 'da', 'dan', 'dio', 'dieron', 'daba', 'damos',
+    'ir', 'va', 'van', 'iba', 'iban', 'vamos', 'voy',
+    'decir', 'dice', 'dicen', 'dijo', 'dijeron', 'decía', 'digo',
+    'saber', 'sabe', 'saben', 'sabía', 'supo',
+    'hacia', 'aquí', 'allí', 'ahí', 'así', 'cada', 'cómo', 'dentro', 'fuera', 'igual', 'incluso',
+    'luego', 'mientras', 'siempre', 'tal', 'tras', 'vez', 'veces',
 ]
 
 
-def _run_bertopic(textos):
+def _descubrir_topicos_bertopic(textos):
+    """Corre BERTopic para DESCUBRIR hasta `MAX_TEMAS_CANDIDATOS` temas candidatos — solo de qué
+    hablan los grupos que encuentra (palabras clave + un par de respuestas de ejemplo reales por
+    grupo). A propósito, NO calcula aquí el tamaño/porcentaje final de cada tema: en muestras
+    chicas, HDBSCAN separa mal los temas y deja muchas respuestas sueltas como "ruido" (tópico -1,
+    excluido del conteo), así que un % basado en el clustering crudo subestima sistemáticamente. La
+    cuantificación real sale de que el LLM clasifique CADA respuesta en uno de estos temas
+    candidatos — ver `_etiquetar_y_clasificar`, que se llama justo después con el resultado de esta
+    función."""
     from bertopic import BERTopic
     from hdbscan import HDBSCAN
     from sklearn.feature_extraction.text import CountVectorizer
@@ -211,10 +239,11 @@ def _run_bertopic(textos):
         min_cluster_size=max(2, min(5, n // 4)),
         metric='euclidean', cluster_selection_method='eom', prediction_data=True,
     )
-    vectorizer_model = CountVectorizer(stop_words=STOPWORDS_ES, ngram_range=(1, 2), min_df=1)
+    vectorizer_model = CountVectorizer(stop_words=STOPWORDS_ES, ngram_range=(1, 3), min_df=1)
     modelo = BERTopic(
         embedding_model=_get_embedder(), umap_model=umap_model, hdbscan_model=hdbscan_model,
         vectorizer_model=vectorizer_model, verbose=False, calculate_probabilities=False,
+        nr_topics=MAX_TEMAS_CANDIDATOS,
     )
     modelo.fit_transform(textos)
     info = modelo.get_topic_info()
@@ -224,13 +253,102 @@ def _run_bertopic(textos):
         if row['Topic'] == -1:
             continue
         palabras = [palabra for palabra, _peso in modelo.get_topic(row['Topic'])][:6]
-        temas.append({
-            'palabras_clave': palabras,
-            'tamano': int(row['Count']),
-            'porcentaje': round(row['Count'] / n * 100, 1),
-        })
-    temas.sort(key=lambda t: t['tamano'], reverse=True)
-    return temas
+        try:
+            ejemplos = modelo.get_representative_docs(row['Topic'])[:2]
+        except Exception:  # noqa: BLE001 — sin ejemplos, el LLM etiqueta solo con las palabras clave
+            ejemplos = []
+        temas.append({'palabras_clave': palabras, 'ejemplos': ejemplos, '_tamano_bruto': int(row['Count'])})
+    # El tamaño bruto del clustering solo ordena qué candidatos van primero en el prompt de
+    # clasificación — no se expone al resto del pipeline (ver docstring).
+    temas.sort(key=lambda t: t['_tamano_bruto'], reverse=True)
+    return [{'palabras_clave': t['palabras_clave'], 'ejemplos': t['ejemplos']} for t in temas[:MAX_TEMAS_CANDIDATOS]]
+
+
+TEMA_ETIQUETA_RE = re.compile(r'^(\d+)\s*[:.\)]\s*(.+)$')
+CLASIFICACION_RE = re.compile(r'^(\d+)\s*[:.\)]\s*(\d+)')
+
+
+def _parsear_temas_y_clasificacion(texto):
+    seccion_temas = re.search(r'TEMAS:\s*(.*?)(?=CLASIFICACION:|$)', texto, re.IGNORECASE | re.DOTALL)
+    seccion_clas = re.search(r'CLASIFICACION:\s*(.*)', texto, re.IGNORECASE | re.DOTALL)
+
+    etiquetas = {}
+    if seccion_temas:
+        for linea in seccion_temas.group(1).splitlines():
+            m = TEMA_ETIQUETA_RE.match(linea.strip().lstrip('-•*').strip())
+            if m:
+                etiqueta = m.group(2).strip().strip('*').strip()
+                if etiqueta:
+                    etiquetas[int(m.group(1))] = etiqueta
+
+    asignaciones = {}
+    if seccion_clas:
+        for linea in seccion_clas.group(1).splitlines():
+            m = CLASIFICACION_RE.match(linea.strip().lstrip('-•*').strip())
+            if m:
+                asignaciones[int(m.group(1))] = int(m.group(2))
+
+    return etiquetas, asignaciones
+
+
+def _etiquetar_y_clasificar(textos, temas_candidatos):
+    """Le da a cada tema candidato (descubierto por BERTopic) una etiqueta corta y natural (3 a 5
+    palabras), y clasifica CADA una de las respuestas dadas en el tema cuya etiqueta le quede
+    mejor — esta clasificación, no el clustering crudo, es la que determina el tamaño/porcentaje
+    final de cada tema. Devuelve (lista_de_temas_con_conteo_o_None, error)."""
+    muestra = textos[:MAX_RESPUESTAS_CLASIFICACION]
+    system = (
+        "Eres un analista de datos clasificando respuestas abiertas de una encuesta. Se te dan "
+        f"{len(temas_candidatos)} grupos candidatos de tema, cada uno con sus palabras clave y "
+        "hasta 2 respuestas de ejemplo reales. Primero, dale a cada grupo una etiqueta corta y "
+        "natural en español (3 a 5 palabras, una frase con sentido — nunca una palabra clave "
+        "aislada). Luego, clasifica CADA una de las respuestas numeradas en el tema cuya etiqueta "
+        "le quede mejor. SIEMPRE asigna uno de los temas dados a cada respuesta, incluso si el "
+        "encaje no es perfecto — nunca inventes un tema nuevo ni dejes una respuesta sin "
+        "clasificar.\n\n"
+        "Responde EXACTAMENTE con este formato, sin texto adicional antes ni después:\n"
+        "TEMAS:\n1: <etiqueta>\n2: <etiqueta>\n...\n"
+        "CLASIFICACION:\n1: <número de tema>\n2: <número de tema>\n..."
+    )
+    lineas = ['GRUPOS CANDIDATOS:']
+    for i, tema in enumerate(temas_candidatos, start=1):
+        lineas.append(f"{i}. Palabras clave: {', '.join(tema['palabras_clave'])}.")
+        for ejemplo in tema.get('ejemplos') or []:
+            lineas.append(f'   Ejemplo: "{ejemplo}"')
+    lineas.append('')
+    lineas.append('RESPUESTAS A CLASIFICAR:')
+    for i, texto in enumerate(muestra, start=1):
+        lineas.append(f'{i}. {texto}')
+
+    max_tokens = min(900, 150 + len(temas_candidatos) * 20 + len(muestra) * 10)
+    texto_llm, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=max_tokens, temperature=0.2)
+    if not texto_llm:
+        return None, error
+
+    etiquetas, asignaciones = _parsear_temas_y_clasificacion(texto_llm)
+    if not etiquetas or not asignaciones:
+        return None, 'El modelo no devolvió el formato de clasificación esperado.'
+
+    conteos = {idx: 0 for idx in etiquetas}
+    for idx_tema in asignaciones.values():
+        if idx_tema in conteos:
+            conteos[idx_tema] += 1
+    total_clasificadas = sum(conteos.values())
+    if not total_clasificadas:
+        return None, 'El modelo no clasificó ninguna respuesta en un tema válido.'
+
+    temas_final = [
+        {
+            'tema': etiquetas[idx],
+            'tamano': conteos[idx],
+            'porcentaje': round(conteos[idx] / total_clasificadas * 100, 1),
+        }
+        for idx in sorted(etiquetas, key=lambda i: conteos[i], reverse=True)
+        if conteos[idx] > 0
+    ]
+    if not temas_final:
+        return None, 'Ningún tema candidato recibió respuestas clasificadas.'
+    return temas_final, None
 
 
 def _extraer_valores_llm(textos):
@@ -276,8 +394,10 @@ def _estadisticas_pregunta(pregunta):
 
 def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
     """Devuelve (descripcion, tipo_grafica). `tipo_grafica` solo se decide cuando hay datos
-    cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos (método
-    `bertopic`). Con `llm` (muestra chica, temas extraídos libremente sin conteo por tema),
+    cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos, que salen de
+    que el LLM haya clasificado las respuestas en los temas descubiertos por BERTopic (método
+    `bertopic_llm`). Con `llm` (muestra chica, frases extraídas libremente sin conteo por tema),
+    `bertopic_sin_clasificar` (la clasificación falló y solo quedan las palabras clave crudas),
     `insuficiente` o `sin_datos` no hay nada cuantificable que graficar, así que queda `None`."""
     system = (
         "Eres un analista de datos. Redacta una descripción breve (2 a 3 frases) de los "
@@ -289,17 +409,17 @@ def _agente_pregunta_abierta(estad, valores_caracteristicos, metodo_valores):
         f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
         f"(de {estad['total_respuestas']} recibidas)."
     ]
-    graficable = metodo_valores == 'bertopic' and len(valores_caracteristicos) >= 2
+    graficable = metodo_valores == 'bertopic_llm' and len(valores_caracteristicos) >= 2
     if metodo_valores == 'sin_datos':
         lineas.append('No se recibieron respuestas.')
     elif metodo_valores == 'insuficiente':
         lineas.append('Muestra insuficiente para identificar patrones robustos.')
     elif not valores_caracteristicos:
         lineas.append('No se identificaron patrones claros en las respuestas.')
-    elif metodo_valores == 'bertopic':
+    elif metodo_valores == 'bertopic_llm':
         for tema in valores_caracteristicos:
             lineas.append(f"- Tema: {tema['tema']} ({tema['tamano']} respuestas, {tema['porcentaje']}%).")
-    else:  # metodo_valores == 'llm' — frases sin conteo por tema
+    else:  # 'llm' o 'bertopic_sin_clasificar' — temas/frases sin conteo por tema
         lineas.append('Temas/frases recurrentes: ' + '; '.join(
             t['tema'] for t in valores_caracteristicos
         ) + '.')
@@ -409,15 +529,24 @@ def analizar_pregunta(pregunta):
         if not textos:
             valores, metodo = [], 'sin_datos'
         elif len(textos) >= MIN_RESPUESTAS_TOPICOS:
-            temas = _run_bertopic(textos)
-            # Cualitativo (la frase del tema) Y cuantitativo (tamaño/porcentaje) — nunca solo
-            # texto: es justo el dato que un análisis "de analista de datos" necesita para
-            # graficar y comparar, no solo para leer.
-            valores = [
-                {'tema': ', '.join(t['palabras_clave']), 'tamano': t['tamano'], 'porcentaje': t['porcentaje']}
-                for t in temas
-            ]
-            metodo = 'bertopic'
+            # BERTopic solo descubre de 3 a 5 temas candidatos (palabras clave + ejemplos); el
+            # propio LLM les da una etiqueta natural y clasifica CADA respuesta en uno de ellos —
+            # el tamaño/porcentaje final sale de esa clasificación, no del clustering crudo.
+            temas_candidatos = _descubrir_topicos_bertopic(textos)
+            valores, metodo = None, None
+            if temas_candidatos:
+                valores, _error_clas = _etiquetar_y_clasificar(textos, temas_candidatos)
+                if valores:
+                    metodo = 'bertopic_llm'
+            if not valores:
+                # Respaldo: si BERTopic no encontró candidatos o la clasificación del LLM falló,
+                # se muestran las palabras clave crudas de cada candidato sin conteo (mejor que no
+                # mostrar nada) en vez de tumbar el análisis de la pregunta.
+                valores = [
+                    {'tema': ', '.join(t['palabras_clave']), 'tamano': None, 'porcentaje': None}
+                    for t in temas_candidatos
+                ]
+                metodo = 'bertopic_sin_clasificar' if valores else 'insuficiente'
         else:
             frases, error = _extraer_valores_llm(textos)
             # Con muestra chica el LLM extrae frases libres, no clusters — no hay un conteo real
