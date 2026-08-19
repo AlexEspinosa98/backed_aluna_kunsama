@@ -73,6 +73,27 @@ class Reporte(models.Model):
     texto_reporte = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=150, blank=True)
 
+    # Presentación HTML generada por OpenAI a partir de `analisis` (ver analitica/presentacion.py)
+    # — capa de presentación aparte del análisis en sí: se puede pedir, fallar o regenerar sin
+    # tocar ni volver a correr el pipeline local (BERTopic + LLM local) que ya calculó los números.
+    PRESENTACION_ESTADO_PENDIENTE = 'pendiente'
+    PRESENTACION_ESTADO_PROCESANDO = 'procesando'
+    PRESENTACION_ESTADO_COMPLETO = 'completo'
+    PRESENTACION_ESTADO_ERROR = 'error'
+    PRESENTACION_ESTADO_CHOICES = [
+        (PRESENTACION_ESTADO_PENDIENTE, 'Pendiente'),
+        (PRESENTACION_ESTADO_PROCESANDO, 'Procesando'),
+        (PRESENTACION_ESTADO_COMPLETO, 'Completo'),
+        (PRESENTACION_ESTADO_ERROR, 'Error'),
+    ]
+    presentacion_html = models.TextField(blank=True)
+    presentacion_estado = models.CharField(
+        max_length=12, choices=PRESENTACION_ESTADO_CHOICES, default=PRESENTACION_ESTADO_PENDIENTE,
+    )
+    presentacion_error = models.TextField(blank=True)
+    presentacion_modelo = models.CharField(max_length=60, blank=True)
+    presentacion_generada_en = models.DateTimeField(null=True, blank=True)
+
     solicitado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='reportes_solicitados',

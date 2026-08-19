@@ -3,11 +3,13 @@ from datetime import timedelta
 
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from .analysis import procesar_reporte
 from .models import PlantillaAnalisis, Reporte
+from .presentacion import generar_presentacion_html
 from .serializers import PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
@@ -85,3 +87,27 @@ class ReporteViewSet(
         salida = ReporteSerializer(reporte)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=['post'], url_path='generar-presentacion')
+    def generar_presentacion(self, request, pk=None):
+        """Genera (o regenera) la presentación HTML de este reporte vía OpenAI, a partir del
+        análisis YA calculado (`reporte.analisis`) — no vuelve a correr el pipeline local, así que
+        no comparte el guard de `create()` ni el pool de LLM local: puede pedirse aunque haya otro
+        reporte en `procesando`."""
+        reporte = self.get_object()
+        if reporte.estado != Reporte.ESTADO_COMPLETO:
+            return Response(
+                {'detail': 'El análisis de este reporte todavía no está completo — la '
+                           'presentación se genera a partir de datos ya calculados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if reporte.presentacion_estado == Reporte.PRESENTACION_ESTADO_PROCESANDO:
+            return Response(
+                {'detail': 'Ya hay una presentación en proceso para este reporte.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        threading.Thread(target=generar_presentacion_html, args=(reporte.id,), daemon=True).start()
+
+        salida = ReporteSerializer(reporte)
+        return Response(salida.data, status=status.HTTP_202_ACCEPTED)
