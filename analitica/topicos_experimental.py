@@ -104,10 +104,15 @@ def _etiquetar_temas_llm(temas):
 
     system = (
         "Eres un analista de datos. Se te dan los temas recurrentes encontrados en las "
-        "respuestas de una pregunta de encuesta. Por cada tema tienes su tamaño (cuántas "
-        "respuestas) y hasta 3 respuestas reales de ejemplo. Para cada tema escribe una frase "
-        "corta y natural (3 a 8 palabras) que lo describa, basada EXCLUSIVAMENTE en los ejemplos "
-        "dados — nunca agregues ideas que no estén ahí. "
+        "respuestas de una pregunta de encuesta. Por cada tema tienes su tamaño y hasta 3 "
+        "respuestas reales de ejemplo. Para cada tema escribe una frase de 5 a 10 palabras que "
+        "resuma la idea central de esos ejemplos — nunca una sola palabra suelta ni una palabra "
+        "clave aislada: una frase completa con sentido propio, basada EXCLUSIVAMENTE en los "
+        "ejemplos dados.\n"
+        "Ejemplo de un buen resultado: si el ejemplo del tema es 'La transparencia en el manejo "
+        "de datos es fundamental para generar confianza en la comunidad.', una buena frase es "
+        "'Transparencia en el manejo de datos genera confianza' — NO 'transparencia' ni 'datos' "
+        "solos.\n"
         "Si hay 2 o más temas, clasifica además la relación entre ellos con una etiqueta EXACTA: "
         "'RELACION: consenso_fuerte' (dicen básicamente lo mismo), "
         "'RELACION: consenso_moderado' (coinciden en general, con matices), "
@@ -126,7 +131,12 @@ def _etiquetar_temas_llm(temas):
     relacion = None
     if texto:
         for num, frase in TEMA_TAG_RE.findall(texto):
-            etiquetas[int(num)] = frase.strip()
+            frase = frase.strip()
+            # Respaldo de calidad: una "frase" de una sola palabra (el modelo a veces cae en
+            # devolver solo una palabra clave suelta pese a la instrucción) no es mejor que las
+            # palabras clave crudas — se descarta y el llamador cae de vuelta a esas.
+            if len(frase.split()) >= 2:
+                etiquetas[int(num)] = frase
         m = RELACION_TAG_RE.search(texto)
         if m:
             relacion = m.group(1).lower()
