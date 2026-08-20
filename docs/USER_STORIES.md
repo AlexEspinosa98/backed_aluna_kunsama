@@ -961,7 +961,24 @@ Request:
 { "correo_institucional": "camila.gomez@unimagdalena.edu.co" }
 ```
 
-Response `200`: mismo cuerpo que la respuesta de HU-17 (incluye `token`, `mesa`, `es_vocero`, `rol`, etc., ya guardados).
+Response `200`:
+```json
+{
+  "id": 13,
+  "jornada": "jornada-agil-2",
+  "correo_institucional": "camila.gomez@unimagdalena.edu.co",
+  "nombre": "Camila",
+  "apellido": "Gómez",
+  "telefono": "3000000000",
+  "rol": "estudiante",
+  "mesa": 3,
+  "es_vocero": true,
+  "slug": "camila-gomez",
+  "token": "b058878f-5797-40ac-ab56-9779902ab300",
+  "creado_en": "2026-08-18T19:11:58.251917-05:00"
+}
+```
+Es el mismo `Participante` ya existente, con el `token` que se generó en el registro (HU-17) — no cambia nada, solo lo devuelve. Si el admin ya lo corrigió (mesa, es_vocero — HU-10b), esos valores actualizados son los que salen acá.
 
 Error (correo no registrado en esta jornada), `404`:
 ```json
