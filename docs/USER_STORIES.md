@@ -232,7 +232,7 @@ Error (credenciales inválidas o usuario no `staff`), `400`:
 
 ### HU-10 — Ver participantes inscritos
 Como administrador quiero ver la lista de participantes inscritos en una jornada, para hacer seguimiento de la asistencia.
-- `GET /api/admin/participantes/?jornada=<id>` lista nombre, apellido, correo, teléfono y fecha de registro.
+- `GET /api/admin/participantes/?jornada=<id>` lista nombre, apellido, correo, teléfono, `mesa`, `es_vocero` y fecha de registro.
 - `GET /api/admin/participantes/{id}/` consulta el detalle de un participante puntual.
 
 <details><summary>Ejemplo — <code>GET /api/admin/participantes/?jornada=4</code></summary>
@@ -247,11 +247,37 @@ Response `200`:
     "nombre": "Camila",
     "apellido": "Gómez",
     "telefono": "3000000000",
+    "mesa": "Mesa 3",
+    "es_vocero": true,
     "slug": "camila-gomez",
     "token": "b058878f-5797-40ac-ab56-9779902ab300",
     "creado_en": "2026-08-18T19:11:58.251917-05:00"
   }
 ]
+```
+</details>
+
+### HU-10b — Corregir la mesa o el vocero de un participante
+Como administrador quiero poder cambiar la mesa de un participante o quitarle/asignarle el rol de vocero después de que se registró, para corregir errores o reorganizar mesas sin tener que re-registrar a nadie.
+- `PATCH /api/admin/participantes/{id}/` acepta ÚNICAMENTE `mesa` y `es_vocero` — nunca los datos personales del registro (correo, nombre, teléfono), que no son editables por esta vía.
+- El cambio aplica de inmediato: si se le quita `es_vocero` a alguien, sus próximos intentos de enviar respuestas a un momento tipo mesa responden `403` (ver HU-22); si se le asigna a otro participante, ese participante puede empezar a responder de inmediato.
+- Quitar `es_vocero` a alguien **no borra** las respuestas de mesa que ya envió — quedan asociadas a la mesa, no a la persona (ver HU-22).
+
+<details><summary>Ejemplo — <code>PATCH /api/admin/participantes/13/</code></summary>
+
+Request (mover a otra mesa):
+```json
+{ "mesa": "Mesa 5" }
+```
+
+Request (quitar el rol de vocero):
+```json
+{ "es_vocero": false }
+```
+
+Response `200`:
+```json
+{ "id": 13, "mesa": "Mesa 5", "es_vocero": false }
 ```
 </details>
 
@@ -669,8 +695,9 @@ Response `200`: mismo objeto que cada item de HU-15. Error si está inactiva, `4
 </details>
 
 ### HU-17 — Registrarme en una jornada (momento 0)
-Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido y teléfono, para inscribirme.
+Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido, teléfono y, si aplica, mi mesa y si soy el vocero, para inscribirme.
 - `POST /api/jornadas/{slug}/registro/` crea el `Participante`.
+- `mesa` (texto libre, ej. `"Mesa 3"`) y `es_vocero` (booleano) son **opcionales** y quedan fijos para **toda la jornada** — no se vuelven a pedir en cada momento tipo mesa. Un admin puede corregirlos después (HU-10b).
 - Si el correo ya está registrado en esa jornada, la API responde 400 sin crear un duplicado.
 - Se genera automáticamente un `slug` a partir de nombre y apellido (con sufijo si hay colisión).
 
@@ -682,7 +709,9 @@ Request:
   "correo_institucional": "camila.gomez@unimagdalena.edu.co",
   "nombre": "Camila",
   "apellido": "Gómez",
-  "telefono": "3000000000"
+  "telefono": "3000000000",
+  "mesa": "Mesa 3",
+  "es_vocero": true
 }
 ```
 
@@ -695,6 +724,8 @@ Response `201`:
   "nombre": "Camila",
   "apellido": "Gómez",
   "telefono": "3000000000",
+  "mesa": "Mesa 3",
+  "es_vocero": true,
   "slug": "camila-gomez",
   "token": "b058878f-5797-40ac-ab56-9779902ab300",
   "creado_en": "2026-08-18T19:11:58.251917-05:00"
@@ -796,17 +827,17 @@ Response `200`:
 ```
 </details>
 
-### HU-22 — Responder un momento de tipo "mesa"
-Como usuario en un momento `mesa` quiero indicar el identificador de mi mesa y enviar una respuesta compartida, para que el resultado represente a todo el grupo.
-- El body debe incluir `mesa` (texto libre); la API responde 400 si falta.
-- Si otro participante de la misma mesa vuelve a responder, la respuesta se actualiza (no se duplica); se registra quién la envió por última vez (`registrado_por`) para trazabilidad.
+### HU-22 — Responder un momento de tipo "mesa" (solo el vocero)
+Como vocero de mi mesa quiero enviar la respuesta compartida de un momento tipo mesa, para que el resultado represente a todo el grupo — sin que cualquier integrante pueda enviarla por error o duplicado.
+- **Solo participantes con `es_vocero: true`** pueden hacer `POST` en un momento tipo mesa — cualquier otro participante recibe `403`. La mesa NO se manda en el body: se toma automáticamente de `mesa` del participante autenticado (fijada en el registro, HU-17, o corregida por un admin, HU-10b) — así un vocero no puede enviar a nombre de otra mesa por error.
+- Un participante sin `es_vocero: true` puede seguir consultando el momento normalmente (`GET`, HU-20) — el bloqueo es solo al enviar respuestas.
+- Si otro participante de la misma mesa (que también fuera vocero) vuelve a responder, la respuesta se actualiza (no se duplica); se registra quién la envió por última vez (`registrado_por`) para trazabilidad.
 
-<details><summary>Ejemplo — <code>POST /api/jornadas/jornada-agil-2/momentos/5/respuestas/</code></summary>
+<details><summary>Ejemplo — <code>POST /api/jornadas/jornada-agil-2/momentos/5/respuestas/</code> (participante con <code>es_vocero: true</code> y <code>mesa: "Mesa 3"</code>)</summary>
 
 Request:
 ```json
 {
-  "mesa": "Mesa 3",
   "respuestas": [
     { "pregunta_id": 20, "opcion_ids": [4] },
     { "pregunta_id": 17, "texto_libre": "Cuidar la confianza y el consentimiento informado de las comunidades." }
@@ -822,9 +853,14 @@ Response `200`:
 ]
 ```
 
-Error (falta `mesa` en un momento tipo mesa), `400`:
+Error (participante sin `es_vocero`), `403`:
 ```json
-{ "mesa": "Este momento requiere identificar la mesa." }
+{ "detail": "Solo el vocero de la mesa puede enviar respuestas en este momento." }
+```
+
+Error (es vocero pero no tiene `mesa` asignada), `400`:
+```json
+{ "mesa": "No tienes una mesa asignada — pídele a un administrador que te la asigne antes de responder." }
 ```
 </details>
 
