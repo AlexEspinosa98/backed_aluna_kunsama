@@ -125,13 +125,12 @@ class Reporte(models.Model):
 
 class AnalisisMomentoIA(models.Model):
     """Vía de análisis alternativa a `Reporte`: en vez del pipeline local multiagente (una llamada
-    de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI analiza
-    TODO el momento de una vez — se le da el enunciado y las respuestas crudas de cada pregunta
-    (conteos reales para unica/multiple, todas las respuestas de texto para abierta) y el propio
-    GPT identifica temas, clasifica y redacta, devolviendo el mismo formato de JSON que ya produce
-    el pipeline local (`MomentoAnalisis` — ver `docs/REPORTE_ANALITICA_SCHEMA.html`) para que el
-    frontend pueda renderizar cualquiera de los dos con el mismo componente. No depende de un
-    `Reporte` — se dispara directo desde un `Momento`, con su propio historial."""
+    de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
+    instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
+    redacta un reporte general — hallazgos que pueden cruzar varias preguntas a la vez, no un
+    bloque aislado por pregunta como hace el pipeline local. Ver `analitica/analisis_ia_openai.py`
+    para el formato exacto de `resultado`. No depende de un `Reporte` — se dispara directo desde
+    un `Momento`, con su propio historial."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -147,8 +146,8 @@ class AnalisisMomentoIA(models.Model):
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     resultado = models.JSONField(
         default=dict, blank=True,
-        help_text='Mismo formato que un item de analisis.momentos[] en Reporte: momento_id, tipo, '
-        'descripcion_general, preguntas[] (con valores_caracteristicos y metodo_valores).',
+        help_text='momento_id, tipo, resumen_ejecutivo, hallazgos[] (cada uno con titulo, '
+        'descripcion, preguntas_relacionadas, tipo_grafica y datos) — ver analisis_ia_openai.py.',
     )
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)

@@ -1,14 +1,12 @@
 """Vía de análisis alternativa a `analysis.py`: en vez del pipeline local multiagente (una llamada
-de LLM local por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI analiza TODO
-un momento de una vez — se le dan los conteos reales de las preguntas cerradas (nunca los inventa,
-igual que el pipeline local) y TODAS las respuestas de texto crudas de las preguntas abiertas, y el
-propio GPT identifica temas, clasifica cada respuesta y redacta. Devuelve el mismo formato de JSON
-que ya produce el pipeline local para un momento (`MomentoAnalisis`, ver
-`docs/REPORTE_ANALITICA_SCHEMA.html`) para que el frontend renderice cualquiera de los dos caminos
-con el mismo componente. No depende de un `Reporte` — se dispara directo desde un `Momento`."""
+de LLM local por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
+INSTRUMENTO completo de un momento (contexto + todas sus preguntas y respuestas reales) y redacta
+un reporte general — no una lista mecánica de "pregunta 1 dice X, pregunta 2 dice Y". El objetivo
+es que GPT deduzca hallazgos que cruzan varias preguntas a la vez (un momento con 30 preguntas es
+UN instrumento, no 30 análisis aislados), igual que lo haría un analista humano leyendo todas las
+respuestas de corrido. No depende de un `Reporte` — se dispara directo desde un `Momento`."""
 import json
 import os
-import re
 import threading
 
 from django.utils import timezone
@@ -18,14 +16,33 @@ GENERATION_TIMEOUT_SECONDS = 240
 MAX_OUTPUT_TOKENS = 6000
 
 SYSTEM_PROMPT = (
-    "Eres un analista de datos senior redactando el análisis de UN momento completo de una "
-    "jornada participativa universitaria, dirigido a la Rectoría de la Universidad del "
-    "Magdalena. Se te entrega, en JSON, el enunciado de cada pregunta del momento y sus datos "
-    "reales: para preguntas de opción única/múltiple, el conteo EXACTO de cada opción (nunca lo "
-    "recalcules ni lo cambies); para preguntas abiertas, TODAS las respuestas de texto reales "
-    "recibidas, sin resumir ni recortar. Tu trabajo es identificar los temas recurrentes en las "
-    "respuestas abiertas, clasificar cada una en un tema, y redactar el análisis — SOLO usando "
-    "los datos entregados, nunca inventes una cifra, tema o cita que no esté ahí.\n\n"
+    "Eres un analista de datos senior leyendo TODO el instrumento de un momento de una jornada "
+    "participativa universitaria, para redactar un reporte dirigido a la Rectoría de la "
+    "Universidad del Magdalena. Se te entrega, en JSON, el título y el contexto del momento (qué "
+    "buscaba lograr esta parte de la jornada — léelo primero, te da el marco para interpretar "
+    "todo lo demás), y cada una de sus preguntas con datos reales: para preguntas de opción "
+    "única/múltiple, el conteo EXACTO de cada opción (nunca lo recalcules ni lo cambies); para "
+    "preguntas abiertas, TODAS las respuestas de texto reales recibidas, sin resumir ni "
+    "recortar. Si se te da `categorias_semilla`, son temas que el equipo organizador ya sabe que "
+    "son relevantes para este momento — úsalos como guía para reconocer esos patrones en las "
+    "respuestas, pero nunca los repitas literal ni marques en tu salida cuáles 'vinieron' de "
+    "ahí — el reporte debe leerse como un análisis unificado, no como una lista de categorías "
+    "predefinidas etiquetadas.\n\n"
+
+    "=== CÓMO PENSAR ESTE ANÁLISIS (lo más importante) ===\n"
+    "NO analices pregunta por pregunta de forma mecánica ni produzcas una lista donde cada "
+    "pregunta tiene su propio bloque aislado — eso es lo que ya hace el pipeline local, y "
+    "precisamente NO es lo que se te pide. Un momento con 30 preguntas es UN SOLO instrumento, "
+    "no 30 análisis sueltos: léelo todo de corrido, como lo haría un analista humano con el "
+    "cuestionario completo sobre la mesa, y deduce los hallazgos que de verdad importan — "
+    "patrones, tensiones o consensos que solo se ven cruzando varias preguntas entre sí (ej. si "
+    "el 80% apoya un principio en una pregunta de escala, pero ese mismo tema reaparece como "
+    "'requiere ajuste' en los comentarios abiertos, esa tensión ES un hallazgo en sí mismo, más "
+    "interesante que reportar cada pregunta por separado). Prioriza deducciones sobre datos "
+    "directos: no te limites a repetir 'el 80% dijo que sí' — explica qué revela eso en conjunto "
+    "con el resto del instrumento. Saca tantos hallazgos como el instrumento realmente sostenga "
+    "(puede ser media docena, pueden ser doce) — ni fuerces relleno para llegar a un número, ni "
+    "te cortes si hay más que decir.\n\n"
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin "
@@ -33,75 +50,46 @@ SYSTEM_PROMPT = (
     "{\n"
     '  "momento_id": <int, el mismo que te dieron>,\n'
     '  "tipo": "<individual|mesa, el mismo que te dieron>",\n'
-    '  "descripcion_general": "<síntesis del momento completo, 3 a 6 frases>",\n'
-    '  "preguntas": [\n'
+    '  "resumen_ejecutivo": "<panorama general del instrumento completo, 4 a 7 frases>",\n'
+    '  "hallazgos": [\n'
     "    {\n"
-    '      "pregunta_id": <int>,\n'
-    '      "texto": "<el enunciado exacto que te dieron>",\n'
-    '      "tipo": "<abierta|unica|multiple>",\n'
+    '      "titulo": "<título corto y natural del hallazgo, no un identificador técnico>",\n'
+    '      "descripcion": "<la deducción en sí, 2 a 5 frases, con sus cifras exactas>",\n'
+    '      "preguntas_relacionadas": [<pregunta_id>, ...],\n'
     '      "tipo_grafica": "<pastel|barras|radar|null>",\n'
-    '      "nivel_acuerdo": "<consenso_fuerte|consenso_moderado|tension_estrategica|'
-    'tema_emergente|asunto_pendiente|null>",\n'
-    '      "total_respuestas": <int>,\n'
-    '      "descripcion": "<análisis de esta pregunta puntual>",\n'
-    '      "valores_caracteristicos": [ ... ver reglas abajo ... ],\n'
-    '      "metodo_valores": "<bertopic_llm|conteo|llm|sin_datos|insuficiente>"\n'
+    '      "datos": [ {"etiqueta": "<string>", "valor": <número>, '
+    '"unidad": "conteo"|"porcentaje"} ]\n'
     "    }\n"
     "  ]\n"
     "}\n\n"
 
-    "=== REGLAS POR TIPO DE PREGUNTA ===\n"
-    "- unica/multiple: usa EXACTAMENTE los `opciones` que te dieron (opcion_id, texto, conteo) "
-    "como `valores_caracteristicos`, sin cambiar ni un número. `metodo_valores`: 'conteo'.\n"
-    "- abierta con 8 o más respuestas de texto: identifica 3 a 6 temas recurrentes (si te dieron "
-    "`categorias_semilla`, úsalas como candidatos fijos — como mucho puedes sumar UN tema nuevo "
-    "si de verdad ninguna semilla encaja) y clasifica cada respuesta real en uno de ellos. "
-    "`valores_caracteristicos`: lista de {\"tema\": string, \"tamano\": int (conteo real de "
-    "respuestas clasificadas ahí), \"porcentaje\": float, \"origen\": \"semilla\"|\"inductivo\"}. "
-    "`metodo_valores`: 'bertopic_llm'.\n"
-    "- abierta con menos de 8 respuestas: extrae 3 a 5 frases cortas características tomadas o "
-    "parafraseadas de las respuestas dadas, sin clasificar ni contar — "
-    "`valores_caracteristicos`: [{\"tema\": frase, \"tamano\": null, \"porcentaje\": null}]. "
-    "`metodo_valores`: 'llm'.\n"
-    "- abierta sin respuestas: `total_respuestas`: 0, `valores_caracteristicos`: [], "
-    "`metodo_valores`: 'sin_datos', `descripcion`: 'No se recibieron respuestas.'\n\n"
+    "=== REGLAS DE LOS DATOS QUE SUSTENTAN CADA HALLAZGO ===\n"
+    "`datos` son SOLO los números reales que respaldan ESE hallazgo puntual, tomados "
+    "directamente de los conteos u respuestas que se te dieron — nunca inventados. Un hallazgo "
+    "puede combinar datos de varias preguntas (ej. el conteo de una pregunta de escala junto con "
+    "cuántas respuestas abiertas tocan el mismo tema) — eso es exactamente el tipo de síntesis "
+    "que se busca. `preguntas_relacionadas` lista TODOS los pregunta_id que sustentan el "
+    "hallazgo, aunque sean varios. Si un hallazgo es una lectura cualitativa sin una "
+    "distribución clara que graficar, `tipo_grafica` y `datos` pueden ir `null`/`[]` — no fuerces "
+    "un gráfico donde no hay una cifra limpia que mostrar. Cuando sí haya datos: 'pastel' si "
+    "pocos ítems y uno domina claramente; 'barras' para comparaciones; 'radar' si hay 4 o más "
+    "ítems con tamaños relativamente parejos.\n\n"
 
-    "=== tipo_grafica ===\n"
-    "Solo para unica/multiple, o abierta con 2+ temas clasificados (bertopic_llm): 'pastel' si "
-    "pocos temas/opciones y uno domina claramente; 'barras' para comparación simple; 'radar' si "
-    "hay 4 o más temas/opciones con tamaños relativamente parejos. `null` en cualquier otro "
-    "caso.\n\n"
-
-    "=== nivel_acuerdo ===\n"
-    "SOLO si `tipo` del momento es 'mesa' Y la pregunta es abierta con 2+ temas clasificados. "
-    "Calcúlalo de la cobertura relativa del tema principal sobre el total: >=80% -> "
-    "'consenso_fuerte'; >=50% y el segundo tema <30% -> 'consenso_moderado'; el segundo tema "
-    ">=30% -> 'tension_estrategica'; el tema de menor tamaño <=15% del total -> 'tema_emergente'; "
-    "si nada de eso aplica con claridad pero el tema requiere análisis jurídico/técnico/"
-    "financiero adicional antes de decidir -> 'asunto_pendiente'. En cualquier otro caso: "
-    "`null`.\n\n"
-
-    "=== ESTILO DE REDACCIÓN (aplica a descripcion y descripcion_general) ===\n"
-    "Profesional, conciso, centrado en cifras — prosa corrida en español, NUNCA con etiquetas "
-    "como '(1)', '(2)', 'Hallazgo:', 'Conclusión:' o 'Recomendación:' en el texto. Nunca "
-    "empieces con muletillas como 'Resultados de la encuesta:' o 'Los resultados indican que'. "
-    "Ancla siempre la interpretación al enunciado REAL de esa pregunta — nunca generalices con "
-    "frases sobre 'satisfacción general' u otro tema que la pregunta no plantee. Menciona el "
-    "hallazgo principal con su cifra exacta y cierra con una conclusión breve, razonada "
-    "genuinamente para ESE dato puntual — nunca una fórmula genérica ('es fundamental', 'es "
-    "crucial') que serviría para cualquier pregunta. La elección de gráfica es un dato técnico "
-    "aparte (el campo `tipo_grafica`) — nunca la menciones ni la justifiques dentro del texto. "
-    "`descripcion` de cada pregunta: 2 a 4 frases. `descripcion_general` del momento: 3 a 6 "
-    "frases. El conjunto de todo el texto del momento (todas las `descripcion` + "
-    "`descripcion_general`) no debe superar el equivalente a 10 páginas impresas (~4000-5000 "
-    "palabras) — pero prioriza densidad real, no relleno para acercarte a ese máximo.\n\n"
+    "=== ESTILO DE REDACCIÓN ===\n"
+    "Natural, profesional, como un reporte que de verdad se lee bien — no una ficha técnica. "
+    "Prosa corrida en español, NUNCA con etiquetas como '(1)', '(2)', 'Hallazgo:', "
+    "'Conclusión:' o 'Recomendación:' dentro del texto (el campo `titulo` ya cumple ese rol). "
+    "Nunca empieces con muletillas como 'Resultados de la encuesta:' o 'Los resultados indican "
+    "que'. Nunca caigas en frases genéricas que servirían para cualquier informe ('es "
+    "fundamental', 'es crucial') — cada hallazgo debe sonar específico a estos datos concretos, "
+    "no intercambiable con otro informe. La elección de gráfica es un dato técnico aparte (el "
+    "campo `tipo_grafica`) — nunca la menciones ni la justifiques dentro del texto. El conjunto "
+    "de todo el texto (resumen_ejecutivo + todas las descripciones) no debe superar el "
+    "equivalente a 10 páginas impresas (~4000-5000 palabras) — prioriza densidad real, no "
+    "relleno para acercarte a ese máximo.\n\n"
 
     "Nunca inventes cifras, temas ni respuestas que no estén en los datos entregados a "
     "continuación."
-)
-
-CIFRA_FALSA_RE = re.compile(
-    r'\s*\(?\b\d+(?:[.,]\d+)?\s*%\)?|\s*\(?\b\d+\s+respuestas?\)?', re.IGNORECASE
 )
 
 
@@ -183,25 +171,21 @@ def _llamar_openai_json(system, user, model=None):
         return None, f'OpenAI devolvió JSON inválido: {exc}'
 
 
-def _purgar_cifras_falsas(texto):
-    if not isinstance(texto, str) or not texto:
-        return texto
-    limpio = CIFRA_FALSA_RE.sub('', texto)
-    limpio = re.sub(r'\s+([.,;:])', r'\1', limpio)
-    return re.sub(r'\s{2,}', ' ', limpio).strip()
-
-
 def _validar_y_limpiar(resultado, momento):
-    """Defensa mínima contra un JSON bien formado pero con datos que no cuadran: fuerza
-    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), y para preguntas sin
-    conteo real (metodo_valores 'llm'/'sin_datos') purga cualquier cifra que se haya colado en la
-    descripción — mismo principio que ya se validó en el pipeline local: no confiar en que el
-    modelo respete la ausencia de un dato solo porque se le pidió con palabras."""
+    """Defensa mínima contra un JSON bien formado pero con detalles que no cuadran: fuerza
+    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), y limpia
+    determinísticamente cualquier etiqueta de estructura ('(1)', 'Hallazgo:', etc.) o mención
+    suelta de qué gráfica usar que se haya colado en el texto — mismo principio ya validado en el
+    pipeline local (`analysis._purgar_etiquetas_estructura`): no confiar en que el modelo respete
+    una instrucción de formato solo porque se le pidió con palabras."""
+    from .analysis import _purgar_etiquetas_estructura
+
     resultado['momento_id'] = momento.id
     resultado['tipo'] = momento.tipo
-    for pregunta in resultado.get('preguntas') or []:
-        if pregunta.get('metodo_valores') in ('llm', 'sin_datos', 'insuficiente'):
-            pregunta['descripcion'] = _purgar_cifras_falsas(pregunta.get('descripcion'))
+    resultado['resumen_ejecutivo'] = _purgar_etiquetas_estructura(resultado.get('resumen_ejecutivo'))
+    for hallazgo in resultado.get('hallazgos') or []:
+        hallazgo['titulo'] = _purgar_etiquetas_estructura(hallazgo.get('titulo'))
+        hallazgo['descripcion'] = _purgar_etiquetas_estructura(hallazgo.get('descripcion'))
     return resultado
 
 
