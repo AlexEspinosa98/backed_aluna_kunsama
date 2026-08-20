@@ -12,8 +12,16 @@ import threading
 from django.utils import timezone
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+# Los modelos de razonamiento (o1/o3/gpt-5+) aceptan un nivel de esfuerzo de razonamiento en vez
+# de temperature — se pasa solo si el modelo configurado lo soporta; si el modelo no es de
+# razonamiento, OpenAI simplemente ignora o rechaza el parámetro (queda como error legible, nunca
+# como excepción sin capturar).
+REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 240
 MAX_OUTPUT_TOKENS = 6000
+# Nunca se expone el nombre real del modelo de un proveedor externo en la respuesta de la API —
+# solo que el análisis fue generado con IA.
+MODELO_USADO_LABEL = 'Generado con IA'
 
 SYSTEM_PROMPT = (
     "Eres un analista de datos senior leyendo TODO el instrumento de un momento de una jornada "
@@ -177,16 +185,22 @@ def _llamar_openai_json(system, user, model=None):
         try:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
-            respuesta = client.chat.completions.create(
+            kwargs = dict(
                 model=model or DEFAULT_MODEL,
                 messages=[
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
                 ],
-                max_tokens=MAX_OUTPUT_TOKENS,
-                temperature=0.4,
+                max_completion_tokens=MAX_OUTPUT_TOKENS,
                 response_format={'type': 'json_object'},
             )
+            if REASONING_EFFORT:
+                # Los modelos de razonamiento no aceptan `temperature` (la fijan ellos mismos) —
+                # se manda reasoning_effort en su lugar, nunca ambos a la vez.
+                kwargs['reasoning_effort'] = REASONING_EFFORT
+            else:
+                kwargs['temperature'] = 0.4
+            respuesta = client.chat.completions.create(**kwargs)
             resultado['texto'] = respuesta.choices[0].message.content.strip()
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
@@ -255,7 +269,7 @@ def analizar_momento_ia(analisis_id):
             analisis.resultado = _validar_y_limpiar(resultado, analisis.momento)
             analisis.estado = AnalisisMomentoIA.ESTADO_COMPLETO
             analisis.error_mensaje = ''
-            analisis.modelo_usado = modelo
+            analisis.modelo_usado = MODELO_USADO_LABEL
             analisis.completado_en = timezone.now()
         else:
             analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
