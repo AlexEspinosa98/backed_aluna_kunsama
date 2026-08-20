@@ -1,7 +1,7 @@
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -98,11 +98,18 @@ class RespuestasMomentoView(APIView):
         entrada.is_valid(raise_exception=True)
         datos = entrada.validated_data
 
-        mesa = datos.get('mesa', '').strip()
-        if momento.tipo == Momento.TIPO_MESA and not mesa:
-            raise ValidationError({'mesa': 'Este momento requiere identificar la mesa.'})
-        if momento.tipo == Momento.TIPO_INDIVIDUAL:
-            mesa = ''
+        mesa = ''
+        if momento.tipo == Momento.TIPO_MESA:
+            if not participante.es_vocero:
+                raise PermissionDenied(
+                    'Solo el vocero de la mesa puede enviar respuestas en este momento.'
+                )
+            mesa = participante.mesa
+            if not mesa:
+                raise ValidationError(
+                    {'mesa': 'No tienes una mesa asignada — pídele a un administrador que te la '
+                              'asigne antes de responder.'}
+                )
 
         entradas_por_pregunta = {}
         for item in datos['respuestas']:

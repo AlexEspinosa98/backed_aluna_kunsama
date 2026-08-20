@@ -21,6 +21,14 @@ class Participante(models.Model):
     nombre = models.CharField(max_length=150)
     apellido = models.CharField(max_length=150)
     telefono = models.CharField(max_length=30, blank=True)
+    # Mesa y vocero se fijan una vez para toda la jornada (no por momento) — se capturan en el
+    # registro, pero un admin puede corregirlos después vía PATCH /api/admin/participantes/{id}/
+    # (ver ParticipanteAdminViewSet) si una mesa se reorganiza o cambia quién es el vocero.
+    mesa = models.CharField(max_length=100, blank=True)
+    es_vocero = models.BooleanField(
+        default=False,
+        help_text='Solo el vocero de una mesa puede enviar respuestas en momentos tipo mesa.',
+    )
     slug = models.SlugField(max_length=200)
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     creado_en = models.DateTimeField(auto_now_add=True)

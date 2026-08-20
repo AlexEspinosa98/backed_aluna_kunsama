@@ -1,12 +1,17 @@
+from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAdminUser
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from .models import Participante, Respuesta
-from .serializers import ParticipanteSerializer, RespuestaSalidaSerializer
+from .serializers import ParticipanteMesaVoceroSerializer, ParticipanteSerializer, RespuestaSalidaSerializer
 
 
-class ParticipanteAdminViewSet(ReadOnlyModelViewSet):
-    serializer_class = ParticipanteSerializer
+class ParticipanteAdminViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+):
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
@@ -15,6 +20,13 @@ class ParticipanteAdminViewSet(ReadOnlyModelViewSet):
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
         return queryset
+
+    def get_serializer_class(self):
+        # PATCH/PUT solo puede tocar mesa/es_vocero (ver HU-10b) — nunca datos personales del
+        # registro, que se hacen por otra vía si hace falta corregirlos.
+        if self.action in ('update', 'partial_update'):
+            return ParticipanteMesaVoceroSerializer
+        return ParticipanteSerializer
 
 
 class RespuestaAdminViewSet(ReadOnlyModelViewSet):

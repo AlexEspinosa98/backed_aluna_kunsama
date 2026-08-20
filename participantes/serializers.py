@@ -9,7 +9,7 @@ from .models import Participante, Respuesta
 class ParticipanteRegistroSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participante
-        fields = ['correo_institucional', 'nombre', 'apellido', 'telefono']
+        fields = ['correo_institucional', 'nombre', 'apellido', 'telefono', 'mesa', 'es_vocero']
 
     def validate_correo_institucional(self, value):
         jornada = self.context['jornada']
@@ -26,8 +26,20 @@ class ParticipanteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Participante
-        fields = ['id', 'jornada', 'correo_institucional', 'nombre', 'apellido', 'telefono', 'slug', 'token', 'creado_en']
+        fields = [
+            'id', 'jornada', 'correo_institucional', 'nombre', 'apellido', 'telefono',
+            'mesa', 'es_vocero', 'slug', 'token', 'creado_en',
+        ]
         read_only_fields = fields
+
+
+class ParticipanteMesaVoceroSerializer(serializers.ModelSerializer):
+    """Superficie de edición reducida para el admin (HU-10b) — a propósito solo deja tocar
+    `mesa`/`es_vocero`, nunca datos personales del registro (correo, nombre, teléfono)."""
+    class Meta:
+        model = Participante
+        fields = ['id', 'mesa', 'es_vocero']
+        read_only_fields = ['id']
 
 
 @extend_schema_serializer(component_name='ParticipanteOpcionPregunta')
@@ -68,7 +80,9 @@ class RespuestaEntradaSerializer(serializers.Serializer):
 
 
 class RespuestaEnvioSerializer(serializers.Serializer):
-    mesa = serializers.CharField(required=False, allow_blank=False)
+    # La mesa ya no se manda en el body: es un dato fijo del participante (asignado en el
+    # registro, ver Participante.mesa) — se toma de request.user.mesa en la vista, nunca del
+    # cliente, para que un vocero no pueda enviar a nombre de otra mesa por error o a propósito.
     respuestas = RespuestaEntradaSerializer(many=True)
 
 
