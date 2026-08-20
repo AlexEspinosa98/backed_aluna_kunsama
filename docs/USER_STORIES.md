@@ -349,69 +349,94 @@ Error (falta el filtro), `400`:
 ```
 </details>
 
-### HU-11c — Ver qué participantes ya terminaron y cuánto llevan
-Como administrador quiero una lista de los participantes de una jornada con su avance — cuántas preguntas obligatorias lleva respondidas cada uno en cada momento y en el instrumento completo — para saber quién ya terminó y a quién le falta, sin tener que cruzar manualmente HU-11b contra el registro de participantes.
+### HU-11c — Ver cómo va toda la jornada: por momento, por participante y por pregunta
+Como administrador quiero ver el avance completo de una jornada en un solo llamado — un reporte agregado por cada momento (cuántas preguntas tiene, cuántas son obligatorias, cuántos ya lo completaron) y, además, el detalle de cada participante pregunta por pregunta — para saber exactamente cómo va cada momento y a quién le falta qué, sin tener que cruzar manualmente HU-11b contra el registro de participantes.
 - `GET /api/admin/progreso-participantes/?jornada=<id>` — `jornada` es obligatorio.
-- Opcional `?solo_completados=true` para traer solo quienes ya terminaron el instrumento completo (todos los momentos).
-- Responde en la misma petición (síncrono) — son conteos agregados de la base de datos, igual que HU-11b; sin IA.
-- El avance se cuenta solo sobre preguntas `obligatoria: true` y `activa: true` — las opcionales no bloquean el "completado".
-- Para momentos `tipo: "mesa"` el avance es el de la MESA, no de la persona: como solo el vocero envía (ver HU-22), todos los integrantes de una misma mesa comparten el mismo `respondidas`/`completado` en esos momentos. Un participante sin mesa asignada siempre muestra 0 en los momentos de mesa.
-- `completado_instrumento: true` significa que ya respondió (o su mesa ya respondió, según el tipo de cada momento) TODAS las preguntas obligatorias de TODOS los momentos activos de la jornada.
+- Opcional `?solo_completados=true` para que `participantes` solo traiga a quienes ya terminaron el instrumento completo.
+- Responde en la misma petición (síncrono) — son conteos y comparaciones de sets agregados de la base de datos, igual que HU-11b; sin IA.
+- El completado (`completado`, `completado_instrumento`) se cuenta solo sobre preguntas `obligatoria: true` y `activa: true` — las opcionales no bloquean el estado, pero sí aparecen listadas en `preguntas` y cuentan en `total_preguntas`/`respondidas_total`.
+- Para momentos `tipo: "mesa"` el avance es el de la MESA, no de la persona: como solo el vocero envía (ver HU-22), todos los integrantes de una misma mesa comparten el mismo estado en esos momentos (incluida la lista `preguntas`, pregunta por pregunta). Un participante sin mesa asignada siempre muestra todo sin responder en los momentos de mesa.
+- La respuesta trae dos bloques:
+  - `resumen_momentos`: un reporte por momento, agregado para TODA la jornada — `total_preguntas` (todas, obligatorias u opcionales), `total_obligatorias`, `universo` (participantes para momentos individuales, mesas registradas para momentos de mesa), `completaron` y `porcentaje_completado`.
+  - `participantes`: el detalle persona por persona; dentro de cada `momentos[]`, el array `preguntas[]` trae CADA pregunta del momento con `respondida: true/false` — no solo un conteo.
 
 <details><summary>Ejemplo — <code>GET /api/admin/progreso-participantes/?jornada=5</code></summary>
 
 Response `200`:
 ```json
-[
-  {
-    "participante_id": 12,
-    "nombre": "Ricardo",
-    "apellido": "Pupo",
-    "correo_institucional": "rpupo@unimagdalena.edu.co",
-    "rol": "estudiante",
-    "mesa": 22,
-    "es_vocero": true,
-    "momentos": [
-      {
-        "momento_id": 3,
-        "titulo": "Reflexión individual sobre ética",
-        "tipo": "individual",
-        "respondidas": 4,
-        "total_obligatorias": 4,
-        "completado": true
-      },
-      {
-        "momento_id": 4,
-        "titulo": "Consenso de mesa — EIBIC",
-        "tipo": "mesa",
-        "respondidas": 2,
-        "total_obligatorias": 5,
-        "completado": false
-      }
-    ],
-    "total_respondidas": 6,
-    "total_obligatorias": 9,
-    "completado_instrumento": false
-  },
-  {
-    "participante_id": 13,
-    "nombre": "Vanesa",
-    "apellido": "Martínez",
-    "correo_institucional": "vmartinez@unimagdalena.edu.co",
-    "rol": "directivo",
-    "mesa": 22,
-    "es_vocero": false,
-    "momentos": [
-      { "momento_id": 3, "titulo": "Reflexión individual sobre ética", "tipo": "individual", "respondidas": 4, "total_obligatorias": 4, "completado": true },
-      { "momento_id": 4, "titulo": "Consenso de mesa — EIBIC", "tipo": "mesa", "respondidas": 2, "total_obligatorias": 5, "completado": false }
-    ],
-    "total_respondidas": 6,
-    "total_obligatorias": 9,
-    "completado_instrumento": false
-  }
-]
+{
+  "jornada_id": 5,
+  "resumen_momentos": [
+    {
+      "momento_id": 3,
+      "titulo": "Reflexión individual sobre ética",
+      "tipo": "individual",
+      "total_preguntas": 5,
+      "total_obligatorias": 4,
+      "universo": 25,
+      "completaron": 23,
+      "porcentaje_completado": 92
+    },
+    {
+      "momento_id": 4,
+      "titulo": "Consenso de mesa — EIBIC",
+      "tipo": "mesa",
+      "total_preguntas": 6,
+      "total_obligatorias": 5,
+      "universo": 6,
+      "completaron": 1,
+      "porcentaje_completado": 17
+    }
+  ],
+  "participantes": [
+    {
+      "participante_id": 12,
+      "nombre": "Ricardo",
+      "apellido": "Pupo",
+      "correo_institucional": "rpupo@unimagdalena.edu.co",
+      "rol": "estudiante",
+      "mesa": 22,
+      "es_vocero": true,
+      "momentos": [
+        {
+          "momento_id": 3,
+          "titulo": "Reflexión individual sobre ética",
+          "tipo": "individual",
+          "total_preguntas": 5,
+          "total_obligatorias": 4,
+          "respondidas_obligatorias": 4,
+          "respondidas_total": 5,
+          "completado": true,
+          "preguntas": [
+            { "pregunta_id": 38, "texto": "Reconocer que la ética debe acompañar investigación...", "tipo": "unica", "obligatoria": true, "respondida": true },
+            { "pregunta_id": 39, "texto": "¿Algo más que quieras agregar? (opcional)", "tipo": "abierta", "obligatoria": false, "respondida": true }
+          ]
+        },
+        {
+          "momento_id": 4,
+          "titulo": "Consenso de mesa — EIBIC",
+          "tipo": "mesa",
+          "total_preguntas": 6,
+          "total_obligatorias": 5,
+          "respondidas_obligatorias": 2,
+          "respondidas_total": 2,
+          "completado": false,
+          "preguntas": [
+            { "pregunta_id": 50, "texto": "¿La mesa está de acuerdo con el lineamiento propuesto?", "tipo": "unica", "obligatoria": true, "respondida": true },
+            { "pregunta_id": 51, "texto": "¿Qué ajuste propone la mesa?", "tipo": "abierta", "obligatoria": true, "respondida": false }
+          ]
+        }
+      ],
+      "total_preguntas": 11,
+      "total_obligatorias": 9,
+      "total_respondidas_total": 7,
+      "total_respondidas_obligatorias": 6,
+      "completado_instrumento": false
+    }
+  ]
+}
 ```
-Nótese que Ricardo y Vanesa comparten el mismo avance en el momento 4 (tipo mesa) porque están en la misma mesa (22) — solo Ricardo, el vocero, puede enviarlo, pero el avance se refleja en ambos.
+Nótese que en el momento 4 (tipo mesa) el estado de `preguntas` es el de la mesa 22 entera — si otro participante de esa misma mesa apareciera en `participantes`, tendría exactamente el mismo array de `preguntas` en ese momento, aunque solo Ricardo (el vocero) pueda enviarlo.
 
 Error (falta el filtro), `400`:
 ```json
