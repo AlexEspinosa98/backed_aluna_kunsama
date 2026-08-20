@@ -115,6 +115,23 @@ NIVEL_ACUERDO_RE = re.compile(
     r'asunto_pendiente)\b',
     re.IGNORECASE,
 )
+# Cuando no hay conteo real por tema (metodo 'llm' o 'bertopic_sin_clasificar'), un modelo de 3B
+# instruido a "priorizar cifras" inventa una igual — probado con instrucciones cada vez más
+# explícitas de no hacerlo ("no inventes ninguna") y el modelo simplemente rellenó con "(100%)" en
+# los 12 temas por igual. Mismo espíritu que _pista_equilibrio/_pista_nivel_acuerdo: no confiar en
+# que el modelo razone bien sobre la ausencia de un dato — se le limpia cualquier cifra fabricada
+# de la salida, determinísticamente, en vez de seguir puliendo el prompt.
+CIFRA_FALSA_RE = re.compile(
+    r'\s*\(?\b\d+(?:[.,]\d+)?\s*%\)?|\s*\(?\b\d+\s+respuestas?\)?', re.IGNORECASE
+)
+
+
+def _purgar_cifras_falsas(texto):
+    if not texto:
+        return texto
+    limpio = CIFRA_FALSA_RE.sub('', texto)
+    limpio = re.sub(r'\s+([.,;:])', r'\1', limpio)
+    return re.sub(r'\s{2,}', ' ', limpio).strip()
 
 
 def _extraer_etiqueta(texto, patron):
@@ -640,6 +657,10 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
                 # puede derivar de la forma de la distribución, así que si el LLM no devolvió un
                 # tag válido, solo hay pista determinística para 4 de los 5 niveles.
                 nivel_acuerdo = pista_acuerdo
+        if not graficable and metodo_valores in ('llm', 'bertopic_sin_clasificar'):
+            # No hay conteo real por tema en este método — cualquier cifra que aparezca acá es
+            # necesariamente inventada por el modelo (ver CIFRA_FALSA_RE arriba).
+            texto = _purgar_cifras_falsas(texto)
 
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica, nivel_acuerdo
