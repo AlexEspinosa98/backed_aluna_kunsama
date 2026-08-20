@@ -134,6 +134,35 @@ def _purgar_cifras_falsas(texto):
     return re.sub(r'\s{2,}', ' ', limpio).strip()
 
 
+# El modelo instruido a escribir "hallazgo + conclusión" a veces vuelve a la letra la
+# numeración/etiquetas de la instrucción ("(1) ... (2) Conclusión: ...") en vez de prosa corrida —
+# incluso repitiendo el par completo una vez por cada tema de la lista. Se retira determinísticamente
+# en vez de seguir ajustando el prompt (mismo espíritu que CIFRA_FALSA_RE).
+ETIQUETA_ESTRUCTURA_RE = re.compile(
+    r'\(?\b[12]\)\s*|\b(?:Hallazgo|Conclusi[oó]n|Recomendaci[oó]n)\s*:\s*', re.IGNORECASE
+)
+
+
+def _purgar_etiquetas_estructura(texto):
+    if not texto:
+        return texto
+    limpio = ETIQUETA_ESTRUCTURA_RE.sub('', texto)
+    limpio = re.sub(r'\s+([.,;:])', r'\1', limpio)
+    limpio = re.sub(r'\s{2,}', ' ', limpio).strip()
+    # La instrucción de "hallazgo + conclusión" a veces hace que el modelo escriba la misma
+    # frase dos veces seguidas (no solo la etiqueta) — se deduplican frases idénticas
+    # (comparando en minúsculas) preservando el orden de la primera aparición.
+    frases = re.split(r'(?<=[.!?])\s+', limpio)
+    vistas = set()
+    frases_unicas = []
+    for frase in frases:
+        clave = frase.strip().lower()
+        if clave and clave not in vistas:
+            vistas.add(clave)
+            frases_unicas.append(frase)
+    return ' '.join(frases_unicas)
+
+
 def _extraer_etiqueta(texto, patron):
     """Busca la etiqueta que matchea `patron` (con un grupo de captura) en cualquier parte del
     texto del LLM (no siempre aparece en su propia línea final pese a la instrucción, y a veces el
@@ -577,14 +606,17 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         "a 3 frases cortas, en español, priorizando los números concretos (porcentajes, tamaños) "
         "sobre interpretación extensa. Ve directo al dato: nunca empieces con muletillas como "
         "'Resultados de la encuesta:', 'Los resultados indican que' o 'Descripción de los "
-        "resultados:' — esas frases no aportan nada y suenan robóticas. Escribe SIEMPRE dos "
-        "partes, nunca solo la primera: (1) el hallazgo con la cifra exacta (qué tema domina o "
-        "si la opinión está dividida), y (2) una conclusión breve — razona genuinamente, como lo "
-        "haría un analista real pensando qué le recomendaría a la Universidad a partir de ESTE "
-        "dato puntual, no una fórmula que aplicarías igual a cualquier otra pregunta. Nunca te "
-        "quedes solo citando el número, y nunca caigas en frases genéricas que servirían para "
-        "cualquier informe ('es fundamental', 'es crucial', 'implicación práctica:'). Usa "
-        "EXCLUSIVAMENTE los datos entregados a continuación — nunca "
+        "resultados:' — esas frases no aportan nada y suenan robóticas. Escribe en prosa "
+        "corrida, NUNCA con etiquetas o numeración como '(1)', '(2)', 'Hallazgo:' o "
+        "'Conclusión:' — esas palabras no deben aparecer en el texto. En una o dos frases "
+        "menciona SOLO el tema principal (el que domina, con su cifra exacta) — no enumeres "
+        "cada tema de la lista uno por uno. Cierra con una frase corta de conclusión — razona "
+        "genuinamente, como lo haría un analista real pensando qué le recomendaría a la "
+        "Universidad a partir de ESTE dato puntual, no una fórmula que aplicarías igual a "
+        "cualquier otra pregunta. Nunca te quedes solo citando el número, nunca repitas la "
+        "misma idea dos veces, y nunca caigas en frases genéricas que servirían para cualquier "
+        "informe ('es fundamental', 'es crucial'). Usa EXCLUSIVAMENTE los datos entregados a "
+        "continuación — nunca "
         "inventes cifras ni ideas que no estén ahí. Si a un tema NO se le da un porcentaje o "
         "número de respuestas explícito, es porque no hay conteo real disponible para él — en "
         "ese caso menciónalo solo por su nombre, SIN inventarle ni asignarle ninguna cifra." +
@@ -665,6 +697,7 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
             # No hay conteo real por tema en este método — cualquier cifra que aparezca acá es
             # necesariamente inventada por el modelo (ver CIFRA_FALSA_RE arriba).
             texto = _purgar_cifras_falsas(texto)
+        texto = _purgar_etiquetas_estructura(texto)
 
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica, nivel_acuerdo
@@ -745,12 +778,14 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "cortas, en español, priorizando los números concretos (conteos, porcentajes) sobre la "
         "prosa. Ve directo al dato: nunca empieces con muletillas como 'Resultados de la "
         "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
-        "frases no aportan nada y suenan robóticas. Escribe SIEMPRE dos partes, nunca solo la "
-        "primera: (1) qué opción domina (o si está dividido, citando las cifras exactas), y (2) "
-        "una conclusión breve — razona genuinamente, como lo haría un analista real pensando qué "
-        "le recomendaría a la Universidad a partir de ESTE dato puntual, no una fórmula que "
-        "aplicarías igual a cualquier otra pregunta. Nunca te quedes solo citando el número, y "
-        "nunca caigas en frases genéricas que servirían para cualquier informe ('es fundamental', "
+        "frases no aportan nada y suenan robóticas. Escribe en prosa corrida, NUNCA con "
+        "etiquetas o numeración como '(1)', '(2)', 'Hallazgo:' o 'Conclusión:' — esas palabras "
+        "no deben aparecer en el texto. Menciona qué opción domina (o si está dividido, citando "
+        "las cifras exactas) y cierra con una frase corta de conclusión — razona genuinamente, "
+        "como lo haría un analista real pensando qué le recomendaría a la Universidad a partir "
+        "de ESTE dato puntual, no una fórmula que aplicarías igual a cualquier otra pregunta. "
+        "Nunca te quedes solo citando el número, nunca repitas la misma idea dos veces, y nunca "
+        "caigas en frases genéricas que servirían para cualquier informe ('es fundamental', "
         "'es crucial'). Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
         "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
         "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
@@ -771,6 +806,7 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     tipo_grafica = None
     if texto:
         tipo_grafica, texto = _extraer_tipo_grafica(texto)
+        texto = _purgar_etiquetas_estructura(texto)
 
     if tipo_grafica not in ('pastel', 'barras', 'radar'):
         tipo_grafica = _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
@@ -897,7 +933,8 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
         "pregunta por pregunta, ve directo al dato/tema más relevante del conjunto (qué domina, "
         "dónde hay consenso o división, citando cifras concretas cuando estén disponibles). "
         "Evita relleno institucional y frases genéricas repetidas como 'es fundamental que', 'es "
-        "crucial', 'recomiendo implementar programas de formación'. Cierra con UNA "
+        "crucial', 'recomiendo implementar programas de formación'; nunca repitas la misma idea "
+        "dos veces ni uses etiquetas como '(1)', '(2)', 'Hallazgo:' o 'Conclusión:'. Cierra con UNA "
         "recomendación — razónala genuinamente, como lo haría un analista real pensando qué le "
         "sugeriría a la Universidad a partir de ESTE conjunto de datos puntual, no una fórmula "
         "que aplicarías igual en cualquier otro momento. Nunca empieces con muletillas como "
@@ -907,6 +944,7 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
     descripcion_general, error = _llamar_llm(system, user, max_tokens=220, temperature=0.5)
+    descripcion_general = _purgar_etiquetas_estructura(descripcion_general)
 
     return {
         'momento_id': momento.id,
