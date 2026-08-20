@@ -730,6 +730,12 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     opciones, muestra la forma general de la inclinación entre todas). Si el modelo no devuelve
     una elección válida, se usa `_tipo_grafica_por_defecto` como respaldo."""
     opciones = estad.get('conteo_opciones', [])
+    if not any(o['conteo'] for o in opciones):
+        # Sin esto, un LLM chico (3B) igual "encuentra" una opción que domina con 100% aunque el
+        # conteo real de cada una sea 0 — no hay nada que interpretar, así que ni se llama al
+        # modelo (mismo espíritu que CIFRA_FALSA_RE: no confiar en que razone bien la ausencia de
+        # datos, evitarla estructuralmente).
+        return 'No se recibieron respuestas.', _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
     system = (
         "Eres un analista de datos senior interpretando los resultados de UNA pregunta de "
         "encuesta de opción cerrada para un informe institucional que va a leer la Rectoría. El "
@@ -870,6 +876,16 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
     """La síntesis en sí (una llamada al LLM) — separada de analizar las preguntas del momento
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
+    if not any(p.get('total_respuestas') for p in analisis_preguntas):
+        # Mismo guard que en _agente_pregunta_cerrada: si ninguna pregunta del momento tiene
+        # respuestas reales, no hay nada que sintetizar — no se llama al LLM para evitar que
+        # "encuentre" un hallazgo donde no hay datos.
+        return {
+            'momento_id': momento.id,
+            'tipo': momento.tipo,
+            'descripcion_general': 'No se recibieron respuestas para este momento.',
+            'preguntas': analisis_preguntas,
+        }
     system = (
         "Eres un analista de datos senior presentando a directivos — escribe como lo haría un "
         "profesional real con experiencia, no un generador de texto institucional. Redacta una "
