@@ -42,6 +42,13 @@ class ParticipanteRegistroSerializer(serializers.ModelSerializer):
         return Participante.objects.create(jornada=self.context['jornada'], **validated_data)
 
 
+class ParticipanteLoginSerializer(serializers.Serializer):
+    """El participante no tiene contraseña — su correo institucional (único por jornada, ver
+    unique_together en el modelo) es la única prueba de identidad para recuperar su token si
+    cerró la sesión o cambió de dispositivo."""
+    correo_institucional = serializers.EmailField()
+
+
 class ParticipanteSerializer(serializers.ModelSerializer):
     jornada = serializers.SlugRelatedField(slug_field='slug', read_only=True)
 

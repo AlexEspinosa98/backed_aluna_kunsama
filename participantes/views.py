@@ -14,6 +14,7 @@ from .permissions import EsParticipanteDeLaJornada
 from .serializers import (
     MomentoDetalleSerializer,
     MomentoIndiceSerializer,
+    ParticipanteLoginSerializer,
     ParticipanteRegistroSerializer,
     ParticipanteSerializer,
     RespuestaEnvioSerializer,
@@ -47,6 +48,34 @@ class RegistroParticipanteView(APIView):
         participante = entrada.save()
 
         return Response(ParticipanteSerializer(participante).data, status=status.HTTP_201_CREATED)
+
+
+class LoginParticipanteView(APIView):
+    """El participante no tiene contraseña — si perdió su token (cerró el navegador, cambió de
+    dispositivo), este endpoint se lo devuelve con solo su correo institucional, que es único por
+    jornada. No es una autenticación fuerte (cualquiera que sepa el correo puede recuperar el
+    token), pero es el nivel de seguridad correcto para una jornada participativa sin datos
+    sensibles ni contraseñas que gestionar."""
+    permission_classes = [AllowAny]
+
+    @extend_schema(request=ParticipanteLoginSerializer, responses=ParticipanteSerializer)
+    def post(self, request, jornada_slug):
+        jornada = get_object_or_404(Jornada, slug=jornada_slug, activa=True)
+
+        entrada = ParticipanteLoginSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        correo = entrada.validated_data['correo_institucional']
+
+        participante = Participante.objects.filter(
+            jornada=jornada, correo_institucional=correo
+        ).first()
+        if participante is None:
+            return Response(
+                {'detail': 'No hay ningún participante registrado con ese correo en esta jornada.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(ParticipanteSerializer(participante).data, status=status.HTTP_200_OK)
 
 
 class MomentosIndiceView(generics.ListAPIView):

@@ -768,6 +768,28 @@ Error (token inválido o inexistente), `401`:
 ```
 </details>
 
+### HU-18b — Recuperar mi token si cerré la sesión (sin contraseña)
+Como usuario que ya se registró pero perdió su token (cerré el navegador, cambié de dispositivo, borré el almacenamiento), quiero recuperarlo dando solo mi correo institucional, para volver a entrar sin tener que registrarme de nuevo ni manejar una contraseña.
+- `POST /api/jornadas/{slug}/login/` con `{"correo_institucional": "..."}` — no requiere autenticación previa.
+- Como el correo institucional es único por jornada (`unique_together` en `Participante`), es la única prueba de identidad necesaria — no hay contraseña que gestionar. Es un nivel de seguridad más bajo que un login tradicional (cualquiera que sepa el correo puede recuperar el token), aceptado a propósito porque esta jornada no maneja datos sensibles ni pagos.
+- Devuelve el mismo objeto `Participante` completo que el registro (HU-17), incluido el `token` ya existente — no crea un participante nuevo ni cambia nada de lo ya registrado (mesa, es_vocero, respuestas ya enviadas).
+- `404` si no hay ningún participante con ese correo en esa jornada — en ese caso el usuario debe registrarse (HU-17), no "iniciar sesión".
+
+<details><summary>Ejemplo — <code>POST /api/jornadas/jornada-agil-2/login/</code></summary>
+
+Request:
+```json
+{ "correo_institucional": "camila.gomez@unimagdalena.edu.co" }
+```
+
+Response `200`: mismo cuerpo que la respuesta de HU-17 (incluye `token`, `mesa`, `es_vocero`, `rol`, etc., ya guardados).
+
+Error (correo no registrado en esta jornada), `404`:
+```json
+{ "detail": "No hay ningún participante registrado con ese correo en esta jornada." }
+```
+</details>
+
 ### HU-19 — Listar los momentos de mi jornada
 Como usuario ya registrado quiero consultar el índice de momentos de la jornada a la que pertenezco, para saber qué pasos debo recorrer.
 - `GET /api/jornadas/{slug}/momentos/` requiere el token del paso anterior y devuelve `id`, `orden`, `título`, `slug` (autogenerado del título, único dentro de la jornada) y `tipo` de cada momento activo, ordenados por `orden`.
