@@ -232,7 +232,7 @@ Error (credenciales inválidas o usuario no `staff`), `400`:
 
 ### HU-10 — Ver participantes inscritos
 Como administrador quiero ver la lista de participantes inscritos en una jornada, para hacer seguimiento de la asistencia.
-- `GET /api/admin/participantes/?jornada=<id>` lista nombre, apellido, correo, teléfono, `mesa`, `es_vocero` y fecha de registro.
+- `GET /api/admin/participantes/?jornada=<id>` lista nombre, apellido, correo, teléfono, `rol`, `mesa`, `es_vocero` y fecha de registro.
 - `GET /api/admin/participantes/{id}/` consulta el detalle de un participante puntual.
 
 <details><summary>Ejemplo — <code>GET /api/admin/participantes/?jornada=4</code></summary>
@@ -247,6 +247,7 @@ Response `200`:
     "nombre": "Camila",
     "apellido": "Gómez",
     "telefono": "3000000000",
+    "rol": "estudiante",
     "mesa": 3,
     "es_vocero": true,
     "slug": "camila-gomez",
@@ -695,9 +696,10 @@ Response `200`: mismo objeto que cada item de HU-15. Error si está inactiva, `4
 </details>
 
 ### HU-17 — Registrarme en una jornada (momento 0)
-Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido, teléfono y, si aplica, mi mesa y si soy el vocero, para inscribirme.
+Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido, teléfono, mi rol institucional y, si aplica, mi mesa y si soy el vocero, para inscribirme.
 - `POST /api/jornadas/{slug}/registro/` crea el `Participante`.
-- `mesa` (entero, ej. `3` — el número de la mesa física, no texto libre) y `es_vocero` (booleano) son **opcionales** y quedan fijos para **toda la jornada** — no se vuelven a pedir en cada momento tipo mesa. Un admin puede corregirlos después (HU-10b).
+- `rol` (texto libre, ej. `"estudiante"`, `"directivo"` — sin lista fija de valores) es **obligatorio**; la API responde 400 si falta. Es un dato del participante en sí (quién es institucionalmente), distinto de `mesa`/`es_vocero` (su lugar dentro de la dinámica grupal).
+- `mesa` (entero, ej. `3` — el número de la mesa física, no texto libre) y `es_vocero` (booleano) son **opcionales** y quedan fijos para **toda la jornada** — no se vuelven a pedir en cada momento tipo mesa. Un admin puede corregirlos después (HU-10b). Si `es_vocero: true` y esa mesa ya tiene otro vocero en esta jornada, la API responde 400 (máximo un vocero por mesa).
 - Si el correo ya está registrado en esa jornada, la API responde 400 sin crear un duplicado.
 - Se genera automáticamente un `slug` a partir de nombre y apellido (con sufijo si hay colisión).
 
@@ -710,6 +712,7 @@ Request:
   "nombre": "Camila",
   "apellido": "Gómez",
   "telefono": "3000000000",
+  "rol": "estudiante",
   "mesa": 3,
   "es_vocero": true
 }
@@ -724,6 +727,7 @@ Response `201`:
   "nombre": "Camila",
   "apellido": "Gómez",
   "telefono": "3000000000",
+  "rol": "estudiante",
   "mesa": 3,
   "es_vocero": true,
   "slug": "camila-gomez",
@@ -735,6 +739,16 @@ Response `201`:
 Error (correo ya registrado en esta jornada), `400`:
 ```json
 { "correo_institucional": ["Ya existe un participante con este correo en esta jornada."] }
+```
+
+Error (falta `rol`), `400`:
+```json
+{ "rol": ["Este campo es requerido."] }
+```
+
+Error (la mesa ya tiene vocero), `400`:
+```json
+{ "es_vocero": ["La mesa 3 ya tiene un vocero asignado en esta jornada."] }
 ```
 </details>
 

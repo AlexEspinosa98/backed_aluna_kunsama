@@ -24,7 +24,7 @@ def _validar_vocero_unico(jornada, mesa, es_vocero, excluir_id=None):
 class ParticipanteRegistroSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participante
-        fields = ['correo_institucional', 'nombre', 'apellido', 'telefono', 'mesa', 'es_vocero']
+        fields = ['correo_institucional', 'nombre', 'apellido', 'telefono', 'rol', 'mesa', 'es_vocero']
 
     def validate_correo_institucional(self, value):
         jornada = self.context['jornada']
@@ -48,7 +48,7 @@ class ParticipanteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participante
         fields = [
-            'id', 'jornada', 'correo_institucional', 'nombre', 'apellido', 'telefono',
+            'id', 'jornada', 'correo_institucional', 'nombre', 'apellido', 'telefono', 'rol',
             'mesa', 'es_vocero', 'slug', 'token', 'creado_en',
         ]
         read_only_fields = fields

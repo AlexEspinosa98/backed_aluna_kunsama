@@ -21,6 +21,10 @@ class Participante(models.Model):
     nombre = models.CharField(max_length=150)
     apellido = models.CharField(max_length=150)
     telefono = models.CharField(max_length=30, blank=True)
+    # Rol institucional del participante (ej. "estudiante", "directivo") — texto libre, sin lista
+    # fija de valores. Es un dato del participante en sí, distinto de mesa/es_vocero (que son
+    # sobre su lugar dentro de la dinámica grupal, no sobre quién es institucionalmente).
+    rol = models.CharField(max_length=100)
     # Mesa y vocero se fijan una vez para toda la jornada (no por momento) — se capturan en el
     # registro, pero un admin puede corregirlos después vía PATCH /api/admin/participantes/{id}/
     # (ver ParticipanteAdminViewSet) si una mesa se reorganiza o cambia quién es el vocero. Mesa es
