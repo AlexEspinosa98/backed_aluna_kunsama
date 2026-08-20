@@ -282,6 +282,23 @@ Response `200`:
 ```
 </details>
 
+### HU-10c — Eliminar un participante
+Como administrador quiero poder eliminar por completo un participante (ej. un duplicado, un correo mal escrito, un registro de prueba), para limpiar el listado sin dejar basura que distorsione las estadísticas (HU-11b/HU-11c) ni el conteo de mesas (HU-11d).
+- `DELETE /api/admin/participantes/{id}/` — elimina el registro y responde `204` sin cuerpo.
+- Sus respuestas individuales (momentos tipo `individual`) se eliminan en cascada junto con él.
+- Sus respuestas de mesa (momentos tipo `mesa`) **NO** se eliminan — quedan asociadas al número de mesa, no a la persona (mismo principio que HU-10b/HU-22). Si el participante eliminado era el vocero de su mesa, esa mesa queda sin vocero hasta que un admin asigne a otro (HU-10b) — no podrá enviar respuestas de mesa mientras tanto.
+- `404` si el `id` no existe.
+
+<details><summary>Ejemplo — <code>DELETE /api/admin/participantes/188/</code></summary>
+
+Response `204`: sin cuerpo.
+
+Error (no existe), `404`:
+```json
+{ "detail": "No Participante matches the given query." }
+```
+</details>
+
 ### HU-11 — Ver/exportar respuestas
 Como administrador quiero ver las respuestas registradas filtradas por momento o pregunta (incluidas las de mesa), para analizar los resultados.
 - `GET /api/admin/respuestas/?momento=<id>` o `?pregunta=<id>` devuelve cada respuesta con su dueño (`participante` o `mesa`), texto libre y opciones elegidas.

@@ -10,8 +10,15 @@ class ParticipanteAdminViewSet(
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
+    """DELETE elimina el registro por completo — útil para dar de baja duplicados o registros
+    de prueba (ej. correo mal escrito). Las respuestas individuales del participante se borran
+    en cascada (`Respuesta.participante` es CASCADE); las respuestas de mesa NO, porque están
+    ligadas al número de mesa, no a la persona — la mesa conserva lo ya respondido aunque se
+    elimine a quien era su vocero (ver HU-22: alguien más deberá quedar como vocero para poder
+    seguir enviando)."""
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
