@@ -35,9 +35,22 @@ UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
-    queryset = PlantillaAnalisis.objects.all()
     serializer_class = PlantillaAnalisisSerializer
     permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        # ?tipo=gpt_momento&predeterminada=true deja pedir en una sola llamada "el prompt activo
+        # de este motor de análisis puntual", sin que el frontend tenga que traer todas las
+        # plantillas y filtrar del lado del cliente — útil para una ventana de edición dedicada a
+        # un solo tipo (ver HU-14e/HU-14f en docs/USER_STORIES.md).
+        queryset = PlantillaAnalisis.objects.all()
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+        predeterminada = self.request.query_params.get('predeterminada')
+        if predeterminada is not None:
+            queryset = queryset.filter(predeterminada=predeterminada.lower() in ('true', '1'))
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(creada_por=self.request.user)
