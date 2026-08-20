@@ -6,6 +6,21 @@ from jornadas.models import Momento, OpcionPregunta, Pregunta
 from .models import Participante, Respuesta
 
 
+def _validar_vocero_unico(jornada, mesa, es_vocero, excluir_id=None):
+    """Como máximo un vocero por (jornada, mesa) — sin esto, dos participantes podían quedar
+    marcados es_vocero=True para la misma mesa sin ningún aviso, y RespuestasMomentoView no tiene
+    forma de saber cuál de los dos 'es' el vocero real de esa mesa."""
+    if not es_vocero or mesa is None:
+        return
+    qs = Participante.objects.filter(jornada=jornada, mesa=mesa, es_vocero=True)
+    if excluir_id is not None:
+        qs = qs.exclude(pk=excluir_id)
+    if qs.exists():
+        raise serializers.ValidationError(
+            {'es_vocero': f'La mesa {mesa} ya tiene un vocero asignado en esta jornada.'}
+        )
+
+
 class ParticipanteRegistroSerializer(serializers.ModelSerializer):
     class Meta:
         model = Participante
@@ -16,6 +31,12 @@ class ParticipanteRegistroSerializer(serializers.ModelSerializer):
         if Participante.objects.filter(jornada=jornada, correo_institucional=value).exists():
             raise serializers.ValidationError('Este correo ya está registrado en esta jornada.')
         return value
+
+    def validate(self, attrs):
+        _validar_vocero_unico(
+            self.context['jornada'], attrs.get('mesa'), attrs.get('es_vocero', False)
+        )
+        return attrs
 
     def create(self, validated_data):
         return Participante.objects.create(jornada=self.context['jornada'], **validated_data)
@@ -40,6 +61,17 @@ class ParticipanteMesaVoceroSerializer(serializers.ModelSerializer):
         model = Participante
         fields = ['id', 'mesa', 'es_vocero']
         read_only_fields = ['id']
+
+    def validate(self, attrs):
+        # PATCH puede mandar solo uno de los dos campos (ej. solo {"es_vocero": true}) — el
+        # chequeo necesita el valor EFECTIVO tras el cambio, así que usa el del registro actual
+        # para el campo que no vino en este request.
+        instance = self.instance
+        mesa = attrs.get('mesa', instance.mesa if instance else None)
+        es_vocero = attrs.get('es_vocero', instance.es_vocero if instance else False)
+        if instance is not None:
+            _validar_vocero_unico(instance.jornada, mesa, es_vocero, excluir_id=instance.pk)
+        return attrs
 
 
 @extend_schema_serializer(component_name='ParticipanteOpcionPregunta')
