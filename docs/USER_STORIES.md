@@ -281,9 +281,9 @@ Response `200`:
 ### HU-12 — Configurar plantillas de análisis con IA
 Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
 - CRUD completo en `/api/admin/plantillas-analisis/` (`GET`, `POST`) y `/api/admin/plantillas-analisis/{id}/` (`GET`, `PATCH`, `DELETE`).
-- Solo una plantilla puede quedar marcada `predeterminada=true` a la vez; marcar una nueva desmarca automáticamente la anterior.
+- `tipo` (`"local"` o `"gpt_momento"`) distingue para cuál motor de análisis es la plantilla — el pipeline local multiagente (HU-13) o el análisis de instrumento completo vía OpenAI (HU-14d). **Cada `tipo` tiene su propia plantilla `predeterminada`**, independiente del otro: marcar una nueva predeterminada de un tipo nunca desmarca la del otro tipo, porque son prompts de propósito distinto (uno redacta muchas descripciones cortas, el otro un reporte con hallazgos cruzados).
 - El texto de la plantilla (`prompt_sistema`) son instrucciones de estilo/foco/profundidad — los datos reales (estadísticas y tópicos) se le entregan al modelo aparte, ya calculados, nunca los inventa.
-- **La plantilla aplica en TODOS los niveles del análisis** — cada pregunta, cada momento y la jornada completa — no solo en la síntesis final: editar la plantilla activa y volver a pedir un reporte cambia el tono/profundidad de principio a fin, sin tocar código ni redeploy.
+- **La plantilla `local` aplica en TODOS los niveles del pipeline local** — cada pregunta, cada momento y la jornada completa — no solo en la síntesis final: editar la plantilla activa y volver a pedir un reporte cambia el tono/profundidad de principio a fin, sin tocar código ni redeploy.
 
 <details><summary>Ejemplo — <code>POST /api/admin/plantillas-analisis/</code></summary>
 
@@ -291,6 +291,7 @@ Request:
 ```json
 {
   "nombre": "Síntesis institucional Jornada Ágil",
+  "tipo": "local",
   "prompt_sistema": "Sé breve y muy concisa: prioriza cifras concretas sobre prosa interpretativa. Tono formal e institucional, dirigido a la Rectoría de la Universidad del Magdalena. Si estás redactando la síntesis de la jornada completa, ciérrala con una recomendación breve y accionable.",
   "predeterminada": true
 }
@@ -301,6 +302,7 @@ Response `201`:
 {
   "id": 2,
   "nombre": "Síntesis institucional Jornada Ágil",
+  "tipo": "local",
   "prompt_sistema": "Sé breve y muy concisa: prioriza cifras concretas sobre prosa interpretativa. Tono formal e institucional, dirigido a la Rectoría de la Universidad del Magdalena. Si estás redactando la síntesis de la jornada completa, ciérrala con una recomendación breve y accionable.",
   "predeterminada": true,
   "creada_por": 3,
@@ -468,6 +470,105 @@ Error (falta `OPENAI_API_KEY` en el servidor):
 ```json
 { "presentacion_estado": "error", "presentacion_error": "OPENAI_API_KEY no está configurada en el servidor." }
 ```
+</details>
+
+### HU-14d — Analizar un momento completo como un solo instrumento con IA (experimental)
+Como administrador quiero pedirle a una IA externa que lea TODO un momento de una vez — su contexto y todas sus preguntas y respuestas reales — y me entregue un reporte con hallazgos que crucen varias preguntas, en vez de un análisis mecánico pregunta por pregunta, para tener una lectura más natural y profesional de momentos con muchas preguntas (un momento de 30 preguntas es un solo instrumento, no 30 análisis sueltos).
+- `POST /api/admin/analisis-momento-ia/` con `{"momento": <id>}` — asíncrono (`201` con estado `pendiente`, hay que consultar el estado después). No depende de crear un `Reporte` primero: se dispara directo desde el `Momento`.
+- `GET /api/admin/analisis-momento-ia/?momento=<id>` lista el historial de análisis de ese momento; `GET /api/admin/analisis-momento-ia/{id}/` consulta uno puntual hasta que `estado` sea `"completo"`. `DELETE /api/admin/analisis-momento-ia/{id}/` elimina uno.
+- 409 si ya hay un análisis en curso para ESE momento (no bloquea otros momentos — cada llamada a OpenAI es independiente); se auto-sana si quedó huérfana por más de 10 minutos (mismo patrón que HU-14c).
+- **`resultado` tiene una forma distinta a `analisis` de HU-14** — no es una lista de preguntas, es `resumen_ejecutivo` + `hallazgos[]`, cada hallazgo con `titulo`, `descripcion`, `preguntas_relacionadas` (los `pregunta_id` que lo sustentan — puede ser una o varias), `tipo_grafica` (`"pastel"`/`"barras"`/`"radar"`/`null`) y `datos[]` (`{etiqueta, valor, unidad}`, con conteos reales — nunca de dos naturalezas de medición distintas en el mismo `datos`, ej. nunca mezcla un conteo de opción de escala con un conteo de palabra clave de texto abierto en la misma gráfica).
+- Para preguntas de opción única/múltiple el conteo es exacto (calculado por el backend, la IA nunca lo recalcula). Para preguntas abiertas, la IA lee TODAS las respuestas de texto reales y extrae sus propias palabras clave/temas con conteo real — sin la etiqueta `origen: "semilla"/"inductivo"` que sí tiene HU-13, aquí el reporte se lee unificado.
+- Reporte entre 6 y 10 hallazgos, cada uno respaldado por 2 a 4 preguntas relacionadas cuando el patrón del instrumento realmente lo sostenga — prioriza deducciones (qué revela un patrón cruzando varias preguntas) sobre repetir una cifra aislada.
+- Requiere `OPENAI_API_KEY` configurada en el servidor — mismo comportamiento de error claro que HU-14c si falta.
+
+<details><summary>Ejemplo — <code>POST /api/admin/analisis-momento-ia/</code></summary>
+
+Request:
+```json
+{ "momento": 3 }
+```
+
+Response `201`:
+```json
+{
+  "id": 3,
+  "momento": 3,
+  "momento_titulo": "Momento 1 — EIBIC: reflexión individual",
+  "estado": "pendiente",
+  "resultado": {},
+  "error_mensaje": "",
+  "modelo_usado": "",
+  "solicitado_por": 3,
+  "creado_en": "2026-08-19T22:19:34.430766-05:00",
+  "actualizado_en": "2026-08-19T22:19:34.430782-05:00",
+  "completado_en": null
+}
+```
+
+Luego, consultando `GET /api/admin/analisis-momento-ia/3/` hasta que `estado` sea `"completo"` (recortado — un `resultado` real trae entre 6 y 10 hallazgos):
+```json
+{
+  "estado": "completo",
+  "modelo_usado": "gpt-4o",
+  "resultado": {
+    "momento_id": 3,
+    "tipo": "individual",
+    "resumen_ejecutivo": "El instrumento busca establecer lineamientos estratégicos para la ética en la investigación en UNIMAGDALENA. La mayoría de los participantes está de acuerdo con la incorporación de la ética en diversas etapas del proceso investigativo, aunque algunos sugieren ajustes específicos...",
+    "hallazgos": [
+      {
+        "titulo": "Consenso sobre la importancia de la ética en la investigación",
+        "descripcion": "Una mayoría significativa de participantes (80%) está de acuerdo en que la ética debe acompañar la investigación y otros procesos relacionados. Sin embargo, un 20% considera que se requieren ajustes.",
+        "preguntas_relacionadas": [38],
+        "tipo_grafica": "pastel",
+        "datos": [
+          {"etiqueta": "De acuerdo", "valor": 20, "unidad": "conteo"},
+          {"etiqueta": "Requiere ajuste", "valor": 5, "unidad": "conteo"}
+        ]
+      },
+      {
+        "titulo": "Protección de datos y uso de inteligencia artificial",
+        "descripcion": "Hay un fuerte consenso (19 de 25) sobre la necesidad de fortalecer las reglas para la protección de datos y el uso responsable de inteligencia artificial. Las respuestas abiertas indican preocupaciones sobre la anonimización y auditoría de datos sensibles.",
+        "preguntas_relacionadas": [41, 46],
+        "tipo_grafica": "radar",
+        "datos": [
+          {"etiqueta": "Reglas para IA y datos sensibles", "valor": 6, "unidad": "conteo"},
+          {"etiqueta": "Auditorías de sesgo en IA", "valor": 5, "unidad": "conteo"},
+          {"etiqueta": "Políticas de conservación y acceso a datos", "valor": 5, "unidad": "conteo"},
+          {"etiqueta": "Protocolos de seguridad para datos genéticos", "valor": 5, "unidad": "conteo"}
+        ]
+      }
+    ]
+  },
+  "completado_en": "2026-08-19T22:19:45.751992-05:00"
+}
+```
+
+Error (ya hay un análisis en curso para este momento), `409`:
+```json
+{ "detail": "Ya hay un análisis con IA en proceso para este momento — espera a que termine (o falle) antes de pedir otro." }
+```
+</details>
+
+### HU-14e — Editar el prompt del análisis de instrumento completo (HU-14d)
+Como administrador quiero editar el tono, foco o reglas del análisis de instrumento completo (HU-14d) sin tocar código, igual que ya puedo hacerlo con el pipeline local (HU-12).
+- Se usa el mismo CRUD de HU-12 (`/api/admin/plantillas-analisis/`), creando o editando una plantilla con `tipo: "gpt_momento"` y `predeterminada: true`.
+- Sus instrucciones se agregan al prompt base de HU-14d en cada llamada — no reemplazan las reglas fijas (formato de salida JSON, no inventar cifras, no mezclar naturalezas de datos), solo ajustan tono/foco encima de ellas.
+- Si no hay ninguna plantilla `gpt_momento` marcada como predeterminada, HU-14d funciona igual con el prompt base — la plantilla es un ajuste opcional, no un requisito.
+
+<details><summary>Ejemplo — <code>POST /api/admin/plantillas-analisis/</code></summary>
+
+Request:
+```json
+{
+  "nombre": "Instrumento completo — foco en gobernanza",
+  "tipo": "gpt_momento",
+  "prompt_sistema": "Da prioridad a los hallazgos relacionados con gobernanza institucional y toma de decisiones sobre los puramente operativos. Cuando compares posturas, sé explícito sobre si la divergencia es de fondo (principios) o de forma (implementación).",
+  "predeterminada": true
+}
+```
+
+Response `201`: mismo cuerpo que el ejemplo de HU-12, con `tipo: "gpt_momento"`.
 </details>
 
 ## Participante / Usuario
