@@ -121,3 +121,49 @@ class Reporte(models.Model):
                 slug = f'{base_slug}-{contador}'
             self.slug = slug
         super().save(*args, **kwargs)
+
+
+class AnalisisMomentoIA(models.Model):
+    """Vía de análisis alternativa a `Reporte`: en vez del pipeline local multiagente (una llamada
+    de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI analiza
+    TODO el momento de una vez — se le da el enunciado y las respuestas crudas de cada pregunta
+    (conteos reales para unica/multiple, todas las respuestas de texto para abierta) y el propio
+    GPT identifica temas, clasifica y redacta, devolviendo el mismo formato de JSON que ya produce
+    el pipeline local (`MomentoAnalisis` — ver `docs/REPORTE_ANALITICA_SCHEMA.html`) para que el
+    frontend pueda renderizar cualquiera de los dos con el mismo componente. No depende de un
+    `Reporte` — se dispara directo desde un `Momento`, con su propio historial."""
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    momento = models.ForeignKey(Momento, on_delete=models.CASCADE, related_name='analisis_ia')
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    resultado = models.JSONField(
+        default=dict, blank=True,
+        help_text='Mismo formato que un item de analisis.momentos[] en Reporte: momento_id, tipo, '
+        'descripcion_general, preguntas[] (con valores_caracteristicos y metodo_valores).',
+    )
+    error_mensaje = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='analisis_momento_ia_solicitados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Análisis de momento con IA (OpenAI)'
+        verbose_name_plural = 'Análisis de momento con IA (OpenAI)'
+
+    def __str__(self):
+        return f'Análisis IA {self.id} · {self.momento} · {self.estado}'

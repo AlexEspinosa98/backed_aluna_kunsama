@@ -7,11 +7,15 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
+from .analisis_ia_openai import analizar_momento_ia
 from .analysis import procesar_reporte
-from .models import PlantillaAnalisis, Reporte
+from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
-from .serializers import PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer
+from .serializers import (
+    AnalisisMomentoIACrearSerializer, AnalisisMomentoIASerializer, PlantillaAnalisisSerializer,
+    ReporteCrearSerializer, ReporteSerializer,
+)
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
 # 'procesando' para siempre — nada vuelve a tocarlo. Sin este umbral, el guard de abajo lo
@@ -24,6 +28,10 @@ UMBRAL_HUERFANO = timedelta(minutes=30)
 # generación (nos pasó probando esto mismo: un restart del servicio dejó una presentación
 # 'procesando' para siempre).
 UMBRAL_HUERFANO_PRESENTACION = timedelta(minutes=10)
+# Mismo espíritu: una llamada a OpenAI (analitica/analisis_ia_openai.py) es independiente del
+# pipeline local, así que un umbral corto alcanza para no bloquear reintentos legítimos tras un
+# redeploy a mitad de generación.
+UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
@@ -146,3 +154,67 @@ class ReporteViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return construir_pdf_response(reporte)
+
+
+class AnalisisMomentoIAViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Vía de análisis alternativa a `ReporteViewSet`: una sola llamada a OpenAI analiza un
+    `Momento` completo de una vez (ver `analitica/analisis_ia_openai.py`), en vez del pipeline
+    local multiagente pregunta por pregunta. No depende de crear un `Reporte` primero."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = AnalisisMomentoIA.objects.select_related('momento')
+        momento_id = self.request.query_params.get('momento')
+        if momento_id:
+            queryset = queryset.filter(momento_id=momento_id)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return AnalisisMomentoIACrearSerializer
+        return AnalisisMomentoIASerializer
+
+    def create(self, request, *args, **kwargs):
+        entrada = AnalisisMomentoIACrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        momento = entrada.validated_data['momento']
+
+        # Auto-sanación, mismo espíritu que en ReporteViewSet.create: si el análisis IA anterior
+        # de ESTE momento quedó 'procesando' hace más de UMBRAL_HUERFANO_ANALISIS_IA, su worker ya
+        # no existe (crash, redeploy) — se marca error para no bloquear un reintento legítimo.
+        AnalisisMomentoIA.objects.filter(
+            momento=momento,
+            estado__in=[AnalisisMomentoIA.ESTADO_PENDIENTE, AnalisisMomentoIA.ESTADO_PROCESANDO],
+            actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_IA,
+        ).update(
+            estado=AnalisisMomentoIA.ESTADO_ERROR,
+            error_mensaje='El análisis quedó procesando más de 10 minutos sin completarse '
+                          '(probablemente el worker se reinició o falló) y se marcó como error '
+                          'automáticamente.',
+        )
+
+        # Cada llamada es independiente de OpenAI (no comparte el modelo local ni su pool), así
+        # que distintos momentos sí pueden analizarse en paralelo sin riesgo — el bloqueo es solo
+        # por momento, para no lanzar dos análisis del mismo momento a la vez.
+        if AnalisisMomentoIA.objects.filter(
+            momento=momento,
+            estado__in=[AnalisisMomentoIA.ESTADO_PENDIENTE, AnalisisMomentoIA.ESTADO_PROCESANDO],
+        ).exists():
+            return Response(
+                {'detail': 'Ya hay un análisis con IA en proceso para este momento — espera a '
+                           'que termine (o falle) antes de pedir otro.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        analisis = entrada.save(solicitado_por=request.user)
+        threading.Thread(target=analizar_momento_ia, args=(analisis.id,), daemon=True).start()
+
+        salida = AnalisisMomentoIASerializer(analisis)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)

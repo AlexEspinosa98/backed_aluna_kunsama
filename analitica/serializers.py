@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from jornadas.models import Momento
 
-from .models import PlantillaAnalisis, Reporte
+from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 
 
 class PlantillaAnalisisSerializer(serializers.ModelSerializer):
@@ -69,3 +69,22 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
         if momentos:
             reporte.momentos.set(momentos)
         return reporte
+
+
+class AnalisisMomentoIASerializer(serializers.ModelSerializer):
+    momento_titulo = serializers.CharField(source='momento.titulo', read_only=True)
+
+    class Meta:
+        model = AnalisisMomentoIA
+        fields = [
+            'id', 'momento', 'momento_titulo', 'estado', 'resultado', 'error_mensaje',
+            'modelo_usado', 'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
+        ]
+        read_only_fields = fields
+
+
+class AnalisisMomentoIACrearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AnalisisMomentoIA
+        fields = ['id', 'momento', 'estado', 'creado_en']
+        read_only_fields = ['id', 'estado', 'creado_en']
