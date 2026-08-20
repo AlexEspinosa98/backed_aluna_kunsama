@@ -23,8 +23,10 @@ class Participante(models.Model):
     telefono = models.CharField(max_length=30, blank=True)
     # Mesa y vocero se fijan una vez para toda la jornada (no por momento) — se capturan en el
     # registro, pero un admin puede corregirlos después vía PATCH /api/admin/participantes/{id}/
-    # (ver ParticipanteAdminViewSet) si una mesa se reorganiza o cambia quién es el vocero.
-    mesa = models.CharField(max_length=100, blank=True)
+    # (ver ParticipanteAdminViewSet) si una mesa se reorganiza o cambia quién es el vocero. Mesa es
+    # numérica (el número de la mesa física, ej. 3) — no texto libre, para que comparar/asignar
+    # mesas sea exacto y no dependa de cómo alguien escribió "Mesa 3" / "mesa 3" / "MESA 3".
+    mesa = models.PositiveIntegerField(null=True, blank=True)
     es_vocero = models.BooleanField(
         default=False,
         help_text='Solo el vocero de una mesa puede enviar respuestas en momentos tipo mesa.',
@@ -63,7 +65,7 @@ class Respuesta(models.Model):
         blank=True,
         related_name='respuestas',
     )
-    mesa = models.CharField(max_length=100, null=True, blank=True)
+    mesa = models.PositiveIntegerField(null=True, blank=True)
     registrado_por = models.ForeignKey(
         Participante,
         on_delete=models.SET_NULL,

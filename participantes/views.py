@@ -98,14 +98,14 @@ class RespuestasMomentoView(APIView):
         entrada.is_valid(raise_exception=True)
         datos = entrada.validated_data
 
-        mesa = ''
+        mesa = None
         if momento.tipo == Momento.TIPO_MESA:
             if not participante.es_vocero:
                 raise PermissionDenied(
                     'Solo el vocero de la mesa puede enviar respuestas en este momento.'
                 )
             mesa = participante.mesa
-            if not mesa:
+            if mesa is None:
                 raise ValidationError(
                     {'mesa': 'No tienes una mesa asignada — pídele a un administrador que te la '
                               'asigne antes de responder.'}
