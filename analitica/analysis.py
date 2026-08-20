@@ -580,7 +580,10 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         "resultados:' — esas frases no aportan nada y suenan robóticas. Señala el hallazgo "
         "principal (qué tema domina o si la opinión está dividida, citando la cifra exacta) y, "
         "solo si cabe en una frase corta, su implicación práctica — sin elaborar hipótesis "
-        "largas sobre el porqué. Usa EXCLUSIVAMENTE los datos entregados a continuación — nunca "
+        "largas sobre el porqué, y sin recurrir a frases genéricas repetibles en cualquier "
+        "informe como 'es fundamental', 'es crucial' o 'implicación práctica:'; si no hay una "
+        "implicación específica que valga la pena, omítela. Usa EXCLUSIVAMENTE los datos "
+        "entregados a continuación — nunca "
         "inventes cifras ni ideas que no estén ahí. Si a un tema NO se le da un porcentaje o "
         "número de respuestas explícito, es porque no hay conteo real disponible para él — en "
         "ese caso menciónalo solo por su nombre, SIN inventarle ni asignarle ninguna cifra." +
@@ -736,7 +739,9 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "prosa. Ve directo al dato: nunca empieces con muletillas como 'Resultados de la "
         "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
         "frases no aportan nada y suenan robóticas. Señala qué opción domina (o si está dividido, "
-        "citando las cifras exactas) y, solo si cabe en una frase corta, la implicación práctica. "
+        "citando las cifras exactas) y, solo si cabe en una frase corta, la implicación práctica, "
+        "sin frases genéricas repetibles en cualquier informe como 'es fundamental' o 'es "
+        "crucial' — si no hay una implicación específica que valga la pena, omítela. "
         "Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
         "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
         "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
@@ -866,18 +871,22 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
     system = (
-        "Eres un analista de datos senior. Redacta una síntesis breve (3 a 5 frases, nunca más), "
-        "profesional, concisa y centrada en cifras, en prosa clara, de UN momento de una jornada "
+        "Eres un analista de datos senior presentando a directivos — escribe como lo haría un "
+        "profesional real con experiencia, no un generador de texto institucional. Redacta una "
+        "síntesis de 2 a 4 frases (nunca más), en prosa clara, de UN momento de una jornada "
         "participativa, integrando las descripciones ya redactadas de sus preguntas — no repitas "
-        "pregunta por pregunta, señala el hilo común y los datos más relevantes (qué tema domina, "
-        "dónde hay consenso o división, citando cifras concretas cuando estén disponibles), sin "
-        "elaborar hipótesis largas. Nunca empieces con muletillas como 'Resultados de la "
-        "encuesta:' o 'Los resultados indican que'. No agregues datos que no estén en las "
-        "descripciones dadas. Español." +
+        "pregunta por pregunta, ve directo al dato/tema más relevante del conjunto (qué domina, "
+        "dónde hay consenso o división, citando cifras concretas cuando estén disponibles). "
+        "Evita relleno institucional y frases genéricas repetidas como 'es fundamental que', 'es "
+        "crucial', 'recomiendo implementar programas de formación' — si agregas una "
+        "recomendación, que sea UNA sola, concreta y específica a estos datos, no una frase "
+        "hecha que serviría para cualquier informe. Nunca empieces con muletillas como "
+        "'Resultados de la encuesta:' o 'Los resultados indican que'. No agregues datos que no "
+        "estén en las descripciones dadas. Español." +
         _instrucciones_plantilla(plantilla)
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
-    descripcion_general, error = _llamar_llm(system, user, max_tokens=240, temperature=0.5)
+    descripcion_general, error = _llamar_llm(system, user, max_tokens=180, temperature=0.5)
 
     return {
         'momento_id': momento.id,
