@@ -6,9 +6,10 @@ from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .analisis_ia_openai import analizar_momento_ia
-from .analysis import procesar_reporte
+from .analysis import _estadisticas_pregunta, procesar_reporte
 from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
@@ -231,3 +232,43 @@ class AnalisisMomentoIAViewSet(
         salida = AnalisisMomentoIASerializer(analisis)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class EstadisticasPreguntasView(APIView):
+    """Conteos reales por pregunta (total de respuestas y, para unica/multiple, conteo por
+    opción) — sin IA, sin narrativa, solo los números tal cual están en la base de datos ahora
+    mismo. Reusa `_estadisticas_pregunta`, la misma función que ya usan los reportes (local y vía
+    OpenAI) como fuente de verdad de las cifras, así que nunca puede desalinearse de lo que
+    terminan mostrando esos reportes."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from jornadas.models import Pregunta
+
+        momento_id = request.query_params.get('momento')
+        jornada_id = request.query_params.get('jornada')
+        if not momento_id and not jornada_id:
+            return Response(
+                {'detail': 'Debes indicar ?momento=<id> o ?jornada=<id>.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        preguntas = Pregunta.objects.filter(activa=True).select_related('momento')
+        if momento_id:
+            preguntas = preguntas.filter(momento_id=momento_id)
+        if jornada_id:
+            preguntas = preguntas.filter(momento__jornada_id=jornada_id)
+        preguntas = preguntas.order_by('momento__orden', 'orden')
+
+        data = [
+            {
+                'pregunta_id': pregunta.id,
+                'momento_id': pregunta.momento_id,
+                'texto': pregunta.texto,
+                'tipo': pregunta.tipo,
+                'obligatoria': pregunta.obligatoria,
+                'estadisticas': _estadisticas_pregunta(pregunta),
+            }
+            for pregunta in preguntas
+        ]
+        return Response(data, status=status.HTTP_200_OK)
