@@ -247,7 +247,7 @@ Response `200`:
     "nombre": "Camila",
     "apellido": "Gómez",
     "telefono": "3000000000",
-    "mesa": "Mesa 3",
+    "mesa": 3,
     "es_vocero": true,
     "slug": "camila-gomez",
     "token": "b058878f-5797-40ac-ab56-9779902ab300",
@@ -267,7 +267,7 @@ Como administrador quiero poder cambiar la mesa de un participante o quitarle/as
 
 Request (mover a otra mesa):
 ```json
-{ "mesa": "Mesa 5" }
+{ "mesa": 5 }
 ```
 
 Request (quitar el rol de vocero):
@@ -277,7 +277,7 @@ Request (quitar el rol de vocero):
 
 Response `200`:
 ```json
-{ "id": 13, "mesa": "Mesa 5", "es_vocero": false }
+{ "id": 13, "mesa": 5, "es_vocero": false }
 ```
 </details>
 
@@ -295,7 +295,7 @@ Response `200`:
     "id": 501,
     "pregunta": 38,
     "participante": 13,
-    "mesa": "",
+    "mesa": null,
     "texto_libre": "",
     "opciones": [16],
     "actualizado_en": "2026-08-19T21:15:03.112Z"
@@ -697,7 +697,7 @@ Response `200`: mismo objeto que cada item de HU-15. Error si está inactiva, `4
 ### HU-17 — Registrarme en una jornada (momento 0)
 Como usuario quiero registrarme en una jornada indicando mi correo institucional, nombre, apellido, teléfono y, si aplica, mi mesa y si soy el vocero, para inscribirme.
 - `POST /api/jornadas/{slug}/registro/` crea el `Participante`.
-- `mesa` (texto libre, ej. `"Mesa 3"`) y `es_vocero` (booleano) son **opcionales** y quedan fijos para **toda la jornada** — no se vuelven a pedir en cada momento tipo mesa. Un admin puede corregirlos después (HU-10b).
+- `mesa` (entero, ej. `3` — el número de la mesa física, no texto libre) y `es_vocero` (booleano) son **opcionales** y quedan fijos para **toda la jornada** — no se vuelven a pedir en cada momento tipo mesa. Un admin puede corregirlos después (HU-10b).
 - Si el correo ya está registrado en esa jornada, la API responde 400 sin crear un duplicado.
 - Se genera automáticamente un `slug` a partir de nombre y apellido (con sufijo si hay colisión).
 
@@ -710,7 +710,7 @@ Request:
   "nombre": "Camila",
   "apellido": "Gómez",
   "telefono": "3000000000",
-  "mesa": "Mesa 3",
+  "mesa": 3,
   "es_vocero": true
 }
 ```
@@ -724,7 +724,7 @@ Response `201`:
   "nombre": "Camila",
   "apellido": "Gómez",
   "telefono": "3000000000",
-  "mesa": "Mesa 3",
+  "mesa": 3,
   "es_vocero": true,
   "slug": "camila-gomez",
   "token": "b058878f-5797-40ac-ab56-9779902ab300",
@@ -821,8 +821,8 @@ Request:
 Response `200`:
 ```json
 [
-  { "id": 501, "pregunta": 38, "participante": 13, "mesa": "", "texto_libre": "", "opciones": [16], "actualizado_en": "2026-08-19T21:15:03.112Z" },
-  { "id": 502, "pregunta": 45, "participante": 13, "mesa": "", "texto_libre": "Debe existir consentimiento previo, libre e informado antes de iniciar cualquier trabajo con comunidades.", "opciones": [], "actualizado_en": "2026-08-19T21:15:03.118Z" }
+  { "id": 501, "pregunta": 38, "participante": 13, "mesa": null, "texto_libre": "", "opciones": [16], "actualizado_en": "2026-08-19T21:15:03.112Z" },
+  { "id": 502, "pregunta": 45, "participante": 13, "mesa": null, "texto_libre": "Debe existir consentimiento previo, libre e informado antes de iniciar cualquier trabajo con comunidades.", "opciones": [], "actualizado_en": "2026-08-19T21:15:03.118Z" }
 ]
 ```
 </details>
@@ -848,8 +848,8 @@ Request:
 Response `200`:
 ```json
 [
-  { "id": 610, "pregunta": 20, "participante": null, "mesa": "Mesa 3", "texto_libre": "", "opciones": [4], "actualizado_en": "2026-08-19T21:20:00.000Z" },
-  { "id": 611, "pregunta": 17, "participante": null, "mesa": "Mesa 3", "texto_libre": "Cuidar la confianza y el consentimiento informado de las comunidades.", "opciones": [], "actualizado_en": "2026-08-19T21:20:00.005Z" }
+  { "id": 610, "pregunta": 20, "participante": null, "mesa": 3, "texto_libre": "", "opciones": [4], "actualizado_en": "2026-08-19T21:20:00.000Z" },
+  { "id": 611, "pregunta": 17, "participante": null, "mesa": 3, "texto_libre": "Cuidar la confianza y el consentimiento informado de las comunidades.", "opciones": [], "actualizado_en": "2026-08-19T21:20:00.005Z" }
 ]
 ```
 
