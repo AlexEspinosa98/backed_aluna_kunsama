@@ -8,7 +8,10 @@ from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 class PlantillaAnalisisSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlantillaAnalisis
-        fields = ['id', 'nombre', 'prompt_sistema', 'predeterminada', 'creada_por', 'creado_en', 'actualizado_en']
+        fields = [
+            'id', 'nombre', 'tipo', 'prompt_sistema', 'predeterminada', 'creada_por',
+            'creado_en', 'actualizado_en',
+        ]
         read_only_fields = ['creada_por', 'creado_en', 'actualizado_en']
 
 
@@ -54,7 +57,9 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
                     {'momentos': f'El momento "{momento.titulo}" no pertenece a la jornada seleccionada.'}
                 )
         if attrs.get('plantilla') is None:
-            attrs['plantilla'] = PlantillaAnalisis.objects.filter(predeterminada=True).first()
+            attrs['plantilla'] = PlantillaAnalisis.objects.filter(
+                tipo=PlantillaAnalisis.TIPO_LOCAL, predeterminada=True
+            ).first()
         return attrs
 
     def create(self, validated_data):

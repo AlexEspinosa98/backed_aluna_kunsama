@@ -79,17 +79,28 @@ SYSTEM_PROMPT = (
     "}\n\n"
 
     "=== REGLAS DE LOS DATOS QUE SUSTENTAN CADA HALLAZGO ===\n"
-    "`datos` son SOLO los números reales que respaldan ESE hallazgo puntual — conteos exactos de "
-    "opciones, o conteos reales de cuántas respuestas de texto caen en cada palabra clave/tema "
-    "que identificaste, nunca cifras inventadas. Un hallazgo puede combinar datos de varias "
-    "preguntas a la vez (ej. el conteo de una pregunta de escala junto con cuántas respuestas "
-    "abiertas de dos preguntas distintas tocan el mismo tema) — eso es exactamente el tipo de "
-    "síntesis que se busca. `preguntas_relacionadas` lista TODOS los pregunta_id que sustentan el "
-    "hallazgo. Usa los tres tipos de gráfica disponibles según lo que mejor comunique cada "
-    "hallazgo, no solo uno por costumbre: 'pastel' cuando son pocos ítems (2-3) y uno domina "
-    "claramente sobre el resto; 'barras' para comparar tamaños de forma simple, la opción más "
-    "segura cuando dudes; 'radar' cuando hay 4 o más ítems con tamaños relativamente parejos y "
-    "vale la pena ver la forma general de la distribución entre todos a la vez.\n\n"
+    "`datos` son SOLO los números reales que respaldan ESE hallazgo puntual, nunca cifras "
+    "inventadas — pero deben ser de UNA SOLA naturaleza de medición, no una mezcla. Un conteo de "
+    "opciones de una pregunta de escala (base: todos los que respondieron esa pregunta) y un "
+    "conteo de cuántas respuestas de texto mencionan una palabra clave (base: solo quienes "
+    "escribieron algo sobre eso) NO son comparables entre sí y NUNCA deben ir juntos en el mismo "
+    "`datos` — mezclarlos en una sola gráfica es engañoso porque las barras usan bases distintas "
+    "aunque se vean una al lado de la otra. Para un hallazgo que integra ambos tipos de evidencia: "
+    "usa `datos` para SOLO uno de los dos (el que mejor represente el hallazgo — casi siempre el "
+    "conteo de palabras clave, que es el más específico) y menciona el otro dato en la "
+    "`descripcion` en prosa, sin graficarlo junto. `preguntas_relacionadas` sigue listando TODOS "
+    "los pregunta_id que sustentan el hallazgo aunque el gráfico solo represente una parte de la "
+    "evidencia.\n\n"
+    "Usa los tres tipos de gráfica disponibles según lo que mejor comunique cada hallazgo — "
+    "varía la elección de verdad, no caigas en usar 'barras' para todo por default: 'pastel' "
+    "cuando son 2 o 3 ítems y uno domina claramente sobre el resto; 'barras' para comparar "
+    "tamaños de forma simple; 'radar' cuando hay 4 o más ítems (temas o palabras clave "
+    "extraídas de respuestas abiertas suelen dar naturalmente 4-6 categorías) y vale la pena ver "
+    "la forma general de la distribución entre todos a la vez — con un instrumento de este "
+    "tamaño, el reporte completo debe incluir AL MENOS un hallazgo con 'radar' cuando haya al "
+    "menos un conjunto de 4+ palabras clave/temas real que lo sostenga; no lo fuerces con menos "
+    "de 4 ítems reales, pero sí búscalo activamente antes de conformarte con solo pastel/"
+    "barras.\n\n"
 
     "=== ESTILO DE REDACCIÓN ===\n"
     "Natural, profesional, como un reporte que de verdad se lee bien — no una ficha técnica. "
@@ -107,6 +118,16 @@ SYSTEM_PROMPT = (
     "Nunca inventes cifras, temas ni respuestas que no estén en los datos entregados a "
     "continuación."
 )
+
+
+def _instrucciones_plantilla(plantilla):
+    """Instrucciones adicionales editables por el equipo (PlantillaAnalisis con
+    tipo='gpt_momento', vía POST/PATCH /api/admin/plantillas-analisis/) — mismo mecanismo que
+    `analysis._instrucciones_plantilla` para el pipeline local, pero con su propio tipo de
+    plantilla: son prompts de propósito distinto y no deben compartir la misma 'predeterminada'."""
+    if plantilla and plantilla.prompt_sistema:
+        return '\n\nInstrucciones adicionales del equipo organizador:\n' + plantilla.prompt_sistema
+    return ''
 
 
 def _construir_payload_momento(momento):
@@ -213,7 +234,7 @@ def analizar_momento_ia(analisis_id):
     from django.db import close_old_connections
 
     close_old_connections()
-    from .models import AnalisisMomentoIA
+    from .models import AnalisisMomentoIA, PlantillaAnalisis
 
     analisis = None
     try:
@@ -221,10 +242,14 @@ def analizar_momento_ia(analisis_id):
         analisis.estado = AnalisisMomentoIA.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
+        plantilla = PlantillaAnalisis.objects.filter(
+            tipo=PlantillaAnalisis.TIPO_GPT_MOMENTO, predeterminada=True
+        ).first()
+        system = SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
         payload = _construir_payload_momento(analisis.momento)
         user = 'DATOS DEL MOMENTO (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
         modelo = DEFAULT_MODEL
-        resultado, error = _llamar_openai_json(SYSTEM_PROMPT, user, model=modelo)
+        resultado, error = _llamar_openai_json(system, user, model=modelo)
 
         if resultado:
             analisis.resultado = _validar_y_limpiar(resultado, analisis.momento)

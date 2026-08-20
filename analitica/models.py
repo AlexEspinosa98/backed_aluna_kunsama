@@ -6,12 +6,30 @@ from jornadas.models import Jornada, Momento
 
 
 class PlantillaAnalisis(models.Model):
+    # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
+    # aplican a cada pregunta, momento y jornada, ver _instrucciones_plantilla.
+    # 'gpt_momento': instrucciones adicionales para el análisis de instrumento completo vía OpenAI
+    # (analisis_ia_openai.py) — un tipo de plantilla independiente porque son prompts de propósito
+    # distinto (uno redacta muchas descripciones cortas, el otro un reporte con hallazgos
+    # cruzados); cada tipo tiene su propia plantilla "predeterminada".
+    TIPO_LOCAL = 'local'
+    TIPO_GPT_MOMENTO = 'gpt_momento'
+    TIPO_CHOICES = [
+        (TIPO_LOCAL, 'Pipeline local (por pregunta/momento/jornada)'),
+        (TIPO_GPT_MOMENTO, 'Análisis de momento completo vía OpenAI'),
+    ]
+
     nombre = models.CharField(max_length=150, unique=True)
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default=TIPO_LOCAL)
     prompt_sistema = models.TextField(
         help_text='Instrucciones de tono, foco y longitud para el LLM. Los datos '
         '(estadísticas y tópicos) se le entregan aparte, ya calculados.'
     )
-    predeterminada = models.BooleanField(default=False)
+    predeterminada = models.BooleanField(
+        default=False,
+        help_text='Solo una plantilla puede ser predeterminada POR TIPO — marcar una nueva '
+        'desmarca automáticamente la anterior del mismo tipo, nunca las del otro tipo.',
+    )
     creada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='plantillas_analisis_creadas',
@@ -28,7 +46,9 @@ class PlantillaAnalisis(models.Model):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         if self.predeterminada:
-            PlantillaAnalisis.objects.exclude(pk=self.pk).update(predeterminada=False)
+            PlantillaAnalisis.objects.exclude(pk=self.pk).filter(tipo=self.tipo).update(
+                predeterminada=False
+            )
 
 
 class Reporte(models.Model):
