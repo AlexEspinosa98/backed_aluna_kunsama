@@ -37,6 +37,8 @@ JORNADA = {
     'activa': True,
 }
 
+ESCALA_ACUERDO_OPCIONES = ['De acuerdo', 'Requiere ajuste', 'No debería incorporarse']
+
 HILO_EIBIC_OPCIONES = [
     'Verde — capacidad o fortaleza que debe consolidarse',
     'Rojo — riesgo, dilema, conflicto o barrera que debe resolverse',
@@ -69,34 +71,40 @@ MOMENTOS = [
             'Responde individualmente antes de la deliberación en mesa.'
         ),
         'preguntas': [
-            {'texto': '¿Qué principio ético debería ser irrenunciable en toda actividad de '
-                       'investigación, innovación, creación y transferencia que se desarrolle en '
-                       'UNIMAGDALENA?'},
-            {'texto': '¿En qué momentos del ciclo de una investigación —formulación, evaluación, '
-                       'ejecución, manejo de datos, publicación, transferencia o apropiación— '
-                       'considera que existen hoy los mayores riesgos éticos o de integridad '
-                       'científica?'},
-            {'texto': '¿Qué dilema o conflicto ético considera más urgente prevenir o gestionar '
-                       'en la Universidad: conflictos de interés, autoría, propiedad intelectual, '
-                       'manejo de datos, consentimiento informado, relación con comunidades, uso '
-                       'de inteligencia artificial, evaluación, publicación u otro?'},
-            {'texto': '¿Qué debería cambiar en el Comité de Ética en Investigación y sus '
-                       'subcomités para responder de manera oportuna, especializada y '
-                       'proporcional a la diversidad de investigaciones, disciplinas y niveles de '
-                       'riesgo de la Universidad?'},
-            {'texto': '¿Cuáles conocimientos y capacidades mínimas en ética de la investigación, '
-                       'bioética e integridad científica deberían desarrollar toda persona que '
-                       'participe en actividades de investigación y creación en UNIMAGDALENA?'},
-            {'texto': '¿Cuáles responsabilidades tienen los investigadores en una investigación '
-                       'que involucre personas, comunidades, pueblos y saberes tradicionales, '
-                       'animales, biodiversidad, datos sensibles o tecnologías emergentes, para '
-                       'asegurar respeto, participación, reconocimiento, beneficios y protección '
-                       'frente a posibles daños?'},
-            {'texto': '¿Cuál es el principio ético fundamental que debe orientar toda actividad '
-                       'de investigación, innovación, creación y transferencia en Unimagdalena, y '
-                       'cuáles deberían ser los tres compromisos irrenunciables de investigadores '
-                       'y de la Universidad cuando se transita de investigación académica a '
-                       'innovación, empresa, emprendimiento o spin-off?'},
+            {'texto': 'Reconocer que la ética debe acompañar investigación, creación, '
+                       'innovación, emprendimiento, transferencia y apropiación del '
+                       'conocimiento.', 'tipo': Pregunta.TIPO_UNICA,
+             'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Reconocer y respetar diferentes formas de conocimiento y promover el '
+                       'diálogo de saberes cuando sea pertinente.', 'tipo': Pregunta.TIPO_UNICA,
+             'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Involucrar a comunidades y actores del territorio desde etapas tempranas '
+                       'cuando los proyectos los afecten o utilicen sus conocimientos.',
+             'tipo': Pregunta.TIPO_UNICA, 'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Fortalecer reglas para protección de datos, transparencia y uso '
+                       'responsable de inteligencia artificial.', 'tipo': Pregunta.TIPO_UNICA,
+             'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Evaluar no solo el cumplimiento inicial, sino también los posibles '
+                       'efectos y aprendizajes de los proyectos.', 'tipo': Pregunta.TIPO_UNICA,
+             'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Articular el Comité de Ética con otras instancias institucionales, '
+                       'evitando duplicidades y trámites innecesarios.',
+             'tipo': Pregunta.TIPO_UNICA, 'opciones': ESCALA_ACUERDO_OPCIONES},
+            {'texto': 'Si marcó "Requiere ajuste" en alguno de los elementos anteriores, indique '
+                       'brevemente qué cambiaría.', 'obligatoria': False},
+            {'texto': 'Cuando una investigación o proyecto trabaja con comunidades o con '
+                       'conocimientos propios del territorio, ¿qué prácticas mínimas debería '
+                       'exigir la Universidad para asegurar una relación respetuosa, justa y '
+                       'útil para todas las partes?'},
+            {'texto': '¿Qué situaciones relacionadas con datos o inteligencia artificial '
+                       'consideran que requieren mayor cuidado o reglas más claras en la '
+                       'Universidad? ¿Qué protección concreta propondrían?'},
+            {'texto': '¿En qué momentos de un proyecto debería existir acompañamiento ético y '
+                       'qué debería hacer la Universidad para que ese acompañamiento ayude '
+                       'realmente a los investigadores, sin generar trámites innecesarios?'},
+            {'texto': 'Si tuviéramos que escoger tres cambios indispensables para que este '
+                       'nuevo marco responda a la Universidad que queremos construir, ¿cuáles '
+                       'deberían ser y por qué?'},
         ],
     },
     {
@@ -277,7 +285,7 @@ class Command(BaseCommand):
                     defaults={
                         'texto': pregunta_data['texto'],
                         'tipo': pregunta_data.get('tipo', Pregunta.TIPO_ABIERTA),
-                        'obligatoria': True,
+                        'obligatoria': pregunta_data.get('obligatoria', True),
                         'activa': True,
                     },
                 )

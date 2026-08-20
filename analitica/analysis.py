@@ -577,13 +577,14 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         "a 3 frases cortas, en español, priorizando los números concretos (porcentajes, tamaños) "
         "sobre interpretación extensa. Ve directo al dato: nunca empieces con muletillas como "
         "'Resultados de la encuesta:', 'Los resultados indican que' o 'Descripción de los "
-        "resultados:' — esas frases no aportan nada y suenan robóticas. Señala el hallazgo "
-        "principal (qué tema domina o si la opinión está dividida, citando la cifra exacta) y, "
-        "solo si cabe en una frase corta, su implicación práctica — sin elaborar hipótesis "
-        "largas sobre el porqué, y sin recurrir a frases genéricas repetibles en cualquier "
-        "informe como 'es fundamental', 'es crucial' o 'implicación práctica:'; si no hay una "
-        "implicación específica que valga la pena, omítela. Usa EXCLUSIVAMENTE los datos "
-        "entregados a continuación — nunca "
+        "resultados:' — esas frases no aportan nada y suenan robóticas. Escribe SIEMPRE dos "
+        "partes, nunca solo la primera: (1) el hallazgo con la cifra exacta (qué tema domina o "
+        "si la opinión está dividida), y (2) una conclusión breve — razona genuinamente, como lo "
+        "haría un analista real pensando qué le recomendaría a la Universidad a partir de ESTE "
+        "dato puntual, no una fórmula que aplicarías igual a cualquier otra pregunta. Nunca te "
+        "quedes solo citando el número, y nunca caigas en frases genéricas que servirían para "
+        "cualquier informe ('es fundamental', 'es crucial', 'implicación práctica:'). Usa "
+        "EXCLUSIVAMENTE los datos entregados a continuación — nunca "
         "inventes cifras ni ideas que no estén ahí. Si a un tema NO se le da un porcentaje o "
         "número de respuestas explícito, es porque no hay conteo real disponible para él — en "
         "ese caso menciónalo solo por su nombre, SIN inventarle ni asignarle ninguna cifra." +
@@ -644,7 +645,7 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         if pista_acuerdo:
             lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
 
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=200, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=230, temperature=0.5)
 
     tipo_grafica = None
     nivel_acuerdo = None
@@ -744,11 +745,13 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "cortas, en español, priorizando los números concretos (conteos, porcentajes) sobre la "
         "prosa. Ve directo al dato: nunca empieces con muletillas como 'Resultados de la "
         "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
-        "frases no aportan nada y suenan robóticas. Señala qué opción domina (o si está dividido, "
-        "citando las cifras exactas) y, solo si cabe en una frase corta, la implicación práctica, "
-        "sin frases genéricas repetibles en cualquier informe como 'es fundamental' o 'es "
-        "crucial' — si no hay una implicación específica que valga la pena, omítela. "
-        "Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
+        "frases no aportan nada y suenan robóticas. Escribe SIEMPRE dos partes, nunca solo la "
+        "primera: (1) qué opción domina (o si está dividido, citando las cifras exactas), y (2) "
+        "una conclusión breve — razona genuinamente, como lo haría un analista real pensando qué "
+        "le recomendaría a la Universidad a partir de ESTE dato puntual, no una fórmula que "
+        "aplicarías igual a cualquier otra pregunta. Nunca te quedes solo citando el número, y "
+        "nunca caigas en frases genéricas que servirían para cualquier informe ('es fundamental', "
+        "'es crucial'). Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
         "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
         "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
         "'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), 'GRAFICA: barras' (comparación "
@@ -763,7 +766,7 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
-    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=160, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=190, temperature=0.5)
 
     tipo_grafica = None
     if texto:
@@ -894,15 +897,16 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
         "pregunta por pregunta, ve directo al dato/tema más relevante del conjunto (qué domina, "
         "dónde hay consenso o división, citando cifras concretas cuando estén disponibles). "
         "Evita relleno institucional y frases genéricas repetidas como 'es fundamental que', 'es "
-        "crucial', 'recomiendo implementar programas de formación' — si agregas una "
-        "recomendación, que sea UNA sola, concreta y específica a estos datos, no una frase "
-        "hecha que serviría para cualquier informe. Nunca empieces con muletillas como "
+        "crucial', 'recomiendo implementar programas de formación'. Cierra con UNA "
+        "recomendación — razónala genuinamente, como lo haría un analista real pensando qué le "
+        "sugeriría a la Universidad a partir de ESTE conjunto de datos puntual, no una fórmula "
+        "que aplicarías igual en cualquier otro momento. Nunca empieces con muletillas como "
         "'Resultados de la encuesta:' o 'Los resultados indican que'. No agregues datos que no "
         "estén en las descripciones dadas. Español." +
         _instrucciones_plantilla(plantilla)
     )
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
-    descripcion_general, error = _llamar_llm(system, user, max_tokens=180, temperature=0.5)
+    descripcion_general, error = _llamar_llm(system, user, max_tokens=220, temperature=0.5)
 
     return {
         'momento_id': momento.id,
