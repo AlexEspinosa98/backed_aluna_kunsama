@@ -349,6 +349,141 @@ Error (falta el filtro), `400`:
 ```
 </details>
 
+### HU-11c — Ver qué participantes ya terminaron y cuánto llevan
+Como administrador quiero una lista de los participantes de una jornada con su avance — cuántas preguntas obligatorias lleva respondidas cada uno en cada momento y en el instrumento completo — para saber quién ya terminó y a quién le falta, sin tener que cruzar manualmente HU-11b contra el registro de participantes.
+- `GET /api/admin/progreso-participantes/?jornada=<id>` — `jornada` es obligatorio.
+- Opcional `?solo_completados=true` para traer solo quienes ya terminaron el instrumento completo (todos los momentos).
+- Responde en la misma petición (síncrono) — son conteos agregados de la base de datos, igual que HU-11b; sin IA.
+- El avance se cuenta solo sobre preguntas `obligatoria: true` y `activa: true` — las opcionales no bloquean el "completado".
+- Para momentos `tipo: "mesa"` el avance es el de la MESA, no de la persona: como solo el vocero envía (ver HU-22), todos los integrantes de una misma mesa comparten el mismo `respondidas`/`completado` en esos momentos. Un participante sin mesa asignada siempre muestra 0 en los momentos de mesa.
+- `completado_instrumento: true` significa que ya respondió (o su mesa ya respondió, según el tipo de cada momento) TODAS las preguntas obligatorias de TODOS los momentos activos de la jornada.
+
+<details><summary>Ejemplo — <code>GET /api/admin/progreso-participantes/?jornada=5</code></summary>
+
+Response `200`:
+```json
+[
+  {
+    "participante_id": 12,
+    "nombre": "Ricardo",
+    "apellido": "Pupo",
+    "correo_institucional": "rpupo@unimagdalena.edu.co",
+    "rol": "estudiante",
+    "mesa": 22,
+    "es_vocero": true,
+    "momentos": [
+      {
+        "momento_id": 3,
+        "titulo": "Reflexión individual sobre ética",
+        "tipo": "individual",
+        "respondidas": 4,
+        "total_obligatorias": 4,
+        "completado": true
+      },
+      {
+        "momento_id": 4,
+        "titulo": "Consenso de mesa — EIBIC",
+        "tipo": "mesa",
+        "respondidas": 2,
+        "total_obligatorias": 5,
+        "completado": false
+      }
+    ],
+    "total_respondidas": 6,
+    "total_obligatorias": 9,
+    "completado_instrumento": false
+  },
+  {
+    "participante_id": 13,
+    "nombre": "Vanesa",
+    "apellido": "Martínez",
+    "correo_institucional": "vmartinez@unimagdalena.edu.co",
+    "rol": "directivo",
+    "mesa": 22,
+    "es_vocero": false,
+    "momentos": [
+      { "momento_id": 3, "titulo": "Reflexión individual sobre ética", "tipo": "individual", "respondidas": 4, "total_obligatorias": 4, "completado": true },
+      { "momento_id": 4, "titulo": "Consenso de mesa — EIBIC", "tipo": "mesa", "respondidas": 2, "total_obligatorias": 5, "completado": false }
+    ],
+    "total_respondidas": 6,
+    "total_obligatorias": 9,
+    "completado_instrumento": false
+  }
+]
+```
+Nótese que Ricardo y Vanesa comparten el mismo avance en el momento 4 (tipo mesa) porque están en la misma mesa (22) — solo Ricardo, el vocero, puede enviarlo, pero el avance se refleja en ambos.
+
+Error (falta el filtro), `400`:
+```json
+{ "detail": "Debes indicar ?jornada=<id>." }
+```
+
+Error (jornada sin momentos activos), `404`:
+```json
+{ "detail": "Esta jornada no tiene momentos activos." }
+```
+</details>
+
+### HU-11d — Ver cuántas mesas hay y quién está en cada una
+Como administrador quiero ver de un vistazo cuántas mesas quedaron formadas en una jornada y qué participantes (y quién es el vocero) hay en cada una, para revisar que la distribución quedó bien antes de que arranquen los momentos grupales.
+- `GET /api/admin/mesas/?jornada=<id>` — `jornada` es obligatorio.
+- Agrupa a todos los participantes de la jornada por su campo `mesa` (fijado en el registro, ver HU-10/HU-17, editable por admin vía HU-10b). Dentro de cada mesa, `vocero` es el participante con `es_vocero: true` de esa mesa (o `null` si todavía no tiene) — nunca hay más de uno, porque el registro y el PATCH de admin lo impiden (ver HU-17/HU-10b).
+- Los participantes sin mesa asignada (`mesa: null`) van aparte en `sin_mesa_asignada`, no cuentan como una "mesa" más.
+
+<details><summary>Ejemplo — <code>GET /api/admin/mesas/?jornada=5</code></summary>
+
+Response `200`:
+```json
+{
+  "jornada_id": 5,
+  "total_mesas": 2,
+  "mesas": [
+    {
+      "mesa": 12,
+      "total_participantes": 3,
+      "vocero": {
+        "participante_id": 8,
+        "nombre": "Laura",
+        "apellido": "Gómez",
+        "correo_institucional": "lgomez@unimagdalena.edu.co",
+        "rol": "docente",
+        "es_vocero": true
+      },
+      "participantes": [
+        { "participante_id": 8, "nombre": "Laura", "apellido": "Gómez", "correo_institucional": "lgomez@unimagdalena.edu.co", "rol": "docente", "es_vocero": true },
+        { "participante_id": 9, "nombre": "Andrés", "apellido": "Pérez", "correo_institucional": "aperez@unimagdalena.edu.co", "rol": "estudiante", "es_vocero": false },
+        { "participante_id": 10, "nombre": "Camila", "apellido": "Ruiz", "correo_institucional": "cruiz@unimagdalena.edu.co", "rol": "estudiante", "es_vocero": false }
+      ]
+    },
+    {
+      "mesa": 22,
+      "total_participantes": 2,
+      "vocero": {
+        "participante_id": 12,
+        "nombre": "Ricardo",
+        "apellido": "Pupo",
+        "correo_institucional": "rpupo@unimagdalena.edu.co",
+        "rol": "estudiante",
+        "es_vocero": true
+      },
+      "participantes": [
+        { "participante_id": 12, "nombre": "Ricardo", "apellido": "Pupo", "correo_institucional": "rpupo@unimagdalena.edu.co", "rol": "estudiante", "es_vocero": true },
+        { "participante_id": 13, "nombre": "Vanesa", "apellido": "Martínez", "correo_institucional": "vmartinez@unimagdalena.edu.co", "rol": "directivo", "es_vocero": false }
+      ]
+    }
+  ],
+  "sin_mesa_asignada": [
+    { "participante_id": 14, "nombre": "Jorge", "apellido": "Díaz", "correo_institucional": "jdiaz@unimagdalena.edu.co", "rol": "estudiante", "es_vocero": false }
+  ]
+}
+```
+
+Error (falta el filtro), `400`:
+```json
+{ "detail": "Debes indicar ?jornada=<id>." }
+```
+</details>
+
 ### HU-12 — Configurar plantillas de análisis con IA
 Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
 - CRUD completo en `/api/admin/plantillas-analisis/` (`GET`, `POST`) y `/api/admin/plantillas-analisis/{id}/` (`GET`, `PATCH`, `DELETE`).

@@ -2,7 +2,8 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .admin_views import (
-    AnalisisMomentoIAViewSet, EstadisticasPreguntasView, PlantillaAnalisisViewSet, ReporteViewSet,
+    AnalisisMomentoIAViewSet, EstadisticasPreguntasView, MesasView, PlantillaAnalisisViewSet,
+    ProgresoParticipantesView, ReporteViewSet,
 )
 
 router = DefaultRouter()
@@ -12,4 +13,6 @@ router.register('analisis-momento-ia', AnalisisMomentoIAViewSet, basename='admin
 
 urlpatterns = router.urls + [
     path('estadisticas-preguntas/', EstadisticasPreguntasView.as_view(), name='admin-estadisticas-preguntas'),
+    path('progreso-participantes/', ProgresoParticipantesView.as_view(), name='admin-progreso-participantes'),
+    path('mesas/', MesasView.as_view(), name='admin-mesas'),
 ]

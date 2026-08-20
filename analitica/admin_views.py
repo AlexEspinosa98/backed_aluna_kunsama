@@ -1,6 +1,7 @@
 import threading
 from datetime import timedelta
 
+from django.db.models import Count
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -272,3 +273,173 @@ class EstadisticasPreguntasView(APIView):
             for pregunta in preguntas
         ]
         return Response(data, status=status.HTTP_200_OK)
+
+
+class ProgresoParticipantesView(APIView):
+    """Lista de participantes de una jornada con su avance: cuántas preguntas obligatorias
+    lleva respondidas cada uno en cada momento y en el instrumento completo (todos los
+    momentos), y si ya terminó. Para momentos tipo mesa el avance es el de la mesa entera —
+    solo el vocero envía, pero todos sus compañeros de mesa comparten ese mismo avance,
+    porque la respuesta es de la mesa, no de la persona (ver RespuestasMomentoView)."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from jornadas.models import Momento
+        from participantes.models import Participante, Respuesta
+
+        jornada_id = request.query_params.get('jornada')
+        if not jornada_id:
+            return Response(
+                {'detail': 'Debes indicar ?jornada=<id>.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        momentos = list(Momento.objects.filter(jornada_id=jornada_id, activo=True).order_by('orden'))
+        if not momentos:
+            return Response(
+                {'detail': 'Esta jornada no tiene momentos activos.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        total_obligatorias_por_momento = {
+            momento.id: momento.preguntas.filter(activa=True, obligatoria=True).count()
+            for momento in momentos
+        }
+
+        respondidas_individual = (
+            Respuesta.objects.filter(
+                pregunta__momento__jornada_id=jornada_id,
+                pregunta__obligatoria=True,
+                pregunta__activa=True,
+                pregunta__momento__tipo=Momento.TIPO_INDIVIDUAL,
+                participante__isnull=False,
+            )
+            .values('participante_id', 'pregunta__momento_id')
+            .annotate(n=Count('pregunta_id', distinct=True))
+        )
+        avance_individual = {
+            (fila['participante_id'], fila['pregunta__momento_id']): fila['n']
+            for fila in respondidas_individual
+        }
+
+        respondidas_mesa = (
+            Respuesta.objects.filter(
+                pregunta__momento__jornada_id=jornada_id,
+                pregunta__obligatoria=True,
+                pregunta__activa=True,
+                pregunta__momento__tipo=Momento.TIPO_MESA,
+                mesa__isnull=False,
+            )
+            .values('mesa', 'pregunta__momento_id')
+            .annotate(n=Count('pregunta_id', distinct=True))
+        )
+        avance_mesa = {
+            (fila['mesa'], fila['pregunta__momento_id']): fila['n']
+            for fila in respondidas_mesa
+        }
+
+        participantes = Participante.objects.filter(jornada_id=jornada_id).order_by('nombre', 'apellido')
+
+        data = []
+        for participante in participantes:
+            momentos_progreso = []
+            total_respondidas = 0
+            total_obligatorias = 0
+            for momento in momentos:
+                total_momento = total_obligatorias_por_momento[momento.id]
+                if momento.tipo == Momento.TIPO_MESA:
+                    respondidas = (
+                        avance_mesa.get((participante.mesa, momento.id), 0)
+                        if participante.mesa is not None else 0
+                    )
+                else:
+                    respondidas = avance_individual.get((participante.id, momento.id), 0)
+                total_respondidas += respondidas
+                total_obligatorias += total_momento
+                momentos_progreso.append({
+                    'momento_id': momento.id,
+                    'titulo': momento.titulo,
+                    'tipo': momento.tipo,
+                    'respondidas': respondidas,
+                    'total_obligatorias': total_momento,
+                    'completado': respondidas >= total_momento,
+                })
+
+            data.append({
+                'participante_id': participante.id,
+                'nombre': participante.nombre,
+                'apellido': participante.apellido,
+                'correo_institucional': participante.correo_institucional,
+                'rol': participante.rol,
+                'mesa': participante.mesa,
+                'es_vocero': participante.es_vocero,
+                'momentos': momentos_progreso,
+                'total_respondidas': total_respondidas,
+                'total_obligatorias': total_obligatorias,
+                'completado_instrumento': total_respondidas >= total_obligatorias,
+            })
+
+        solo_completados = request.query_params.get('solo_completados')
+        if solo_completados in ('true', '1', 'True'):
+            data = [fila for fila in data if fila['completado_instrumento']]
+
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class MesasView(APIView):
+    """Cuántas mesas hay en una jornada y quién está en cada una — para que el admin vea de un
+    vistazo cómo quedó la distribución (y quién es el vocero de cada mesa) sin tener que armar
+    esa agrupación a mano a partir del listado plano de participantes."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from participantes.models import Participante
+
+        jornada_id = request.query_params.get('jornada')
+        if not jornada_id or not jornada_id.isdigit():
+            return Response(
+                {'detail': 'Debes indicar ?jornada=<id>.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        jornada_id = int(jornada_id)
+
+        participantes = Participante.objects.filter(jornada_id=jornada_id).order_by('mesa', 'nombre', 'apellido')
+
+        def _resumen_participante(p):
+            return {
+                'participante_id': p.id,
+                'nombre': p.nombre,
+                'apellido': p.apellido,
+                'correo_institucional': p.correo_institucional,
+                'rol': p.rol,
+                'es_vocero': p.es_vocero,
+            }
+
+        mesas = {}
+        sin_mesa = []
+        for p in participantes:
+            if p.mesa is None:
+                sin_mesa.append(_resumen_participante(p))
+                continue
+            mesas.setdefault(p.mesa, []).append(p)
+
+        data_mesas = []
+        for numero_mesa in sorted(mesas.keys()):
+            integrantes = mesas[numero_mesa]
+            vocero = next((p for p in integrantes if p.es_vocero), None)
+            data_mesas.append({
+                'mesa': numero_mesa,
+                'total_participantes': len(integrantes),
+                'vocero': _resumen_participante(vocero) if vocero else None,
+                'participantes': [_resumen_participante(p) for p in integrantes],
+            })
+
+        return Response(
+            {
+                'jornada_id': jornada_id,
+                'total_mesas': len(data_mesas),
+                'mesas': data_mesas,
+                'sin_mesa_asignada': sin_mesa,
+            },
+            status=status.HTTP_200_OK,
+        )
