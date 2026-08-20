@@ -78,6 +78,19 @@ class LoginParticipanteView(APIView):
         return Response(ParticipanteSerializer(participante).data, status=status.HTTP_200_OK)
 
 
+class MeParticipanteView(APIView):
+    """El front guarda el token del participante (localStorage) tras el registro (HU-17) o el
+    login por correo (HU-18b) — este endpoint le deja recuperar los datos completos de ese
+    participante mandando solo el token ya guardado, sin volver a pedir el correo. Devuelve
+    exactamente el mismo cuerpo que login/registro, para que el front pueda reusar el mismo
+    parseo en los tres casos."""
+    permission_classes = [EsParticipanteDeLaJornada]
+
+    @extend_schema(responses=ParticipanteSerializer)
+    def get(self, request, jornada_slug):
+        return Response(ParticipanteSerializer(request.user).data, status=status.HTTP_200_OK)
+
+
 class MomentosIndiceView(generics.ListAPIView):
     serializer_class = MomentoIndiceSerializer
     permission_classes = [EsParticipanteDeLaJornada]

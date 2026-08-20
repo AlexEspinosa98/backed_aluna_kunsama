@@ -4,6 +4,7 @@ from .views import (
     JornadaDetalleView,
     JornadaListaView,
     LoginParticipanteView,
+    MeParticipanteView,
     MomentoDetalleView,
     MomentosIndiceView,
     RegistroParticipanteView,
@@ -15,6 +16,7 @@ urlpatterns = [
     path('jornadas/<slug:jornada_slug>/', JornadaDetalleView.as_view(), name='jornada-detalle'),
     path('jornadas/<slug:jornada_slug>/registro/', RegistroParticipanteView.as_view(), name='jornada-registro'),
     path('jornadas/<slug:jornada_slug>/login/', LoginParticipanteView.as_view(), name='jornada-login'),
+    path('jornadas/<slug:jornada_slug>/me/', MeParticipanteView.as_view(), name='jornada-me'),
     path('jornadas/<slug:jornada_slug>/momentos/', MomentosIndiceView.as_view(), name='momentos-indice'),
     path(
         'jornadas/<slug:jornada_slug>/momentos/<int:momento_id>/',

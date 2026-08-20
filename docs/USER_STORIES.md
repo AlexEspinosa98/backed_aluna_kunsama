@@ -1028,6 +1028,48 @@ Error (correo no registrado en esta jornada), `404`:
 ```
 </details>
 
+### HU-18c — Recuperar mis datos con el token ya guardado (sesión activa)
+Como usuario cuyo front ya tiene mi token guardado (localStorage, tras el registro o el login), quiero un endpoint que me devuelva mis datos completos mandando solo ese token — sin volver a pedir mi correo — para repoblar el estado de la app al abrirla de nuevo (recargar la página, volver más tarde) sin pasar otra vez por el flujo de login.
+- `GET /api/jornadas/{slug}/me/` con header `Authorization: Participant <token>` — mismo mecanismo de autenticación que ya usan todos los demás endpoints de participante (HU-19 en adelante).
+- Devuelve exactamente el mismo cuerpo que HU-17 (registro) y HU-18b (login) — mismo `ParticipanteSerializer`, para que el front reutilice el mismo parseo en los tres casos.
+- `401` si el token no existe o es inválido (mismo comportamiento que cualquier otro endpoint protegido, ver HU-18). `403` si el token es válido pero pertenece a otra jornada distinta de `{slug}`.
+
+<details><summary>Ejemplo — <code>GET /api/jornadas/jornada-agil-2/me/</code></summary>
+
+Header:
+```
+Authorization: Participant b058878f-5797-40ac-ab56-9779902ab300
+```
+
+Response `200`:
+```json
+{
+  "id": 13,
+  "jornada": "jornada-agil-2",
+  "correo_institucional": "camila.gomez@unimagdalena.edu.co",
+  "nombre": "Camila",
+  "apellido": "Gómez",
+  "telefono": "3000000000",
+  "rol": "estudiante",
+  "mesa": 3,
+  "es_vocero": true,
+  "slug": "camila-gomez",
+  "token": "b058878f-5797-40ac-ab56-9779902ab300",
+  "creado_en": "2026-08-18T19:11:58.251917-05:00"
+}
+```
+
+Error (token inválido o inexistente), `401`:
+```json
+{ "detail": "Token de participante inválido." }
+```
+
+Error (token de otra jornada), `403`:
+```json
+{ "detail": "Debes autenticarte como participante de esta jornada." }
+```
+</details>
+
 ### HU-19 — Listar los momentos de mi jornada
 Como usuario ya registrado quiero consultar el índice de momentos de la jornada a la que pertenezco, para saber qué pasos debo recorrer.
 - `GET /api/jornadas/{slug}/momentos/` requiere el token del paso anterior y devuelve `id`, `orden`, `título`, `slug` (autogenerado del título, único dentro de la jornada) y `tipo` de cada momento activo, ordenados por `orden`.
