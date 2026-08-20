@@ -608,11 +608,15 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         "'Resultados de la encuesta:', 'Los resultados indican que' o 'Descripción de los "
         "resultados:' — esas frases no aportan nada y suenan robóticas. Escribe en prosa "
         "corrida, NUNCA con etiquetas o numeración como '(1)', '(2)', 'Hallazgo:' o "
-        "'Conclusión:' — esas palabras no deben aparecer en el texto. En una o dos frases "
-        "menciona SOLO el tema principal (el que domina, con su cifra exacta) — no enumeres "
-        "cada tema de la lista uno por uno. Cierra con una frase corta de conclusión — razona "
-        "genuinamente, como lo haría un analista real pensando qué le recomendaría a la "
-        "Universidad a partir de ESTE dato puntual, no una fórmula que aplicarías igual a "
+        "'Conclusión:' — esas palabras no deben aparecer en el texto. Lee primero el enunciado "
+        "exacto de la pregunta (te lo doy abajo) y ANCLA tu interpretación a ese contenido "
+        "específico — de qué trata realmente, qué principio/tema/decisión plantea — nunca "
+        "generalices con frases sobre 'satisfacción general', 'experiencia de los estudiantes' "
+        "o cualquier otro tema que la pregunta no esté planteando. En una o dos frases menciona "
+        "SOLO el tema principal (el que domina, con su cifra exacta) — no enumeres cada tema de "
+        "la lista uno por uno. Cierra con una frase corta de conclusión — razona genuinamente, "
+        "como lo haría un analista real pensando qué le recomendaría a la Universidad "
+        "específicamente sobre ESTE planteamiento, no una fórmula que aplicarías igual a "
         "cualquier otra pregunta. Nunca te quedes solo citando el número, nunca repitas la "
         "misma idea dos veces, y nunca caigas en frases genéricas que servirían para cualquier "
         "informe ('es fundamental', 'es crucial'). Usa EXCLUSIVAMENTE los datos entregados a "
@@ -623,6 +627,7 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         _instrucciones_plantilla(plantilla)
     )
     lineas = [
+        f"Pregunta: {pregunta.texto}",
         f"Respuestas de texto no vacías: {estad['respuestas_no_vacias']} "
         f"(de {estad['total_respuestas']} recibidas)."
     ]
@@ -780,10 +785,15 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "encuesta:', 'Los resultados indican que' o 'Descripción de los resultados:' — esas "
         "frases no aportan nada y suenan robóticas. Escribe en prosa corrida, NUNCA con "
         "etiquetas o numeración como '(1)', '(2)', 'Hallazgo:' o 'Conclusión:' — esas palabras "
-        "no deben aparecer en el texto. Menciona qué opción domina (o si está dividido, citando "
+        "no deben aparecer en el texto. Lee primero el enunciado exacto de la pregunta (te lo "
+        "doy abajo) y ANCLA tu interpretación a ese contenido específico — de qué trata "
+        "realmente, qué principio/tema/decisión plantea — nunca generalices con frases sobre "
+        "'satisfacción general', 'experiencia de los estudiantes' o cualquier otro tema que la "
+        "pregunta no esté planteando. Menciona qué opción domina (o si está dividido, citando "
         "las cifras exactas) y cierra con una frase corta de conclusión — razona genuinamente, "
-        "como lo haría un analista real pensando qué le recomendaría a la Universidad a partir "
-        "de ESTE dato puntual, no una fórmula que aplicarías igual a cualquier otra pregunta. "
+        "como lo haría un analista real pensando qué le recomendaría a la Universidad "
+        "específicamente sobre ESTE planteamiento, no una fórmula que aplicarías igual a "
+        "cualquier otra pregunta. "
         "Nunca te quedes solo citando el número, nunca repitas la misma idea dos veces, y nunca "
         "caigas en frases genéricas que servirían para cualquier informe ('es fundamental', "
         "'es crucial'). Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
@@ -795,7 +805,10 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "recomendación, síguela salvo que los datos digan claramente lo contrario." +
         _instrucciones_plantilla(plantilla)
     )
-    lineas = [f"Total de respuestas: {estad['total_respuestas']}."]
+    lineas = [
+        f"Pregunta: {pregunta.texto}",
+        f"Total de respuestas: {estad['total_respuestas']}.",
+    ]
     for opcion in opciones:
         lineas.append(f"- {opcion['texto']}: {opcion['conteo']} respuestas.")
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
