@@ -305,6 +305,50 @@ Response `200`:
 ```
 </details>
 
+### HU-11b — Ver estadísticas reales por pregunta, sin IA
+Como administrador quiero ver de un vistazo cuántas respuestas tiene cada pregunta de un momento o de toda la jornada (y, para preguntas de opción, el conteo por opción), para revisar los números crudos sin tener que generar un reporte completo con IA.
+- `GET /api/admin/estadisticas-preguntas/?momento=<id>` o `?jornada=<id>` — al menos uno de los dos es obligatorio; con `jornada` trae las preguntas de todos sus momentos.
+- Responde en la misma petición (síncrono) — son solo conteos agregados de la base de datos, sin ninguna llamada a un modelo de IA (ni local ni externo).
+- Es la MISMA función (`_estadisticas_pregunta`) que usan por debajo tanto el pipeline local (HU-13) como el análisis vía OpenAI (HU-14d) para sus cifras — nunca puede mostrar un número distinto al que terminan citando esos reportes.
+- Para preguntas `abierta`: `estadisticas` trae `total_respuestas` y `respuestas_no_vacias`. Para `unica`/`multiple`: `total_respuestas` y `conteo_opciones` (una entrada por opción con su conteo real).
+
+<details><summary>Ejemplo — <code>GET /api/admin/estadisticas-preguntas/?momento=3</code></summary>
+
+Response `200`:
+```json
+[
+  {
+    "pregunta_id": 38,
+    "momento_id": 3,
+    "texto": "Reconocer que la ética debe acompañar investigación, creación, innovación, emprendimiento, transferencia y apropiación del conocimiento.",
+    "tipo": "unica",
+    "obligatoria": true,
+    "estadisticas": {
+      "total_respuestas": 25,
+      "conteo_opciones": [
+        {"opcion_id": 16, "texto": "De acuerdo", "conteo": 20},
+        {"opcion_id": 17, "texto": "Requiere ajuste", "conteo": 5},
+        {"opcion_id": 18, "texto": "No debería incorporarse", "conteo": 0}
+      ]
+    }
+  },
+  {
+    "pregunta_id": 45,
+    "momento_id": 3,
+    "texto": "Cuando una investigación o proyecto trabaja con comunidades o con conocimientos propios del territorio, ¿qué prácticas mínimas debería exigir la Universidad...?",
+    "tipo": "abierta",
+    "obligatoria": true,
+    "estadisticas": { "total_respuestas": 25, "respuestas_no_vacias": 25 }
+  }
+]
+```
+
+Error (falta el filtro), `400`:
+```json
+{ "detail": "Debes indicar ?momento=<id> o ?jornada=<id>." }
+```
+</details>
+
 ### HU-12 — Configurar plantillas de análisis con IA
 Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
 - CRUD completo en `/api/admin/plantillas-analisis/` (`GET`, `POST`) y `/api/admin/plantillas-analisis/{id}/` (`GET`, `PATCH`, `DELETE`).
