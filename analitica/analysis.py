@@ -141,12 +141,19 @@ def _purgar_cifras_falsas(texto):
 ETIQUETA_ESTRUCTURA_RE = re.compile(
     r'\(?\b[12]\)\s*|\b(?:Hallazgo|Conclusi[oó]n|Recomendaci[oó]n)\s*:\s*', re.IGNORECASE
 )
+# La elección de gráfica va en su propia línea (ver GRAFICA_TAG_RE) pero el modelo a veces también
+# la comenta en prosa ("Recomiendo la gráfica de barras para...") — un comentario técnico sobre
+# cómo renderizar el dato no tiene lugar en el texto que lee la Rectoría. Cualquier frase que
+# mencione la palabra "gráfica" ya sobrevivió a la extracción del tag, así que es necesariamente
+# ese tipo de comentario colado; se retira la frase completa.
+MENCION_GRAFICA_RE = re.compile(r'[^.!?]*\bgr[aá]fic[ao]s?\b[^.!?]*[.!?]?', re.IGNORECASE)
 
 
 def _purgar_etiquetas_estructura(texto):
     if not texto:
         return texto
-    limpio = ETIQUETA_ESTRUCTURA_RE.sub('', texto)
+    limpio = MENCION_GRAFICA_RE.sub('', texto)
+    limpio = ETIQUETA_ESTRUCTURA_RE.sub('', limpio)
     limpio = re.sub(r'\s+([.,;:])', r'\1', limpio)
     limpio = re.sub(r'\s{2,}', ' ', limpio).strip()
     # La instrucción de "hallazgo + conclusión" a veces hace que el modelo escriba la misma
@@ -651,7 +658,10 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
 
     if graficable:
         system += (
-            " Luego, en una línea aparte, recomienda la gráfica que mejor muestre hacia "
+            " La elección de gráfica es un dato técnico aparte, NUNCA la menciones ni la "
+            "justifiques dentro de tu texto narrativo (nada de 'recomiendo la gráfica de "
+            "barras' en la prosa) — va solo en su propia línea al final. Luego, en esa línea "
+            "aparte, recomienda la gráfica que mejor muestre hacia "
             "dónde se inclina el público entre los temas encontrados, escribiendo EXACTAMENTE "
             "una de estas líneas: 'GRAFICA: pastel' (pocos temas, uno domina claramente), "
             "'GRAFICA: barras' (comparación simple de tamaños), o 'GRAFICA: radar' (varios temas "
@@ -796,7 +806,10 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
         "cualquier otra pregunta. "
         "Nunca te quedes solo citando el número, nunca repitas la misma idea dos veces, y nunca "
         "caigas en frases genéricas que servirían para cualquier informe ('es fundamental', "
-        "'es crucial'). Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. Luego, "
+        "'es crucial'). Usa EXCLUSIVAMENTE los datos entregados — nunca inventes cifras. "
+        "La elección de gráfica es un dato técnico aparte, NUNCA la menciones ni la "
+        "justifiques dentro de tu texto narrativo (nada de 'recomiendo la gráfica de barras' "
+        "en la prosa) — va solo en su propia línea al final. Luego, "
         "en una última línea aparte, recomienda la gráfica que mejor muestre hacia dónde se "
         "inclina el público entre las opciones, escribiendo EXACTAMENTE una de estas tres líneas: "
         "'GRAFICA: pastel' (pocas opciones mutuamente excluyentes), 'GRAFICA: barras' (comparación "
