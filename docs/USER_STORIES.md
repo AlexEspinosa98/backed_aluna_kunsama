@@ -571,6 +571,67 @@ Request:
 Response `201`: mismo cuerpo que el ejemplo de HU-12, con `tipo: "gpt_momento"`.
 </details>
 
+### HU-14f — Ventana de edición del prompt del análisis de instrumento completo
+Como administrador quiero abrir una ventana dedicada que me muestre el prompt actual del análisis de instrumento completo (HU-14d) y me deje editarlo y guardarlo, para ajustar su tono/foco sin tener que entender el sistema general de plantillas ni su campo `tipo`.
+
+Es el mismo recurso de HU-12/HU-14e (`/api/admin/plantillas-analisis/`) — esta historia describe el flujo completo, de punta a punta, para implementar esa ventana como si fuera independiente. El frontend siempre manda `tipo: "gpt_momento"` fijo (quemado) en cada request; nunca se lo pide al usuario ni lo expone en la UI.
+
+**1. Al abrir la ventana — cargar el prompt actual (o detectar que no existe ninguno todavía):**
+```
+GET /api/admin/plantillas-analisis/?tipo=gpt_momento&predeterminada=true
+```
+- Si devuelve un array con un elemento: ese es el prompt activo — precarga su `prompt_sistema` en el textarea y guarda su `id` (lo vas a necesitar para el `PATCH` del paso 3).
+- Si devuelve un array vacío `[]`: todavía no existe ninguno — el motor está usando su prompt base de fábrica. Muestra el textarea vacío con un placeholder tipo *"Sin personalizar — se está usando el comportamiento por defecto"* y en el paso 3 usa `POST` en vez de `PATCH`.
+
+<details><summary>Ejemplo — sin personalizar todavía</summary>
+
+Response `200`:
+```json
+[]
+```
+</details>
+
+<details><summary>Ejemplo — ya existe una personalización</summary>
+
+Response `200`:
+```json
+[
+  {
+    "id": 5,
+    "nombre": "Instrumento completo — foco en gobernanza",
+    "tipo": "gpt_momento",
+    "prompt_sistema": "Da prioridad a los hallazgos relacionados con gobernanza institucional y toma de decisiones sobre los puramente operativos. Cuando compares posturas, sé explícito sobre si la divergencia es de fondo (principios) o de forma (implementación).",
+    "predeterminada": true,
+    "creada_por": 3,
+    "creado_en": "2026-08-19T23:10:00-05:00",
+    "actualizado_en": "2026-08-19T23:10:00-05:00"
+  }
+]
+```
+</details>
+
+**2. Mientras el usuario escribe:** solo el campo `prompt_sistema` es editable en esta ventana — es texto libre, sin estructura que validar en el cliente. Un campo `nombre` corto también es requerido por el backend; si la ventana no lo expone, generarlo automáticamente (ej. `"Instrumento completo — personalizado"`) es suficiente, no necesita ser significativo para el usuario.
+
+**3. Al guardar:**
+- Si en el paso 1 SÍ había un `id` → `PATCH /api/admin/plantillas-analisis/{id}/` con `{"prompt_sistema": "<el texto editado>"}`.
+- Si en el paso 1 NO había ninguno (`[]`) → `POST /api/admin/plantillas-analisis/` con `{"nombre": "...", "tipo": "gpt_momento", "prompt_sistema": "<el texto>", "predeterminada": true}`.
+- En ambos casos el cambio aplica de inmediato al siguiente `POST /api/admin/analisis-momento-ia/` que se dispare — no hace falta redeploy ni reinicio del backend.
+
+<details><summary>Ejemplo — guardar edición (ya existía, id 5)</summary>
+
+Request:
+```
+PATCH /api/admin/plantillas-analisis/5/
+```
+```json
+{ "prompt_sistema": "Prioriza hallazgos de gobernanza y toma de decisiones. Además, cuando el instrumento incluya preguntas sobre inteligencia artificial, dedica al menos un hallazgo específico a ese tema." }
+```
+
+Response `200`: el mismo objeto del paso 1 con `prompt_sistema` y `actualizado_en` actualizados.
+</details>
+
+**4. Restablecer al comportamiento de fábrica (opcional):** `DELETE /api/admin/plantillas-analisis/{id}/` — sin ninguna plantilla `gpt_momento` predeterminada, HU-14d vuelve a su prompt base sin ningún ajuste adicional.
+
 ## Participante / Usuario
 
 ### HU-15 — Ver jornadas disponibles
