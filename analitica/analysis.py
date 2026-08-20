@@ -564,7 +564,9 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         "principal (qué tema domina o si la opinión está dividida, citando la cifra exacta) y, "
         "solo si cabe en una frase corta, su implicación práctica — sin elaborar hipótesis "
         "largas sobre el porqué. Usa EXCLUSIVAMENTE los datos entregados a continuación — nunca "
-        "inventes cifras ni ideas que no estén ahí." +
+        "inventes cifras ni ideas que no estén ahí. Si a un tema NO se le da un porcentaje o "
+        "número de respuestas explícito, es porque no hay conteo real disponible para él — en "
+        "ese caso menciónalo solo por su nombre, SIN inventarle ni asignarle ninguna cifra." +
         _instrucciones_plantilla(plantilla)
     )
     lineas = [
@@ -584,9 +586,10 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         for tema in valores_caracteristicos:
             lineas.append(f"- Tema: {tema['tema']} ({tema['tamano']} respuestas, {tema['porcentaje']}%).")
     else:  # 'llm' o 'bertopic_sin_clasificar' — temas/frases sin conteo por tema
-        lineas.append('Temas/frases recurrentes: ' + '; '.join(
-            t['tema'] for t in valores_caracteristicos
-        ) + '.')
+        lineas.append(
+            'Temas/frases recurrentes (SIN conteo ni porcentaje real por tema — no inventes '
+            'ninguno): ' + '; '.join(t['tema'] for t in valores_caracteristicos) + '.'
+        )
 
     if graficable:
         system += (
