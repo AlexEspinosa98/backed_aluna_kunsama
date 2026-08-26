@@ -13,6 +13,7 @@ from .analysis import _estadisticas_pregunta, procesar_reporte
 from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
+from .reporte_excel import construir_excel_response
 from .serializers import (
     AnalisisMomentoIACrearSerializer, AnalisisMomentoIASerializer, PlantillaAnalisisSerializer,
     ReporteCrearSerializer, ReporteSerializer,
@@ -451,6 +452,7 @@ class MesasView(APIView):
 
     def get(self, request):
         from participantes.models import Participante
+        from participantes.utils import agrupar_por_mesa
 
         jornada_id = request.query_params.get('jornada')
         if not jornada_id or not jornada_id.isdigit():
@@ -472,13 +474,8 @@ class MesasView(APIView):
                 'es_vocero': p.es_vocero,
             }
 
-        mesas = {}
-        sin_mesa = []
-        for p in participantes:
-            if p.mesa is None:
-                sin_mesa.append(_resumen_participante(p))
-                continue
-            mesas.setdefault(p.mesa, []).append(p)
+        mesas, sin_mesa_objs = agrupar_por_mesa(participantes)
+        sin_mesa = [_resumen_participante(p) for p in sin_mesa_objs]
 
         data_mesas = []
         for numero_mesa in sorted(mesas.keys()):
@@ -500,3 +497,28 @@ class MesasView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class ReporteExcelJornadaView(APIView):
+    """Descarga el resultado completo de una jornada en un solo .xlsx: Resumen, Índice,
+    Participantes, Mesas, y una hoja por pregunta con su caracterización (fórmulas, no cifras
+    pegadas) y el detalle de cada respuesta — mismo formato validado a mano contra datos reales
+    (ver `analitica/reporte_excel.py`). 100% determinístico, sin IA, y sin filtrar por
+    `momento.activo`: funciona igual con la jornada en curso o ya cerrada."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        from jornadas.models import Jornada
+
+        jornada_id = request.query_params.get('jornada')
+        if not jornada_id or not jornada_id.isdigit():
+            return Response(
+                {'detail': 'Debes indicar ?jornada=<id>.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            jornada = Jornada.objects.get(pk=int(jornada_id))
+        except Jornada.DoesNotExist:
+            return Response({'detail': 'No existe una jornada con ese id.'}, status=status.HTTP_404_NOT_FOUND)
+
+        return construir_excel_response(jornada)

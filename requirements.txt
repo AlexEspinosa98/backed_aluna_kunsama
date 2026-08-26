@@ -11,3 +11,4 @@ bertopic
 sentence-transformers
 reportlab
 openai
+openpyxl
