@@ -1,11 +1,12 @@
 """Exporta el resultado completo de una jornada a un .xlsx — mismo formato validado a mano
-contra datos reales: Resumen, Índice, Participantes, Mesas, y una hoja por cada pregunta con su
-caracterización (conteos/porcentajes vía fórmulas, no cifras pegadas) y el detalle de cada
-respuesta. 100% determinístico, sin IA — reusa `_estadisticas_pregunta` (analysis.py), la misma
-fuente de verdad que ya usan el pipeline local, el análisis vía OpenAI y
-`estadisticas-preguntas`, así que las cifras nunca pueden desalinearse de las que se ven ahí.
-Deliberadamente NO filtra por `momento.activo`: una jornada cerrada, con todos sus momentos
-desactivados, es justo cuando más se necesita este reporte."""
+contra datos reales: Resumen, Índice, Participantes, Mesas, y una hoja por MOMENTO (no por
+pregunta) con todas sus preguntas apiladas, cada una con su caracterización (conteos/porcentajes
+vía fórmulas, no cifras pegadas) y el detalle completo de cada respuesta. 100% determinístico,
+sin IA — reusa `_estadisticas_pregunta` (analysis.py), la misma fuente de verdad que ya usan el
+pipeline local, el análisis vía OpenAI y `estadisticas-preguntas`, así que las cifras nunca
+pueden desalinearse de las que se ven ahí. Deliberadamente NO filtra por `momento.activo`: una
+jornada cerrada, con todos sus momentos desactivados, es justo cuando más se necesita este
+reporte."""
 import re
 from datetime import datetime
 from io import BytesIO
@@ -286,7 +287,7 @@ def generar_excel_jornada(jornada):
     ws_idx = wb.create_sheet(_safe_sheet_name('Índice', used_names))
     ws_idx.sheet_view.showGridLines = False
     ws_idx.freeze_panes = 'A3'
-    headers_idx = ['#', 'Momento', 'Tipo momento', 'Pregunta', 'Tipo pregunta', 'Obligatoria', 'Respuestas', 'Ir a la hoja']
+    headers_idx = ['#', 'Momento', 'Tipo momento', 'Pregunta', 'Tipo pregunta', 'Obligatoria', 'Respuestas', 'Ir a la pregunta']
     for col, w in zip('ABCDEFGH', [5, 26, 14, 55, 12, 12, 12, 16]):
         ws_idx.column_dimensions[col].width = w
     _style_title_row(ws_idx, 1, f'Índice de preguntas ({len(preguntas_flat)})', len(headers_idx))
@@ -295,201 +296,214 @@ def generar_excel_jornada(jornada):
     _style_header_cells(ws_idx, 2, 1, len(headers_idx))
     idx_row = 3
 
-    # ---------------- una hoja por pregunta ----------------
-    for n, item in enumerate(preguntas_flat, start=1):
-        m = item['momento']
-        p = item['pregunta']
-        stats = _estadisticas_pregunta(p)
-        total_resp = stats.get('total_respuestas', 0)
+    # ---------------- una hoja por momento, con todas sus preguntas apiladas ----------------
+    n = 0
+    for m in momentos:
+        preguntas_m = sorted([p for p in m.preguntas.all() if p.activa], key=lambda x: x.orden)
+        if not preguntas_m:
+            continue
         is_mesa = m.tipo == 'mesa'
         universo = total_mesas if is_mesa else total_participantes
-        opciones = list(p.opciones.all()) if p.tipo in ('unica', 'multiple') else []
 
-        short_text = re.sub(r'\s+', ' ', p.texto).strip()
-        sheet_title = _safe_sheet_name(f"M{m.orden}-P{p.orden} {short_text}", used_names)
-
+        titulo_limpio = re.sub(r'\s+', ' ', m.titulo).strip()
+        sheet_title = _safe_sheet_name(f'M{m.orden} {titulo_limpio}', used_names)
         wsp = wb.create_sheet(sheet_title)
         wsp.sheet_view.showGridLines = False
         ncols = 6
         for col, w in zip('ABCDEF', [24, 30, 14, 12, 30, 20]):
             wsp.column_dimensions[col].width = w
 
-        _style_title_row(wsp, 1, f"{m.titulo}  ·  Pregunta {p.orden} de {len([x for x in m.preguntas.all() if x.activa])}", ncols)
-        wsp.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
-        qc = wsp.cell(row=2, column=1, value=p.texto)
-        qc.font = Font(name=FONT_NAME, size=12, bold=True, color='17242A')
-        qc.alignment = ALIGN_WRAP
-        wsp.row_dimensions[2].height = 34
-
-        meta = (
-            f"Tipo: {p.tipo}  ·  Obligatoria: {'Sí' if p.obligatoria else 'No'}  ·  "
-            f"Ámbito: {'Por mesa (responde el vocero)' if is_mesa else 'Individual'}  ·  "
-            f"Momento tipo: {m.tipo}"
+        _style_title_row(wsp, 1, m.titulo, ncols)
+        row = 2
+        meta_momento = (
+            f"Tipo: {TIPO_MOMENTO_LABEL.get(m.tipo, m.tipo)}  ·  {len(preguntas_m)} preguntas  ·  "
+            f"Universo: {universo} ({'mesas' if is_mesa else 'participantes'})"
         )
-        wsp.merge_cells(start_row=3, start_column=1, end_row=3, end_column=ncols)
-        wsp.cell(row=3, column=1, value=meta).font = F_MUTED
-
-        row = 5
-        _style_section_row(wsp, row, 'Caracterización', ncols)
+        wsp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
+        wsp.cell(row=row, column=1, value=meta_momento).font = F_MUTED
         row += 1
-
-        if opciones:
-            for i, h in enumerate(['Opción', 'Conteo', '% sobre respuestas'], start=1):
-                wsp.cell(row=row, column=i, value=h)
-            _style_header_cells(wsp, row, 1, 3)
-            row += 1
-            first_opt_row = row
-            for op in sorted(opciones, key=lambda o: o.orden):
-                wsp.cell(row=row, column=1, value=op.texto).font = F_BODY
-                wsp.cell(row=row, column=1).border = BORDER
-                row += 1
-            last_opt_row = row - 1
-            row_total_stats = row
-            wsp.cell(row=row, column=1, value='Total de respuestas').font = F_LABEL
-            row += 1
-            wsp.cell(row=row, column=1, value='Cobertura sobre el universo').font = F_LABEL
-            row_coverage = row
-            row += 1
-            row_novacia = None
-        else:
-            first_opt_row = last_opt_row = None
-            row_total_stats = row
-            wsp.cell(row=row, column=1, value='Total de respuestas').font = F_LABEL
-            row += 1
-            wsp.cell(row=row, column=1, value='Respuestas no vacías').font = F_LABEL
-            row_novacia = row
-            row += 1
-            wsp.cell(row=row, column=1, value='Cobertura sobre el universo').font = F_LABEL
-            row_coverage = row
-            row += 1
-
-        wsp.cell(row=row, column=1, value='Universo (participantes/mesas esperadas)').font = F_LABEL
-        wsp.cell(row=row, column=2, value=universo).font = F_BODY
-        wsp.cell(row=row, column=2).alignment = ALIGN_CENTER
+        back_top = wsp.cell(row=row, column=1, value='← Volver al índice')
+        back_top.hyperlink = f"#'{ws_idx.title}'!A1"
+        back_top.font = F_LINK
         row += 2
 
-        _style_section_row(wsp, row, 'Respuestas registradas', ncols)
-        row += 1
+        for p in preguntas_m:
+            n += 1
+            block_start_row = row
+            stats = _estadisticas_pregunta(p)
+            total_resp = stats.get('total_respuestas', 0)
+            opciones = list(p.opciones.all()) if p.tipo in ('unica', 'multiple') else []
 
-        respuestas_de_pregunta = [r for r in respuestas_por_momento[m.id] if r.pregunta_id == p.id]
-
-        if is_mesa:
-            resp_por_mesa = {r.mesa: r for r in respuestas_de_pregunta if r.mesa is not None}
-            headers_resp = ['Mesa', 'Vocero', 'Respuesta', 'Última actualización']
-            for i, h in enumerate(headers_resp, start=1):
-                wsp.cell(row=row, column=i, value=h)
-            _style_header_cells(wsp, row, 1, len(headers_resp))
+            wsp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
+            qc = wsp.cell(row=row, column=1, value=f'Pregunta {p.orden} — {p.texto}')
+            qc.font = Font(name=FONT_NAME, size=12, bold=True, color='17242A')
+            qc.alignment = ALIGN_WRAP
+            wsp.row_dimensions[row].height = 30
             row += 1
-            first_resp_row = row
-            for mm in mesas_ordenadas:
-                r = resp_por_mesa.get(mm['mesa'])
-                voc = mm['vocero']
-                voc_name = f'{voc.nombre} {voc.apellido}' if voc else 'Sin vocero'
-                if r:
-                    valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
-                    fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
-                else:
-                    valor, fecha = '', ''
-                wsp.cell(row=row, column=1, value=mm['mesa']).alignment = ALIGN_CENTER
-                wsp.cell(row=row, column=2, value=voc_name).font = F_BODY
-                vc = wsp.cell(row=row, column=3, value=valor)
-                vc.font = F_BODY
-                vc.alignment = ALIGN_WRAP
-                wsp.cell(row=row, column=4, value=fecha).font = F_MUTED
-                for col in range(1, 5):
-                    wsp.cell(row=row, column=col).border = BORDER
-                    if not r:
-                        wsp.cell(row=row, column=col).fill = FILL_MISSING
-                    elif (row - first_resp_row) % 2 == 1:
-                        wsp.cell(row=row, column=col).fill = FILL_ALT
-                row += 1
-            last_resp_row = max(row - 1, first_resp_row)
-            resp_col_letter = 'C'
-        else:
-            resp_por_participante = {r.participante_id: r for r in respuestas_de_pregunta if r.participante_id is not None}
-            headers_resp = ['Participante', 'Correo', 'Rol', 'Mesa', 'Respuesta', 'Última actualización']
-            for i, h in enumerate(headers_resp, start=1):
-                wsp.cell(row=row, column=i, value=h)
-            wsp.column_dimensions['E'].width = 34
-            wsp.column_dimensions['F'].width = 20
-            _style_header_cells(wsp, row, 1, len(headers_resp))
+
+            meta = f"Tipo: {p.tipo}  ·  Obligatoria: {'Sí' if p.obligatoria else 'No'}"
+            wsp.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
+            wsp.cell(row=row, column=1, value=meta).font = F_MUTED
             row += 1
-            first_resp_row = row
-            for part in participantes:
-                r = resp_por_participante.get(part.id)
-                if r:
-                    valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
-                    fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
-                else:
-                    valor, fecha = '', ''
-                wsp.cell(row=row, column=1, value=f'{part.nombre} {part.apellido}').font = F_BODY
-                wsp.cell(row=row, column=2, value=part.correo_institucional).font = F_BODY
-                wsp.cell(row=row, column=3, value=part.rol.capitalize()).alignment = ALIGN_CENTER
-                wsp.cell(row=row, column=4, value=part.mesa if part.mesa is not None else '—').alignment = ALIGN_CENTER
-                vc = wsp.cell(row=row, column=5, value=valor)
-                vc.font = F_BODY
-                vc.alignment = ALIGN_WRAP
-                wsp.cell(row=row, column=6, value=fecha).font = F_MUTED
-                for col in range(1, 7):
-                    wsp.cell(row=row, column=col).border = BORDER
-                    if not r:
-                        wsp.cell(row=row, column=col).fill = FILL_MISSING
-                    elif (row - first_resp_row) % 2 == 1:
-                        wsp.cell(row=row, column=col).fill = FILL_ALT
+
+            _style_section_row(wsp, row, 'Caracterización', ncols)
+            row += 1
+
+            if opciones:
+                for i, h in enumerate(['Opción', 'Conteo', '% sobre respuestas'], start=1):
+                    wsp.cell(row=row, column=i, value=h)
+                _style_header_cells(wsp, row, 1, 3)
                 row += 1
-            last_resp_row = max(row - 1, first_resp_row)
-            resp_col_letter = 'E'
+                first_opt_row = row
+                for op in sorted(opciones, key=lambda o: o.orden):
+                    wsp.cell(row=row, column=1, value=op.texto).font = F_BODY
+                    wsp.cell(row=row, column=1).border = BORDER
+                    row += 1
+                last_opt_row = row - 1
+                row_total_stats = row
+                wsp.cell(row=row, column=1, value='Total de respuestas').font = F_LABEL
+                row += 1
+                wsp.cell(row=row, column=1, value='Cobertura sobre el universo').font = F_LABEL
+                row_coverage = row
+                row += 1
+                row_novacia = None
+            else:
+                first_opt_row = last_opt_row = None
+                row_total_stats = row
+                wsp.cell(row=row, column=1, value='Total de respuestas').font = F_LABEL
+                row += 1
+                wsp.cell(row=row, column=1, value='Respuestas no vacías').font = F_LABEL
+                row_novacia = row
+                row += 1
+                wsp.cell(row=row, column=1, value='Cobertura sobre el universo').font = F_LABEL
+                row_coverage = row
+                row += 1
 
-        resp_range = f'${resp_col_letter}${first_resp_row}:${resp_col_letter}${last_resp_row}'
-        if first_opt_row:
-            for i, r_ in enumerate(range(first_opt_row, last_opt_row + 1)):
-                cnt = wsp.cell(row=r_, column=2, value=f'=COUNTIF({resp_range},$A${r_})')
-                cnt.font = F_BODY
-                cnt.alignment = ALIGN_CENTER
-                cnt.border = BORDER
-                wsp.cell(row=r_, column=1).border = BORDER
-                pct = wsp.cell(row=r_, column=3, value=f'=IF($B${row_total_stats}=0,0,B{r_}/$B${row_total_stats})')
-                pct.number_format = '0.0%'
-                pct.font = F_BODY
-                pct.alignment = ALIGN_CENTER
-                pct.border = BORDER
-                if i % 2 == 1:
-                    for c in (1, 2, 3):
-                        wsp.cell(row=r_, column=c).fill = FILL_ALT
-            wsp.cell(row=row_total_stats, column=2, value=f'=SUM(B{first_opt_row}:B{last_opt_row})').font = F_BODY
-            wsp.cell(row=row_total_stats, column=2).alignment = ALIGN_CENTER
-        else:
-            wsp.cell(row=row_total_stats, column=2, value=f'=COUNTIF({resp_range},"?*")').font = F_BODY
-            wsp.cell(row=row_total_stats, column=2).alignment = ALIGN_CENTER
-            wsp.cell(row=row_novacia, column=2, value=f'=COUNTIF({resp_range},"?*")').font = F_BODY
-            wsp.cell(row=row_novacia, column=2).alignment = ALIGN_CENTER
+            wsp.cell(row=row, column=1, value='Universo (participantes/mesas esperadas)').font = F_LABEL
+            wsp.cell(row=row, column=2, value=universo).font = F_BODY
+            wsp.cell(row=row, column=2).alignment = ALIGN_CENTER
+            row += 2
 
-        cov = wsp.cell(row=row_coverage, column=2, value=(f'=B{row_total_stats}/{universo}' if universo else 0))
-        cov.number_format = '0.0%'
-        cov.font = F_BODY
-        cov.alignment = ALIGN_CENTER
+            _style_section_row(wsp, row, 'Respuestas registradas', ncols)
+            row += 1
 
-        ws_idx.cell(row=idx_row, column=1, value=n).alignment = ALIGN_CENTER
-        ws_idx.cell(row=idx_row, column=2, value=m.titulo).font = F_BODY
-        ws_idx.cell(row=idx_row, column=3, value=TIPO_MOMENTO_LABEL.get(m.tipo, m.tipo)).alignment = ALIGN_CENTER
-        ws_idx.cell(row=idx_row, column=4, value=p.texto).font = F_BODY
-        ws_idx.cell(row=idx_row, column=4).alignment = ALIGN_WRAP
-        ws_idx.cell(row=idx_row, column=5, value=p.tipo).alignment = ALIGN_CENTER
-        ws_idx.cell(row=idx_row, column=6, value='Sí' if p.obligatoria else 'No').alignment = ALIGN_CENTER
-        ws_idx.cell(row=idx_row, column=7, value=total_resp).alignment = ALIGN_CENTER
-        link_cell = ws_idx.cell(row=idx_row, column=8, value='Ver hoja →')
-        link_cell.hyperlink = f"#'{sheet_title}'!A1"
-        link_cell.font = F_LINK
-        link_cell.alignment = ALIGN_CENTER
-        for col in range(1, 9):
-            ws_idx.cell(row=idx_row, column=col).border = BORDER
-            if (idx_row - 3) % 2 == 1:
-                ws_idx.cell(row=idx_row, column=col).fill = FILL_ALT
-        idx_row += 1
+            respuestas_de_pregunta = [r for r in respuestas_por_momento[m.id] if r.pregunta_id == p.id]
 
-        back = wsp.cell(row=last_resp_row + 2, column=1, value='← Volver al índice')
-        back.hyperlink = f"#'{ws_idx.title}'!A1"
-        back.font = F_LINK
+            if is_mesa:
+                resp_por_mesa = {r.mesa: r for r in respuestas_de_pregunta if r.mesa is not None}
+                headers_resp = ['Mesa', 'Vocero', 'Respuesta', 'Última actualización']
+                for i, h in enumerate(headers_resp, start=1):
+                    wsp.cell(row=row, column=i, value=h)
+                _style_header_cells(wsp, row, 1, len(headers_resp))
+                row += 1
+                first_resp_row = row
+                for mm in mesas_ordenadas:
+                    r = resp_por_mesa.get(mm['mesa'])
+                    voc = mm['vocero']
+                    voc_name = f'{voc.nombre} {voc.apellido}' if voc else 'Sin vocero'
+                    if r:
+                        valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
+                        fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
+                    else:
+                        valor, fecha = '', ''
+                    wsp.cell(row=row, column=1, value=mm['mesa']).alignment = ALIGN_CENTER
+                    wsp.cell(row=row, column=2, value=voc_name).font = F_BODY
+                    vc = wsp.cell(row=row, column=3, value=valor)
+                    vc.font = F_BODY
+                    vc.alignment = ALIGN_WRAP
+                    wsp.cell(row=row, column=4, value=fecha).font = F_MUTED
+                    for col in range(1, 5):
+                        wsp.cell(row=row, column=col).border = BORDER
+                        if not r:
+                            wsp.cell(row=row, column=col).fill = FILL_MISSING
+                        elif (row - first_resp_row) % 2 == 1:
+                            wsp.cell(row=row, column=col).fill = FILL_ALT
+                    row += 1
+                last_resp_row = max(row - 1, first_resp_row)
+                resp_col_letter = 'C'
+            else:
+                resp_por_participante = {r.participante_id: r for r in respuestas_de_pregunta if r.participante_id is not None}
+                headers_resp = ['Participante', 'Correo', 'Rol', 'Mesa', 'Respuesta', 'Última actualización']
+                for i, h in enumerate(headers_resp, start=1):
+                    wsp.cell(row=row, column=i, value=h)
+                wsp.column_dimensions['E'].width = 34
+                wsp.column_dimensions['F'].width = 20
+                _style_header_cells(wsp, row, 1, len(headers_resp))
+                row += 1
+                first_resp_row = row
+                for part in participantes:
+                    r = resp_por_participante.get(part.id)
+                    if r:
+                        valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
+                        fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
+                    else:
+                        valor, fecha = '', ''
+                    wsp.cell(row=row, column=1, value=f'{part.nombre} {part.apellido}').font = F_BODY
+                    wsp.cell(row=row, column=2, value=part.correo_institucional).font = F_BODY
+                    wsp.cell(row=row, column=3, value=part.rol.capitalize()).alignment = ALIGN_CENTER
+                    wsp.cell(row=row, column=4, value=part.mesa if part.mesa is not None else '—').alignment = ALIGN_CENTER
+                    vc = wsp.cell(row=row, column=5, value=valor)
+                    vc.font = F_BODY
+                    vc.alignment = ALIGN_WRAP
+                    wsp.cell(row=row, column=6, value=fecha).font = F_MUTED
+                    for col in range(1, 7):
+                        wsp.cell(row=row, column=col).border = BORDER
+                        if not r:
+                            wsp.cell(row=row, column=col).fill = FILL_MISSING
+                        elif (row - first_resp_row) % 2 == 1:
+                            wsp.cell(row=row, column=col).fill = FILL_ALT
+                    row += 1
+                last_resp_row = max(row - 1, first_resp_row)
+                resp_col_letter = 'E'
+
+            resp_range = f'${resp_col_letter}${first_resp_row}:${resp_col_letter}${last_resp_row}'
+            if first_opt_row:
+                for i, r_ in enumerate(range(first_opt_row, last_opt_row + 1)):
+                    cnt = wsp.cell(row=r_, column=2, value=f'=COUNTIF({resp_range},$A${r_})')
+                    cnt.font = F_BODY
+                    cnt.alignment = ALIGN_CENTER
+                    cnt.border = BORDER
+                    wsp.cell(row=r_, column=1).border = BORDER
+                    pct = wsp.cell(row=r_, column=3, value=f'=IF($B${row_total_stats}=0,0,B{r_}/$B${row_total_stats})')
+                    pct.number_format = '0.0%'
+                    pct.font = F_BODY
+                    pct.alignment = ALIGN_CENTER
+                    pct.border = BORDER
+                    if i % 2 == 1:
+                        for c in (1, 2, 3):
+                            wsp.cell(row=r_, column=c).fill = FILL_ALT
+                wsp.cell(row=row_total_stats, column=2, value=f'=SUM(B{first_opt_row}:B{last_opt_row})').font = F_BODY
+                wsp.cell(row=row_total_stats, column=2).alignment = ALIGN_CENTER
+            else:
+                wsp.cell(row=row_total_stats, column=2, value=f'=COUNTIF({resp_range},"?*")').font = F_BODY
+                wsp.cell(row=row_total_stats, column=2).alignment = ALIGN_CENTER
+                wsp.cell(row=row_novacia, column=2, value=f'=COUNTIF({resp_range},"?*")').font = F_BODY
+                wsp.cell(row=row_novacia, column=2).alignment = ALIGN_CENTER
+
+            cov = wsp.cell(row=row_coverage, column=2, value=(f'=B{row_total_stats}/{universo}' if universo else 0))
+            cov.number_format = '0.0%'
+            cov.font = F_BODY
+            cov.alignment = ALIGN_CENTER
+
+            ws_idx.cell(row=idx_row, column=1, value=n).alignment = ALIGN_CENTER
+            ws_idx.cell(row=idx_row, column=2, value=m.titulo).font = F_BODY
+            ws_idx.cell(row=idx_row, column=3, value=TIPO_MOMENTO_LABEL.get(m.tipo, m.tipo)).alignment = ALIGN_CENTER
+            ws_idx.cell(row=idx_row, column=4, value=p.texto).font = F_BODY
+            ws_idx.cell(row=idx_row, column=4).alignment = ALIGN_WRAP
+            ws_idx.cell(row=idx_row, column=5, value=p.tipo).alignment = ALIGN_CENTER
+            ws_idx.cell(row=idx_row, column=6, value='Sí' if p.obligatoria else 'No').alignment = ALIGN_CENTER
+            ws_idx.cell(row=idx_row, column=7, value=total_resp).alignment = ALIGN_CENTER
+            link_cell = ws_idx.cell(row=idx_row, column=8, value='Ver pregunta →')
+            link_cell.hyperlink = f"#'{sheet_title}'!A{block_start_row}"
+            link_cell.font = F_LINK
+            link_cell.alignment = ALIGN_CENTER
+            for col in range(1, 9):
+                ws_idx.cell(row=idx_row, column=col).border = BORDER
+                if (idx_row - 3) % 2 == 1:
+                    ws_idx.cell(row=idx_row, column=col).fill = FILL_ALT
+            idx_row += 1
+
+            row += 1
 
     order = ['Resumen', ws_idx.title, ws_p.title, ws_m.title]
     rest = [t for t in (s.title for s in wb.worksheets) if t not in order]
