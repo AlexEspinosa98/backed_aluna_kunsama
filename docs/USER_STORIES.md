@@ -526,6 +526,57 @@ Error (falta el filtro), `400`:
 ```
 </details>
 
+### HU-11e — Descargar el reporte completo de la jornada en Excel, una hoja por pregunta
+Como administrador quiero descargar un solo archivo Excel con todo el resultado de la jornada — un resumen general, un índice, el listado de participantes y de mesas, y una hoja por cada pregunta con su caracterización y el detalle real de cada respuesta — para poder revisarlo, filtrarlo o compartirlo fuera del sistema sin tener que armar nada a mano.
+- `GET /api/admin/reporte-excel-por-pregunta/?jornada=<id>` — `jornada` es obligatorio. Responde el archivo directo (`Content-Type` de Excel, `Content-Disposition: attachment`), no un JSON — se descarga al hacer la petición.
+- 100% determinístico, **sin IA**: reusa la misma función (`_estadisticas_pregunta`) que ya usan HU-11b, el pipeline local (HU-13) y el análisis vía OpenAI (HU-14d), así que las cifras nunca pueden desalinearse de las que se ven en esos otros lugares.
+- Los conteos y porcentajes de cada hoja son **fórmulas de Excel reales** (`COUNTIF`, `SUM`, `IF`), no números pegados — si se edita una respuesta directamente en la hoja, las cifras se recalculan solas.
+- **No filtra por `momento.activo`**: funciona igual con la jornada en curso o ya cerrada (todos sus momentos desactivados) — es justo ahí cuando más se necesita el reporte final.
+- Estructura del archivo:
+  - **Resumen**: totales generales (participantes, mesas, momentos, preguntas), caracterización de participantes por rol, y una tabla de los momentos de la jornada.
+  - **Índice**: una fila por cada pregunta de la jornada, con hipervínculo directo a su hoja.
+  - **Participantes** y **Mesas**: el listado completo de cada uno.
+  - **Una hoja por pregunta** (nombrada `M{orden momento}-P{orden pregunta} {inicio del texto}`): título con el momento y la posición de la pregunta, bloque de **Caracterización** (para preguntas de opción: conteo y % por opción; para abiertas: total y respuestas no vacías; en ambos casos, cobertura sobre el universo esperado) y bloque de **Respuestas registradas** con cada participante (o cada mesa, si el momento es tipo `mesa`) y su respuesta real, incluyendo a quienes no respondieron (resaltados).
+- Este mismo formato es el disponible también agrupado por momento — ver HU-11f.
+
+<details><summary>Ejemplo — <code>GET /api/admin/reporte-excel-por-pregunta/?jornada=4</code></summary>
+
+Response `200`, headers:
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="reporte-jornada-agil-2-por-pregunta-20260825.xlsx"
+```
+Cuerpo: el archivo `.xlsx` binario. Para una jornada con 7 momentos y 49 preguntas activas, el archivo trae 53 hojas (4 fijas + 49 de pregunta).
+
+Error (falta el filtro), `400`:
+```json
+{ "detail": "Debes indicar ?jornada=<id>." }
+```
+
+Error (la jornada no existe), `404`:
+```json
+{ "detail": "No existe una jornada con ese id." }
+```
+</details>
+
+### HU-11f — Mismo reporte Excel, pero agrupado una hoja por momento
+Como administrador quiero la misma información de HU-11e pero organizada por momento en vez de por pregunta — todas las preguntas de un mismo momento apiladas en una sola hoja — para revisar un momento completo de corrido sin saltar entre decenas de hojas.
+- `GET /api/admin/reporte-excel-por-momento/?jornada=<id>` — mismos requisitos, mismo tipo de respuesta (archivo directo) y las mismas garantías (sin IA, fórmulas reales, no filtra por `momento.activo`) que HU-11e.
+- Estructura idéntica en **Resumen**, **Índice**, **Participantes** y **Mesas**. La diferencia está en las hojas de contenido: en vez de una por pregunta, hay **una hoja por momento** (nombrada `M{orden} {inicio del título del momento}`), con el título del momento arriba, un enlace de vuelta al índice, y luego cada una de sus preguntas apilada verticalmente — cada una con su propio bloque de Caracterización y Respuestas registradas, igual que en HU-11e.
+- El Índice sigue teniendo una fila por pregunta (no por momento) — cada fila salta directo al bloque exacto de esa pregunta dentro de la hoja de su momento, no solo al principio de la hoja.
+
+<details><summary>Ejemplo — <code>GET /api/admin/reporte-excel-por-momento/?jornada=4</code></summary>
+
+Response `200`, headers:
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="reporte-jornada-agil-2-por-momento-20260825.xlsx"
+```
+Cuerpo: el archivo `.xlsx` binario. Para la misma jornada de 7 momentos y 49 preguntas, el archivo trae 11 hojas (4 fijas + 7 de momento) en vez de 53.
+
+Errores: iguales a HU-11e.
+</details>
+
 ### HU-12 — Configurar plantillas de análisis con IA
 Como administrador quiero crear y editar plantillas de prompt que definen el tono, foco y profundidad con que el LLM redacta los reportes, para adaptar el análisis a distintos tipos de jornada sin tocar código.
 - CRUD completo en `/api/admin/plantillas-analisis/` (`GET`, `POST`) y `/api/admin/plantillas-analisis/{id}/` (`GET`, `PATCH`, `DELETE`).
