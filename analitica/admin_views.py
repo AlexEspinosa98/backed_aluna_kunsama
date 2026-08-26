@@ -13,7 +13,7 @@ from .analysis import _estadisticas_pregunta, procesar_reporte
 from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
-from .reporte_excel import construir_excel_response
+from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
     AnalisisMomentoIACrearSerializer, AnalisisMomentoIASerializer, PlantillaAnalisisSerializer,
     ReporteCrearSerializer, ReporteSerializer,
@@ -499,13 +499,12 @@ class MesasView(APIView):
         )
 
 
-class ReporteExcelJornadaView(APIView):
-    """Descarga el resultado completo de una jornada en un solo .xlsx: Resumen, Índice,
-    Participantes, Mesas, y una hoja por pregunta con su caracterización (fórmulas, no cifras
-    pegadas) y el detalle de cada respuesta — mismo formato validado a mano contra datos reales
-    (ver `analitica/reporte_excel.py`). 100% determinístico, sin IA, y sin filtrar por
-    `momento.activo`: funciona igual con la jornada en curso o ya cerrada."""
+class _ReporteExcelJornadaViewBase(APIView):
+    """Base común de los dos EP de descarga de Excel — solo cambia qué función de
+    `analitica/reporte_excel.py` arma el workbook. Ambos son 100% determinísticos, sin IA, y no
+    filtran por `momento.activo`: funcionan igual con la jornada en curso o ya cerrada."""
     permission_classes = [IsAdminUser]
+    constructor_respuesta = None  # se define en cada subclase
 
     def get(self, request):
         from jornadas.models import Jornada
@@ -521,4 +520,18 @@ class ReporteExcelJornadaView(APIView):
         except Jornada.DoesNotExist:
             return Response({'detail': 'No existe una jornada con ese id.'}, status=status.HTTP_404_NOT_FOUND)
 
-        return construir_excel_response(jornada)
+        return self.constructor_respuesta(jornada)
+
+
+class ReporteExcelPorPreguntaView(_ReporteExcelJornadaViewBase):
+    """Descarga el resultado completo de una jornada en un .xlsx con una hoja por PREGUNTA:
+    Resumen, Índice, Participantes, Mesas, y una hoja por cada pregunta con su caracterización
+    (fórmulas, no cifras pegadas) y el detalle de cada respuesta."""
+    constructor_respuesta = staticmethod(construir_excel_response_por_pregunta)
+
+
+class ReporteExcelPorMomentoView(_ReporteExcelJornadaViewBase):
+    """Descarga el resultado completo de una jornada en un .xlsx con una hoja por MOMENTO:
+    Resumen, Índice, Participantes, Mesas, y una hoja por cada momento con TODAS sus preguntas
+    apiladas (cada una con su caracterización vía fórmulas y el detalle de cada respuesta)."""
+    constructor_respuesta = staticmethod(construir_excel_response_por_momento)
