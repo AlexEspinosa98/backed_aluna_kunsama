@@ -283,7 +283,12 @@ class ProgresoParticipantesView(APIView):
       pregunta de CADA momento (respondida o no), no solo un conteo. Para momentos tipo mesa
       el estado es el de la mesa entera — solo el vocero envía, pero todos sus compañeros de
       mesa comparten ese mismo avance, porque la respuesta es de la mesa, no de la persona
-      (ver RespuestasMomentoView)."""
+      (ver RespuestasMomentoView).
+
+    Deliberadamente NO filtra por `momento.activo` — ese flag solo controla si un participante
+    puede VER/enviar el momento ahora mismo (ver MomentosIndiceView/RespuestasMomentoView); una
+    jornada ya cerrada, con todos sus momentos desactivados, sigue necesitando este reporte para
+    el cierre y las estadísticas finales."""
     permission_classes = [IsAdminUser]
 
     def get(self, request):
@@ -299,10 +304,10 @@ class ProgresoParticipantesView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        momentos = list(Momento.objects.filter(jornada_id=jornada_id, activo=True).order_by('orden'))
+        momentos = list(Momento.objects.filter(jornada_id=jornada_id).order_by('orden'))
         if not momentos:
             return Response(
-                {'detail': 'Esta jornada no tiene momentos activos.'},
+                {'detail': 'Esta jornada no tiene momentos.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 

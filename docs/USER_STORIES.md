@@ -460,9 +460,9 @@ Error (falta el filtro), `400`:
 { "detail": "Debes indicar ?jornada=<id>." }
 ```
 
-Error (jornada sin momentos activos), `404`:
+Error (jornada sin momentos), `404`:
 ```json
-{ "detail": "Esta jornada no tiene momentos activos." }
+{ "detail": "Esta jornada no tiene momentos." }
 ```
 </details>
 
