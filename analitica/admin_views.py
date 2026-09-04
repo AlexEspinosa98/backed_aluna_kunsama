@@ -11,15 +11,15 @@ from rest_framework.views import APIView
 from jornadas.permissions import EsAdminCompleto
 from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 
-from .analisis_ia_openai import analizar_momento_ia
+from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
-from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
+from .models import AnalisisJornadaIA, AnalisisMomentoIA, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
-    AnalisisMomentoIACrearSerializer, AnalisisMomentoIASerializer, PlantillaAnalisisSerializer,
-    ReporteCrearSerializer, ReporteSerializer,
+    AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
+    AnalisisMomentoIASerializer, PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
 )
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
@@ -245,6 +245,67 @@ class AnalisisMomentoIAViewSet(
         threading.Thread(target=analizar_momento_ia, args=(analisis.id,), daemon=True).start()
 
         salida = AnalisisMomentoIASerializer(analisis)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class AnalisisJornadaIAViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Mismo mecanismo que `AnalisisMomentoIAViewSet`, a escala de jornada completa: una sola
+    llamada a OpenAI analiza TODOS los momentos activos de una `Jornada` de una vez (ver
+    `analitica/analisis_ia_openai.py`), para encontrar hallazgos que cruzan momentos distintos."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = AnalisisJornadaIA.objects.select_related('jornada')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return AnalisisJornadaIACrearSerializer
+        return AnalisisJornadaIASerializer
+
+    def create(self, request, *args, **kwargs):
+        entrada = AnalisisJornadaIACrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada = entrada.validated_data['jornada']
+        verificar_acceso_jornada(request.user, jornada)
+
+        # Auto-sanación, mismo espíritu que en AnalisisMomentoIAViewSet.create.
+        AnalisisJornadaIA.objects.filter(
+            jornada=jornada,
+            estado__in=[AnalisisJornadaIA.ESTADO_PENDIENTE, AnalisisJornadaIA.ESTADO_PROCESANDO],
+            actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_IA,
+        ).update(
+            estado=AnalisisJornadaIA.ESTADO_ERROR,
+            error_mensaje='El análisis quedó procesando más de 10 minutos sin completarse '
+                          '(probablemente el worker se reinició o falló) y se marcó como error '
+                          'automáticamente.',
+        )
+
+        if AnalisisJornadaIA.objects.filter(
+            jornada=jornada,
+            estado__in=[AnalisisJornadaIA.ESTADO_PENDIENTE, AnalisisJornadaIA.ESTADO_PROCESANDO],
+        ).exists():
+            return Response(
+                {'detail': 'Ya hay un análisis con IA en proceso para esta jornada — espera a '
+                           'que termine (o falle) antes de pedir otro.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        analisis = entrada.save(solicitado_por=request.user)
+        threading.Thread(target=analizar_jornada_ia, args=(analisis.id,), daemon=True).start()
+
+        salida = AnalisisJornadaIASerializer(analisis)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
 

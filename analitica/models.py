@@ -8,15 +8,20 @@ from jornadas.models import Jornada, Momento
 class PlantillaAnalisis(models.Model):
     # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
     # aplican a cada pregunta, momento y jornada, ver _instrucciones_plantilla.
-    # 'gpt_momento': instrucciones adicionales para el análisis de instrumento completo vía OpenAI
-    # (analisis_ia_openai.py) — un tipo de plantilla independiente porque son prompts de propósito
-    # distinto (uno redacta muchas descripciones cortas, el otro un reporte con hallazgos
-    # cruzados); cada tipo tiene su propia plantilla "predeterminada".
+    # 'gpt_momento': instrucciones adicionales para el análisis de un momento completo vía OpenAI
+    # (analisis_ia_openai.py, AnalisisMomentoIA) — un tipo de plantilla independiente porque son
+    # prompts de propósito distinto (uno redacta muchas descripciones cortas, el otro un reporte
+    # con hallazgos cruzados); cada tipo tiene su propia plantilla "predeterminada".
+    # 'gpt_jornada': mismo mecanismo que 'gpt_momento' pero para analizar TODOS los momentos de
+    # una jornada de una sola vez (AnalisisJornadaIA) — prompt propio porque cruza momentos
+    # completos entre sí, no solo preguntas dentro de un mismo momento.
     TIPO_LOCAL = 'local'
     TIPO_GPT_MOMENTO = 'gpt_momento'
+    TIPO_GPT_JORNADA = 'gpt_jornada'
     TIPO_CHOICES = [
         (TIPO_LOCAL, 'Pipeline local (por pregunta/momento/jornada)'),
         (TIPO_GPT_MOMENTO, 'Análisis de momento completo vía OpenAI'),
+        (TIPO_GPT_JORNADA, 'Análisis de jornada completa vía OpenAI'),
     ]
 
     nombre = models.CharField(max_length=150, unique=True)
@@ -186,3 +191,50 @@ class AnalisisMomentoIA(models.Model):
 
     def __str__(self):
         return f'Análisis IA {self.id} · {self.momento} · {self.estado}'
+
+
+class AnalisisJornadaIA(models.Model):
+    """Mismo mecanismo que `AnalisisMomentoIA` (una sola llamada a OpenAI, sin pasar por
+    `Reporte`), pero a escala de jornada completa: lee TODOS los momentos activos de la jornada
+    (cada uno con su contexto, preguntas y respuestas reales) en una sola llamada, para encontrar
+    hallazgos que cruzan momentos distintos — no solo preguntas dentro de un mismo momento, como
+    hace `AnalisisMomentoIA`. Pensado para jornadas tipo "Café del Mundo" con varios momentos
+    cortos (uno por mesa/tema) donde el valor real está en ver el panorama completo de una vez,
+    no mesa por mesa. Ver `analitica/analisis_ia_openai.py` (`analizar_jornada_ia`,
+    `SYSTEM_PROMPT_JORNADA`) para el detalle exacto de payload y formato de `resultado`."""
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='analisis_ia')
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    resultado = models.JSONField(
+        default=dict, blank=True,
+        help_text='jornada_id, resumen_ejecutivo, hallazgos[] (cada uno con titulo, descripcion, '
+        'momentos_relacionados, preguntas_relacionadas, tipo_grafica y datos) — ver '
+        'analisis_ia_openai.py.',
+    )
+    error_mensaje = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='analisis_jornada_ia_solicitados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Análisis de jornada con IA (OpenAI)'
+        verbose_name_plural = 'Análisis de jornada con IA (OpenAI)'
+
+    def __str__(self):
+        return f'Análisis IA {self.id} · {self.jornada} · {self.estado}'
