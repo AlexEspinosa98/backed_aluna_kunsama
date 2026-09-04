@@ -2,6 +2,8 @@ from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAdminUser
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
+from jornadas.scoping import filtrar_por_propietario
+
 from .models import Participante, Respuesta
 from .serializers import ParticipanteMesaVoceroSerializer, ParticipanteSerializer, RespuestaSalidaSerializer
 
@@ -23,6 +25,7 @@ class ParticipanteAdminViewSet(
 
     def get_queryset(self):
         queryset = Participante.objects.select_related('jornada').all()
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietario')
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
@@ -42,6 +45,7 @@ class RespuestaAdminViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = Respuesta.objects.select_related('pregunta', 'participante').prefetch_related('opciones').all()
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'pregunta__momento__jornada__propietario')
         momento_id = self.request.query_params.get('momento')
         pregunta_id = self.request.query_params.get('pregunta')
         if momento_id:

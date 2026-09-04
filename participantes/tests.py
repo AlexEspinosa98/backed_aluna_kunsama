@@ -43,11 +43,14 @@ class BaseJornadaTestCase(APITestCase):
         self.opcion_mesa_a = OpcionPregunta.objects.create(pregunta=self.pregunta_mesa, texto='Tema A', orden=1)
         self.opcion_mesa_b = OpcionPregunta.objects.create(pregunta=self.pregunta_mesa, texto='Tema B', orden=2)
 
-    def registrar_participante(self, correo='persona@uni.edu.co'):
+    def registrar_participante(self, correo='persona@uni.edu.co', **extra):
+        datos = {
+            'correo_institucional': correo, 'nombre': 'Ana', 'apellido': 'Pérez',
+            'telefono': '3000000000', 'rol': 'estudiante',
+        }
+        datos.update(extra)
         resp = self.client.post(
-            f'/api/jornadas/{self.jornada.slug}/registro/',
-            {'correo_institucional': correo, 'nombre': 'Ana', 'apellido': 'Pérez', 'telefono': '3000000000'},
-            format='json',
+            f'/api/jornadas/{self.jornada.slug}/registro/', datos, format='json',
         )
         return resp
 
@@ -198,6 +201,51 @@ class RespuestasPorMesaTests(BaseJornadaTestCase):
         self.assertEqual(respuesta.registrado_por.token.hex, self.token_2.replace('-', ''))
 
 
+class PreguntaRestringidaPorMesaTests(BaseJornadaTestCase):
+    def setUp(self):
+        super().setUp()
+        self.pregunta_mesa.mesas_permitidas = [1]
+        self.pregunta_mesa.save(update_fields=['mesas_permitidas'])
+        self.token_mesa_1 = self.registrar_participante('vocero1@uni.edu.co', mesa=1, es_vocero=True).data['token']
+        self.token_mesa_2 = self.registrar_participante('vocero2@uni.edu.co', mesa=2, es_vocero=True).data['token']
+
+    def test_pregunta_no_aparece_para_mesa_no_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/',
+            **self.auth_header(self.token_mesa_2),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['preguntas'], [])
+
+    def test_pregunta_si_aparece_para_mesa_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/',
+            **self.auth_header(self.token_mesa_1),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([p['id'] for p in resp.data['preguntas']], [self.pregunta_mesa.id])
+
+    def test_mesa_no_permitida_no_puede_responder(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
+            {'respuestas': [{'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': [self.opcion_mesa_a.id]}]},
+            format='json',
+            **self.auth_header(self.token_mesa_2),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Respuesta.objects.count(), 0)
+
+    def test_mesa_permitida_si_puede_responder(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
+            {'respuestas': [{'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': [self.opcion_mesa_a.id]}]},
+            format='json',
+            **self.auth_header(self.token_mesa_1),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.count(), 1)
+
+
 class AdminApiTests(BaseJornadaTestCase):
     def test_crud_jornada_requiere_staff(self):
         resp = self.client.post('/api/admin/jornadas/', {
@@ -212,3 +260,33 @@ class AdminApiTests(BaseJornadaTestCase):
             'slug': 'nueva', 'nombre': 'Nueva', 'fecha_inicio': '2026-10-01', 'fecha_fin': '2026-10-02',
         }, format='json')
         self.assertEqual(resp.status_code, 201)
+
+
+class ParticipantesAdminScopingTests(BaseJornadaTestCase):
+    """La jornada de BaseJornadaTestCase no tiene propietario — para probar el scoping por
+    dependencia hace falta una segunda jornada que sí tenga uno."""
+    def setUp(self):
+        super().setUp()
+        User = get_user_model()
+        from jornadas.models import PerfilUsuario
+        self.dependencia = User.objects.create_user(username='dep', password='pass12345', is_staff=True)
+        PerfilUsuario.objects.create(user=self.dependencia, rol=PerfilUsuario.ROL_DEPENDENCIA)
+        self.jornada.propietario = self.dependencia
+        self.jornada.save(update_fields=['propietario'])
+
+        self.otra_jornada = Jornada.objects.create(
+            slug='otra-jornada-admin', nombre='Otra', fecha_inicio=datetime.date(2026, 1, 1),
+            fecha_fin=datetime.date(2026, 1, 2),
+        )
+        Participante.objects.create(
+            jornada=self.otra_jornada, correo_institucional='ajeno@uni.edu.co',
+            nombre='Otro', apellido='Participante', rol='estudiante',
+        )
+        self.token = self.registrar_participante().data['token']
+
+    def test_dependencia_solo_ve_participantes_de_su_jornada(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get('/api/admin/participantes/')
+        self.assertEqual(resp.status_code, 200)
+        jornadas_devueltas = {p['jornada'] for p in resp.data}
+        self.assertEqual(jornadas_devueltas, {self.jornada.slug})

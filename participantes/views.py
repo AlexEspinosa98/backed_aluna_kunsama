@@ -153,14 +153,25 @@ class RespuestasMomentoView(APIView):
                               'asigne antes de responder.'}
                 )
 
+        def _aplica_a_mesa(pregunta):
+            # mesas_permitidas vacía = aplica a todas las mesas, igual que siempre. Esto se
+            # revalida acá (no solo se oculta en el listado, ver MomentoDetalleSerializer) para
+            # que un vocero no pueda colar una respuesta a una pregunta que no le corresponde
+            # pegándole directo a la API.
+            return momento.tipo != Momento.TIPO_MESA or not pregunta.mesas_permitidas or mesa in pregunta.mesas_permitidas
+
         entradas_por_pregunta = {}
         for item in datos['respuestas']:
             pregunta = item['pregunta']
             if pregunta.momento_id != momento.id:
                 raise ValidationError(f'La pregunta {pregunta.id} no pertenece a este momento.')
+            if not _aplica_a_mesa(pregunta):
+                raise ValidationError(f'La pregunta {pregunta.id} no está habilitada para tu mesa.')
             entradas_por_pregunta[pregunta.id] = item
 
-        preguntas_obligatorias = momento.preguntas.filter(activa=True, obligatoria=True)
+        preguntas_obligatorias = [
+            p for p in momento.preguntas.filter(activa=True, obligatoria=True) if _aplica_a_mesa(p)
+        ]
         faltantes = [p.id for p in preguntas_obligatorias if p.id not in entradas_por_pregunta]
         if faltantes:
             raise ValidationError({'faltantes': f'Preguntas obligatorias sin responder: {faltantes}'})

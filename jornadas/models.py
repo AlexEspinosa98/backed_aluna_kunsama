@@ -3,6 +3,28 @@ from django.db import models
 from django.utils.text import slugify
 
 
+class PerfilUsuario(models.Model):
+    """Rol de un usuario admin/staff dentro de la app — no confundir con is_staff/is_superuser
+    de Django, que solo controlan si puede autenticarse contra /api/admin/**. Un usuario SIN fila
+    aquí (todo lo que existe hoy: superusers creados con createsuperuser) se trata como admin
+    completo — así el rollout de roles no requiere migrar datos ni puede dejar a nadie bloqueado
+    por accidente (ver jornadas.scoping.es_dependencia)."""
+    ROL_ADMIN = 'admin'
+    ROL_DEPENDENCIA = 'dependencia'
+    ROL_CHOICES = [
+        (ROL_ADMIN, 'Administrador'),
+        (ROL_DEPENDENCIA, 'Dependencia'),
+    ]
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='perfil')
+    rol = models.CharField(max_length=20, choices=ROL_CHOICES, default=ROL_DEPENDENCIA)
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.user} · {self.get_rol_display()}'
+
+
 class Jornada(models.Model):
     slug = models.SlugField(unique=True)
     nombre = models.CharField(max_length=255)
@@ -16,6 +38,18 @@ class Jornada(models.Model):
         null=True,
         blank=True,
         related_name='jornadas_creadas',
+    )
+    # Dueño de la jornada para el rol "dependencia" (ver PerfilUsuario) — distinto de creada_por,
+    # que es solo auditoría de quién la creó. Null = visible solo para administradores completos
+    # (una jornada sin dependencia asignada). Un admin completo puede reasignarla en cualquier
+    # momento; un usuario de dependencia nunca puede tocar este campo (se fuerza a sí mismo al
+    # crear, ver jornadas.views.JornadaAdminViewSet).
+    propietario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='jornadas_propias',
     )
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
@@ -85,6 +119,10 @@ class Pregunta(models.Model):
     orden = models.PositiveIntegerField()
     obligatoria = models.BooleanField(default=True)
     activa = models.BooleanField(default=True)
+    mesas_permitidas = models.JSONField(default=list, blank=True, help_text=(
+        'Lista opcional de números de mesa que pueden ver/responder esta pregunta (solo aplica '
+        'en momentos tipo mesa). Vacía = visible para todas las mesas, igual que hoy.'
+    ))
 
     class Meta:
         ordering = ['orden']

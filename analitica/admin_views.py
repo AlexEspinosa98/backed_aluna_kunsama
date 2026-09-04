@@ -8,6 +8,9 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from jornadas.permissions import EsAdminCompleto
+from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
+
 from .analisis_ia_openai import analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
 from .models import AnalisisMomentoIA, PlantillaAnalisis, Reporte
@@ -37,8 +40,15 @@ UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
+    """Son prompts de sistema globales (no por jornada) — una dependencia puede leerlas para
+    elegir cuál usar al pedir un reporte, pero solo un admin completo puede crear/editar/borrar."""
     serializer_class = PlantillaAnalisisSerializer
     permission_classes = [IsAdminUser]
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [EsAdminCompleto()]
+        return super().get_permissions()
 
     def get_queryset(self):
         # ?tipo=gpt_momento&predeterminada=true deja pedir en una sola llamada "el prompt activo
@@ -69,6 +79,7 @@ class ReporteViewSet(
 
     def get_queryset(self):
         queryset = Reporte.objects.select_related('jornada', 'plantilla').prefetch_related('momentos')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietario')
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
@@ -110,6 +121,7 @@ class ReporteViewSet(
 
         entrada = ReporteCrearSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
+        verificar_acceso_jornada(request.user, entrada.validated_data['jornada'])
         reporte = entrada.save(solicitado_por=request.user)
 
         threading.Thread(target=procesar_reporte, args=(reporte.id,), daemon=True).start()
@@ -185,6 +197,7 @@ class AnalisisMomentoIAViewSet(
 
     def get_queryset(self):
         queryset = AnalisisMomentoIA.objects.select_related('momento')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'momento__jornada__propietario')
         momento_id = self.request.query_params.get('momento')
         if momento_id:
             queryset = queryset.filter(momento_id=momento_id)
@@ -199,6 +212,7 @@ class AnalisisMomentoIAViewSet(
         entrada = AnalisisMomentoIACrearSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
         momento = entrada.validated_data['momento']
+        verificar_acceso_jornada(request.user, momento.jornada)
 
         # Auto-sanación, mismo espíritu que en ReporteViewSet.create: si el análisis IA anterior
         # de ESTE momento quedó 'procesando' hace más de UMBRAL_HUERFANO_ANALISIS_IA, su worker ya
@@ -255,6 +269,7 @@ class EstadisticasPreguntasView(APIView):
             )
 
         preguntas = Pregunta.objects.filter(activa=True).select_related('momento')
+        preguntas = filtrar_por_propietario(preguntas, request.user, 'momento__jornada__propietario')
         if momento_id:
             preguntas = preguntas.filter(momento_id=momento_id)
         if jornada_id:
@@ -305,7 +320,10 @@ class ProgresoParticipantesView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        momentos = list(Momento.objects.filter(jornada_id=jornada_id).order_by('orden'))
+        momentos_qs = filtrar_por_propietario(
+            Momento.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietario'
+        )
+        momentos = list(momentos_qs.order_by('orden'))
         if not momentos:
             return Response(
                 {'detail': 'Esta jornada no tiene momentos.'},
@@ -462,7 +480,9 @@ class MesasView(APIView):
             )
         jornada_id = int(jornada_id)
 
-        participantes = Participante.objects.filter(jornada_id=jornada_id).order_by('mesa', 'nombre', 'apellido')
+        participantes = filtrar_por_propietario(
+            Participante.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietario'
+        ).order_by('mesa', 'nombre', 'apellido')
 
         def _resumen_participante(p):
             return {
@@ -519,6 +539,7 @@ class _ReporteExcelJornadaViewBase(APIView):
             jornada = Jornada.objects.get(pk=int(jornada_id))
         except Jornada.DoesNotExist:
             return Response({'detail': 'No existe una jornada con ese id.'}, status=status.HTTP_404_NOT_FOUND)
+        verificar_acceso_jornada(request.user, jornada)
 
         return self.constructor_respuesta(jornada)
 

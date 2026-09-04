@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Jornada, Momento, OpcionPregunta, Pregunta
+from .models import Jornada, Momento, OpcionPregunta, PerfilUsuario, Pregunta
 
 
 class OpcionPreguntaInline(admin.TabularInline):
@@ -18,9 +18,16 @@ class MomentoInline(admin.StackedInline):
     extra = 1
 
 
+@admin.register(PerfilUsuario)
+class PerfilUsuarioAdmin(admin.ModelAdmin):
+    list_display = ['user', 'rol']
+    list_filter = ['rol']
+
+
 @admin.register(Jornada)
 class JornadaAdmin(admin.ModelAdmin):
-    list_display = ['nombre', 'slug', 'fecha_inicio', 'fecha_fin', 'activa']
+    list_display = ['nombre', 'slug', 'fecha_inicio', 'fecha_fin', 'activa', 'propietario']
+    list_filter = ['activa', 'propietario']
     prepopulated_fields = {'slug': ('nombre',)}
     inlines = [MomentoInline]
 
@@ -34,6 +41,6 @@ class MomentoAdmin(admin.ModelAdmin):
 
 @admin.register(Pregunta)
 class PreguntaAdmin(admin.ModelAdmin):
-    list_display = ['texto', 'momento', 'tipo', 'orden', 'obligatoria']
+    list_display = ['texto', 'momento', 'tipo', 'orden', 'obligatoria', 'mesas_permitidas']
     list_filter = ['momento__jornada', 'tipo']
     inlines = [OpcionPreguntaInline]

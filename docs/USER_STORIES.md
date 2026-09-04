@@ -40,6 +40,13 @@ Response `201`:
 ```
 </details>
 
+### HU-01b — Jornadas por dependencia (rol de usuario)
+Como administrador quiero poder dar de alta usuarios de "dependencia" que solo vean, creen y editen sus propias jornadas, para delegar la operación de una jornada sin darle acceso a las de otras dependencias.
+- Hay dos roles bajo `/api/admin/**`: **admin completo** (ve/gestiona todo) y **dependencia** (solo lo suyo). Una cuenta sin fila en `PerfilUsuario` — todas las que existían antes de este rol — se trata como admin completo, así que nada de lo que ya existía cambió de comportamiento.
+- `Jornada.propietario` es el dueño para efectos de este scoping (distinto de `creada_por`, que es solo auditoría de quién la creó). Al crear una jornada, un usuario de dependencia queda como `propietario` automáticamente — no puede asignársela a otro usuario aunque lo intente en el body. Un admin completo sí puede fijar/reasignar `propietario` en cualquier momento (`PATCH /api/admin/jornadas/{slug}/`), incluida una jornada sin dueño (`propietario: null`, visible solo para admins completos).
+- El scoping por dependencia aplica en cascada a todo lo que cuelga de la jornada: `momentos`, `preguntas`, `opciones`, `participantes`, `respuestas`, `reportes` y `analisis-momento-ia` — un usuario de dependencia ni ve ni puede crear nada bajo una jornada que no es suya (`403` al crear, la jornada ajena simplemente no aparece al listar/consultar).
+- Las plantillas de análisis (`/api/admin/plantillas-analisis/`) son una excepción: son prompts globales, no de una jornada — dependencia puede leerlas (para elegir cuál usar al pedir un reporte) pero solo un admin completo puede crearlas/editarlas/borrarlas.
+
 ### HU-02 — Editar o desactivar una jornada
 Como administrador quiero editar los datos de una jornada o marcarla como inactiva, para corregir información o cerrar su inscripción.
 - `PATCH /api/admin/jornadas/{slug}/` permite editar cualquier campo.
@@ -131,6 +138,7 @@ Como administrador quiero crear preguntas eligiendo tipo (`abierta`, `unica` o `
 - `POST /api/admin/preguntas/`. Preguntas `unica`/`multiple` requieren luego al menos una opción para ser respondibles.
 - `orden` es único dentro del momento.
 - `GET /api/admin/preguntas/` (filtrable `?momento=<id>`) y `GET /api/admin/preguntas/{id}/` consultan las preguntas ya creadas.
+- `mesas_permitidas` (opcional, solo tiene efecto en momentos tipo `mesa`): lista de números de mesa que pueden ver/responder esa pregunta puntual — vacía (por defecto) significa visible para todas las mesas. Una mesa que no está en la lista no ve la pregunta en `GET .../momentos/{id}/` (HU-20) y, si igual intenta responderla directo contra la API, se rechaza con `400` (HU-22).
 
 <details><summary>Ejemplo — <code>POST /api/admin/preguntas/</code></summary>
 
@@ -227,6 +235,35 @@ Response `200`:
 Error (credenciales inválidas o usuario no `staff`), `400`:
 ```json
 { "detail": "No se pudo iniciar sesión con las credenciales dadas." }
+```
+</details>
+
+### HU-09b — Gestionar usuarios admin/dependencia
+Como administrador completo quiero crear, editar y consultar usuarios de dependencia (y ver de un vistazo qué jornadas tiene cada uno), para delegar jornadas sin pasar por Django admin.
+- CRUD en `/api/admin/usuarios/` — exclusivo de admin completo (`403` para dependencia).
+- `POST` crea el usuario (`is_staff=true` automático) con `username`, `password` y `rol` (`"admin"` o `"dependencia"`, por defecto `"dependencia"`).
+- `GET /api/admin/usuarios/{id}/` incluye `jornadas_propias` (id/slug/nombre/activa) — todo lo que esa dependencia tiene asignado, sin tener que cruzarlo a mano contra `/api/admin/jornadas/`.
+
+<details><summary>Ejemplo — <code>POST /api/admin/usuarios/</code></summary>
+
+Request:
+```json
+{ "username": "facultad-ingenieria", "password": "una-clave-segura", "rol": "dependencia" }
+```
+
+Response `201`:
+```json
+{
+  "id": 7,
+  "username": "facultad-ingenieria",
+  "email": "",
+  "first_name": "",
+  "last_name": "",
+  "is_active": true,
+  "rol": "dependencia",
+  "jornadas_propias": [],
+  "date_joined": "2026-09-04T22:10:00Z"
+}
 ```
 </details>
 

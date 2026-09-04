@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema_serializer
+from drf_spectacular.utils import extend_schema_field, extend_schema_serializer
 from rest_framework import serializers
 
 from jornadas.models import Momento, OpcionPregunta, Pregunta
@@ -103,11 +103,25 @@ class MomentoIndiceSerializer(serializers.ModelSerializer):
 
 
 class MomentoDetalleSerializer(serializers.ModelSerializer):
-    preguntas = PreguntaSerializer(many=True, read_only=True)
+    preguntas = serializers.SerializerMethodField()
 
     class Meta:
         model = Momento
         fields = ['id', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'preguntas']
+
+    @extend_schema_field(PreguntaSerializer(many=True))
+    def get_preguntas(self, momento):
+        # Pregunta.mesas_permitidas (opcional) restringe una pregunta a ciertas mesas dentro de
+        # un momento tipo mesa — vacía = visible para todas, igual que siempre. No aplica a
+        # momentos individuales, donde no existe el concepto de "mesa" del participante.
+        preguntas = momento.preguntas.all()
+        if momento.tipo == Momento.TIPO_MESA:
+            participante = self.context['request'].user
+            preguntas = [
+                p for p in preguntas
+                if not p.mesas_permitidas or participante.mesa in p.mesas_permitidas
+            ]
+        return PreguntaSerializer(preguntas, many=True).data
 
 
 class RespuestaEntradaSerializer(serializers.Serializer):
