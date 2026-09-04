@@ -79,7 +79,7 @@ class ReporteViewSet(
 
     def get_queryset(self):
         queryset = Reporte.objects.select_related('jornada', 'plantilla').prefetch_related('momentos')
-        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietario')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
@@ -197,7 +197,7 @@ class AnalisisMomentoIAViewSet(
 
     def get_queryset(self):
         queryset = AnalisisMomentoIA.objects.select_related('momento')
-        queryset = filtrar_por_propietario(queryset, self.request.user, 'momento__jornada__propietario')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'momento__jornada__propietarios')
         momento_id = self.request.query_params.get('momento')
         if momento_id:
             queryset = queryset.filter(momento_id=momento_id)
@@ -269,7 +269,7 @@ class EstadisticasPreguntasView(APIView):
             )
 
         preguntas = Pregunta.objects.filter(activa=True).select_related('momento')
-        preguntas = filtrar_por_propietario(preguntas, request.user, 'momento__jornada__propietario')
+        preguntas = filtrar_por_propietario(preguntas, request.user, 'momento__jornada__propietarios')
         if momento_id:
             preguntas = preguntas.filter(momento_id=momento_id)
         if jornada_id:
@@ -321,7 +321,7 @@ class ProgresoParticipantesView(APIView):
             )
 
         momentos_qs = filtrar_por_propietario(
-            Momento.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietario'
+            Momento.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietarios'
         )
         momentos = list(momentos_qs.order_by('orden'))
         if not momentos:
@@ -481,7 +481,7 @@ class MesasView(APIView):
         jornada_id = int(jornada_id)
 
         participantes = filtrar_por_propietario(
-            Participante.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietario'
+            Participante.objects.filter(jornada_id=jornada_id), request.user, 'jornada__propietarios'
         ).order_by('mesa', 'nombre', 'apellido')
 
         def _resumen_participante(p):

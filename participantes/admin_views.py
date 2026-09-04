@@ -25,7 +25,7 @@ class ParticipanteAdminViewSet(
 
     def get_queryset(self):
         queryset = Participante.objects.select_related('jornada').all()
-        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietario')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
@@ -45,7 +45,7 @@ class RespuestaAdminViewSet(ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = Respuesta.objects.select_related('pregunta', 'participante').prefetch_related('opciones').all()
-        queryset = filtrar_por_propietario(queryset, self.request.user, 'pregunta__momento__jornada__propietario')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'pregunta__momento__jornada__propietarios')
         momento_id = self.request.query_params.get('momento')
         pregunta_id = self.request.query_params.get('pregunta')
         if momento_id:

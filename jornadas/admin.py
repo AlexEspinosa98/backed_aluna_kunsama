@@ -26,10 +26,15 @@ class PerfilUsuarioAdmin(admin.ModelAdmin):
 
 @admin.register(Jornada)
 class JornadaAdmin(admin.ModelAdmin):
-    list_display = ['nombre', 'slug', 'fecha_inicio', 'fecha_fin', 'activa', 'propietario']
-    list_filter = ['activa', 'propietario']
+    list_display = ['nombre', 'slug', 'fecha_inicio', 'fecha_fin', 'activa', 'propietarios_display']
+    list_filter = ['activa', 'propietarios']
+    filter_horizontal = ['propietarios']
     prepopulated_fields = {'slug': ('nombre',)}
     inlines = [MomentoInline]
+
+    @admin.display(description='Propietarios')
+    def propietarios_display(self, obj):
+        return ', '.join(str(u) for u in obj.propietarios.all()) or '—'
 
 
 @admin.register(Momento)

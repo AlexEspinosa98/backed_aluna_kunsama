@@ -15,14 +15,14 @@ def es_dependencia(user):
 
 def jornadas_visibles(user):
     if es_dependencia(user):
-        return Jornada.objects.filter(propietario=user)
+        return Jornada.objects.filter(propietarios=user)
     return Jornada.objects.all()
 
 
-def filtrar_por_propietario(queryset, user, lookup='jornada__propietario'):
+def filtrar_por_propietario(queryset, user, lookup='jornada__propietarios'):
     """Aplica el filtro de dependencia a cualquier queryset que llegue a una jornada por
-    `lookup` (ej. 'jornada__propietario', 'momento__jornada__propietario',
-    'pregunta__momento__jornada__propietario'). Admin completo: sin filtro, ve todo."""
+    `lookup` (ej. 'jornada__propietarios', 'momento__jornada__propietarios',
+    'pregunta__momento__jornada__propietarios'). Admin completo: sin filtro, ve todo."""
     if es_dependencia(user):
         return queryset.filter(**{lookup: user})
     return queryset
@@ -31,5 +31,5 @@ def filtrar_por_propietario(queryset, user, lookup='jornada__propietario'):
 def verificar_acceso_jornada(user, jornada):
     """Para vistas que resuelven UNA jornada puntual por id (ej. descarga de Excel) en vez de
     filtrar un queryset — ahí no hay 'devolver vacío' posible, así que se rechaza explícito."""
-    if es_dependencia(user) and jornada.propietario_id != user.id:
+    if es_dependencia(user) and not jornada.propietarios.filter(id=user.id).exists():
         raise PermissionDenied('Esta jornada no te pertenece.')

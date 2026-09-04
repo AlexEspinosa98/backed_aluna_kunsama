@@ -38,7 +38,7 @@ class ValidarPropietarioAlCrearMixin:
         if es_dependencia(self.request.user):
             padre = serializer.validated_data[self.campo_padre]
             jornada = self._jornada_del_padre(padre)
-            if jornada.propietario_id != self.request.user.id:
+            if not jornada.propietarios.filter(id=self.request.user.id).exists():
                 raise PermissionDenied('No puedes crear contenido bajo una jornada que no es tuya.')
         serializer.save()
 
@@ -53,14 +53,14 @@ class JornadaAdminViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         if es_dependencia(self.request.user):
-            serializer.save(creada_por=self.request.user, propietario=self.request.user)
+            serializer.save(creada_por=self.request.user, propietarios=[self.request.user])
         else:
             serializer.save(creada_por=self.request.user)
 
     def perform_update(self, serializer):
         if es_dependencia(self.request.user):
-            # El propietario queda fijo — solo un admin completo puede reasignarlo.
-            serializer.save(propietario=serializer.instance.propietario)
+            # Los propietarios quedan fijos — solo un admin completo puede reasignarlos.
+            serializer.save(propietarios=list(serializer.instance.propietarios.all()))
         else:
             serializer.save()
 
@@ -72,7 +72,7 @@ class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
     ruta_jornada = ''
 
     def get_queryset(self):
-        queryset = filtrar_por_propietario(Momento.objects.all(), self.request.user, 'jornada__propietario')
+        queryset = filtrar_por_propietario(Momento.objects.all(), self.request.user, 'jornada__propietarios')
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
@@ -87,7 +87,7 @@ class PreguntaAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
 
     def get_queryset(self):
         queryset = filtrar_por_propietario(
-            Pregunta.objects.all(), self.request.user, 'momento__jornada__propietario'
+            Pregunta.objects.all(), self.request.user, 'momento__jornada__propietarios'
         )
         momento_id = self.request.query_params.get('momento')
         if momento_id:
@@ -103,7 +103,7 @@ class OpcionAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
 
     def get_queryset(self):
         queryset = filtrar_por_propietario(
-            OpcionPregunta.objects.all(), self.request.user, 'pregunta__momento__jornada__propietario'
+            OpcionPregunta.objects.all(), self.request.user, 'pregunta__momento__jornada__propietarios'
         )
         pregunta_id = self.request.query_params.get('pregunta')
         if pregunta_id:

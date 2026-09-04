@@ -42,19 +42,19 @@ class JornadaAdminSerializer(serializers.ModelSerializer):
         model = Jornada
         fields = [
             'id', 'slug', 'nombre', 'descripcion', 'fecha_inicio', 'fecha_fin',
-            'activa', 'creada_por', 'propietario', 'creado_en', 'actualizado_en',
+            'activa', 'creada_por', 'propietarios', 'creado_en', 'actualizado_en',
         ]
         read_only_fields = ['creada_por', 'creado_en', 'actualizado_en']
 
     def get_fields(self):
-        # Un usuario de dependencia nunca puede asignar/reasignar propietario por este medio —
-        # la vista lo fuerza a sí mismo al crear (ver JornadaAdminViewSet.perform_create) y lo
-        # deja fijo al editar. Marcarlo read_only acá es solo para que quede reflejado en el
+        # Un usuario de dependencia nunca puede asignar/reasignar propietarios por este medio —
+        # la vista lo fuerza a sí mismo al crear (ver JornadaAdminViewSet.perform_create) y los
+        # deja fijos al editar. Marcarlo read_only acá es solo para que quede reflejado en el
         # schema/response, la regla real vive en la vista.
         fields = super().get_fields()
         request = self.context.get('request')
         if request is not None and es_dependencia(request.user):
-            fields['propietario'].read_only = True
+            fields['propietarios'].read_only = True
         return fields
 
 

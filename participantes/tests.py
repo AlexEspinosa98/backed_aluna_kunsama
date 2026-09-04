@@ -271,8 +271,7 @@ class ParticipantesAdminScopingTests(BaseJornadaTestCase):
         from jornadas.models import PerfilUsuario
         self.dependencia = User.objects.create_user(username='dep', password='pass12345', is_staff=True)
         PerfilUsuario.objects.create(user=self.dependencia, rol=PerfilUsuario.ROL_DEPENDENCIA)
-        self.jornada.propietario = self.dependencia
-        self.jornada.save(update_fields=['propietario'])
+        self.jornada.propietarios.set([self.dependencia])
 
         self.otra_jornada = Jornada.objects.create(
             slug='otra-jornada-admin', nombre='Otra', fecha_inicio=datetime.date(2026, 1, 1),

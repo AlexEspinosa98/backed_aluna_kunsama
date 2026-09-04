@@ -11,10 +11,12 @@ Usuario = get_user_model()
 
 
 def crear_jornada(slug, propietario=None):
-    return Jornada.objects.create(
+    jornada = Jornada.objects.create(
         slug=slug, nombre=slug, fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
-        propietario=propietario,
     )
+    if propietario:
+        jornada.propietarios.set([propietario])
+    return jornada
 
 
 def crear_dependencia(username):

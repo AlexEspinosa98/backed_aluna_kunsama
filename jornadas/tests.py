@@ -8,11 +8,14 @@ from .models import Jornada, Momento, PerfilUsuario, Pregunta
 Usuario = get_user_model()
 
 
-def crear_jornada(slug, propietario=None):
-    return Jornada.objects.create(
+def crear_jornada(slug, propietario=None, propietarios=None):
+    jornada = Jornada.objects.create(
         slug=slug, nombre=slug, fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
-        propietario=propietario,
     )
+    duenos = propietarios if propietarios is not None else ([propietario] if propietario else [])
+    if duenos:
+        jornada.propietarios.set(duenos)
+    return jornada
 
 
 def crear_dependencia(username):
@@ -49,6 +52,16 @@ class ScopingPorDependenciaTests(APITestCase):
         slugs = {j['slug'] for j in resp.data}
         self.assertEqual(slugs, {'jornada-a'})
 
+    def test_dos_dependencias_comparten_la_misma_jornada(self):
+        jornada_compartida = crear_jornada('jornada-compartida', propietarios=[self.dependencia_a, self.dependencia_b])
+        for usuario in (self.dependencia_a, self.dependencia_b):
+            self.client.force_authenticate(user=usuario)
+            resp = self.client.get('/api/admin/jornadas/')
+            self.assertEqual(resp.status_code, 200)
+            self.assertIn('jornada-compartida', {j['slug'] for j in resp.data})
+            resp_detalle = self.client.get(f'/api/admin/jornadas/{jornada_compartida.slug}/')
+            self.assertEqual(resp_detalle.status_code, 200)
+
     def test_dependencia_no_puede_ver_detalle_de_jornada_ajena(self):
         self.client.force_authenticate(user=self.dependencia_a)
         resp = self.client.get(f'/api/admin/jornadas/{self.jornada_b.slug}/')
@@ -62,36 +75,36 @@ class ScopingPorDependenciaTests(APITestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 201)
         jornada = Jornada.objects.get(slug='jornada-nueva')
-        self.assertEqual(jornada.propietario_id, self.dependencia_a.id)
+        self.assertEqual(list(jornada.propietarios.all()), [self.dependencia_a])
 
     def test_dependencia_no_puede_asignarse_jornada_de_otro_al_crear(self):
         self.client.force_authenticate(user=self.dependencia_a)
         resp = self.client.post('/api/admin/jornadas/', {
             'slug': 'jornada-truco', 'nombre': 'Truco',
             'fecha_inicio': '2026-10-01', 'fecha_fin': '2026-10-02',
-            'propietario': self.dependencia_b.id,
+            'propietarios': [self.dependencia_b.id],
         }, format='json')
         self.assertEqual(resp.status_code, 201)
         jornada = Jornada.objects.get(slug='jornada-truco')
-        self.assertEqual(jornada.propietario_id, self.dependencia_a.id)
+        self.assertEqual(list(jornada.propietarios.all()), [self.dependencia_a])
 
     def test_dependencia_no_puede_reasignar_propietario_al_editar(self):
         self.client.force_authenticate(user=self.dependencia_a)
         resp = self.client.patch(f'/api/admin/jornadas/{self.jornada_a.slug}/', {
-            'propietario': self.dependencia_b.id,
+            'propietarios': [self.dependencia_b.id],
         }, format='json')
         self.assertEqual(resp.status_code, 200)
         self.jornada_a.refresh_from_db()
-        self.assertEqual(self.jornada_a.propietario_id, self.dependencia_a.id)
+        self.assertEqual(list(self.jornada_a.propietarios.all()), [self.dependencia_a])
 
     def test_admin_completo_reasigna_propietario(self):
         self.client.force_authenticate(user=self.admin)
         resp = self.client.patch(f'/api/admin/jornadas/{self.jornada_a.slug}/', {
-            'propietario': self.dependencia_b.id,
+            'propietarios': [self.dependencia_b.id],
         }, format='json')
         self.assertEqual(resp.status_code, 200)
         self.jornada_a.refresh_from_db()
-        self.assertEqual(self.jornada_a.propietario_id, self.dependencia_b.id)
+        self.assertEqual(list(self.jornada_a.propietarios.all()), [self.dependencia_b])
 
     def test_dependencia_no_puede_crear_momento_bajo_jornada_ajena(self):
         self.client.force_authenticate(user=self.dependencia_a)

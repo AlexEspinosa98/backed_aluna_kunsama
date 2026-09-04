@@ -39,15 +39,14 @@ class Jornada(models.Model):
         blank=True,
         related_name='jornadas_creadas',
     )
-    # Dueño de la jornada para el rol "dependencia" (ver PerfilUsuario) — distinto de creada_por,
-    # que es solo auditoría de quién la creó. Null = visible solo para administradores completos
-    # (una jornada sin dependencia asignada). Un admin completo puede reasignarla en cualquier
-    # momento; un usuario de dependencia nunca puede tocar este campo (se fuerza a sí mismo al
-    # crear, ver jornadas.views.JornadaAdminViewSet).
-    propietario = models.ForeignKey(
+    # Dueños de la jornada para el rol "dependencia" (ver PerfilUsuario) — distinto de creada_por,
+    # que es solo auditoría de quién la creó. Vacío = visible solo para administradores completos
+    # (una jornada sin dependencia asignada). Varios usuarios "dependencia" pueden compartir una
+    # misma jornada (ej. dos personas de la misma área viendo/editando la misma jornada). Un admin
+    # completo puede reasignar esta lista en cualquier momento; un usuario de dependencia nunca
+    # puede tocarla (se fuerza a sí mismo al crear, ver jornadas.views.JornadaAdminViewSet).
+    propietarios = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
         blank=True,
         related_name='jornadas_propias',
     )
