@@ -246,6 +246,65 @@ class PreguntaRestringidaPorMesaTests(BaseJornadaTestCase):
         self.assertEqual(Respuesta.objects.count(), 1)
 
 
+class MomentoRestringidoPorMesaTests(BaseJornadaTestCase):
+    """Café del Mundo: cada momento tipo mesa puede restringirse a ciertas mesas completas (no
+    solo preguntas sueltas dentro de un momento compartido)."""
+    def setUp(self):
+        super().setUp()
+        self.momento_mesa.mesas_permitidas = [1]
+        self.momento_mesa.save(update_fields=['mesas_permitidas'])
+        self.token_mesa_1 = self.registrar_participante('vocero1b@uni.edu.co', mesa=1, es_vocero=True).data['token']
+        self.token_mesa_2 = self.registrar_participante('vocero2b@uni.edu.co', mesa=2, es_vocero=True).data['token']
+
+    def test_momento_no_aparece_en_indice_para_mesa_no_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/', **self.auth_header(self.token_mesa_2)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotIn(self.momento_mesa.id, [m['id'] for m in resp.data])
+
+    def test_momento_si_aparece_en_indice_para_mesa_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/', **self.auth_header(self.token_mesa_1)
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(self.momento_mesa.id, [m['id'] for m in resp.data])
+
+    def test_detalle_de_momento_da_404_para_mesa_no_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/',
+            **self.auth_header(self.token_mesa_2),
+        )
+        self.assertEqual(resp.status_code, 404)
+
+    def test_detalle_de_momento_si_funciona_para_mesa_permitida(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/',
+            **self.auth_header(self.token_mesa_1),
+        )
+        self.assertEqual(resp.status_code, 200)
+
+    def test_mesa_no_permitida_no_puede_responder_el_momento(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
+            {'respuestas': [{'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': [self.opcion_mesa_a.id]}]},
+            format='json',
+            **self.auth_header(self.token_mesa_2),
+        )
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(Respuesta.objects.count(), 0)
+
+    def test_mesa_permitida_si_puede_responder_el_momento(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
+            {'respuestas': [{'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': [self.opcion_mesa_a.id]}]},
+            format='json',
+            **self.auth_header(self.token_mesa_1),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.count(), 1)
+
+
 class AdminApiTests(BaseJornadaTestCase):
     def test_crud_jornada_requiere_staff(self):
         resp = self.client.post('/api/admin/jornadas/', {

@@ -1,7 +1,7 @@
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -91,12 +91,24 @@ class MeParticipanteView(APIView):
         return Response(ParticipanteSerializer(request.user).data, status=status.HTTP_200_OK)
 
 
+def _momento_visible_para(momento, participante):
+    # mesas_permitidas vacía = visible para todas las mesas, igual que en Pregunta. Solo aplica
+    # en momentos tipo mesa — un momento individual no tiene noción de "mesa" del participante.
+    return (
+        momento.tipo != Momento.TIPO_MESA
+        or not momento.mesas_permitidas
+        or participante.mesa in momento.mesas_permitidas
+    )
+
+
 class MomentosIndiceView(generics.ListAPIView):
     serializer_class = MomentoIndiceSerializer
     permission_classes = [EsParticipanteDeLaJornada]
 
     def get_queryset(self):
-        return Momento.objects.filter(jornada__slug=self.kwargs['jornada_slug'], activo=True)
+        momentos = Momento.objects.filter(jornada__slug=self.kwargs['jornada_slug'], activo=True)
+        participante = self.request.user
+        return [m for m in momentos if _momento_visible_para(m, participante)]
 
 
 class MomentoDetalleView(generics.RetrieveAPIView):
@@ -106,6 +118,12 @@ class MomentoDetalleView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return Momento.objects.filter(jornada__slug=self.kwargs['jornada_slug'], activo=True)
+
+    def get_object(self):
+        momento = super().get_object()
+        if not _momento_visible_para(momento, self.request.user):
+            raise NotFound('Este momento no está disponible para tu mesa.')
+        return momento
 
 
 def _validar_entrada(pregunta, texto_libre, opciones):
@@ -135,6 +153,8 @@ class RespuestasMomentoView(APIView):
             Momento, pk=momento_id, jornada__slug=jornada_slug, activo=True
         )
         participante = request.user
+        if not _momento_visible_para(momento, participante):
+            raise NotFound('Este momento no está disponible para tu mesa.')
 
         entrada = RespuestaEnvioSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)

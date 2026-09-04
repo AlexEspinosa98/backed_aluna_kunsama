@@ -79,6 +79,15 @@ class Momento(models.Model):
         '["principios", "riesgos y dilemas", ...]). Si está vacía, los temas se descubren '
         'automáticamente con BERTopic, igual que hoy.'
     ))
+    # Mismo patrón que Pregunta.mesas_permitidas, pero a nivel de momento completo — para
+    # dinámicas tipo "Café del Mundo" donde cada mesa física trabaja un momento/tema distinto
+    # (no las mismas preguntas repartidas por mesa dentro de un único momento compartido). Solo
+    # aplica cuando tipo=mesa. Vacía = visible para todas las mesas, igual que siempre. Una mesa
+    # puede aparecer en más de un momento si un mismo tema se reparte entre varias mesas físicas.
+    mesas_permitidas = models.JSONField(default=list, blank=True, help_text=(
+        'Lista opcional de números de mesa que pueden ver/participar en este momento completo '
+        '(solo aplica en momentos tipo mesa). Vacía = visible para todas las mesas.'
+    ))
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)

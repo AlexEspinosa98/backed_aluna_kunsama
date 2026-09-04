@@ -39,7 +39,7 @@ class JornadaAdmin(admin.ModelAdmin):
 
 @admin.register(Momento)
 class MomentoAdmin(admin.ModelAdmin):
-    list_display = ['titulo', 'jornada', 'orden', 'tipo', 'activo']
+    list_display = ['titulo', 'jornada', 'orden', 'tipo', 'mesas_permitidas', 'activo']
     list_filter = ['jornada', 'tipo']
     inlines = [PreguntaInline]
 
