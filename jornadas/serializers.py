@@ -72,18 +72,31 @@ class JornadaResumenSerializer(serializers.ModelSerializer):
 
 class UsuarioAdminSerializer(serializers.ModelSerializer):
     """CRUD de usuarios admin/dependencia para EsAdminCompleto (ver jornadas/permissions.py).
-    `rol` no es un campo real de auth.User — vive en PerfilUsuario, ver create()/update()."""
+    `rol` no es un campo real de auth.User — vive en PerfilUsuario, ver create()/update(). El
+    mismo rol "dependencia" aplica sin distinción a jornadas e instrumentos — un usuario puede
+    estar a cargo de varias jornadas Y de varios instrumentos a la vez (ambos son M2M), así que
+    esta es la vista "universal" de todo lo que un usuario tiene asignado en los dos módulos.
+    instrumentos_a_cargo se resuelve por SerializerMethodField (en vez de importar
+    instrumentos.serializers) para no acoplar esta app "base" a la app de instrumentos — solo
+    depende del related_name que Instrumento.encargados ya deja en el modelo User."""
     rol = serializers.ChoiceField(choices=PerfilUsuario.ROL_CHOICES, required=False)
     password = serializers.CharField(write_only=True, required=False, allow_blank=False)
     jornadas_propias = JornadaResumenSerializer(many=True, read_only=True)
+    instrumentos_a_cargo = serializers.SerializerMethodField()
 
     class Meta:
         model = Usuario
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name', 'is_active',
-            'rol', 'password', 'jornadas_propias', 'date_joined',
+            'rol', 'password', 'jornadas_propias', 'instrumentos_a_cargo', 'date_joined',
         ]
         read_only_fields = ['id', 'date_joined']
+
+    def get_instrumentos_a_cargo(self, instance):
+        return [
+            {'id': i.id, 'slug': i.slug, 'nombre': i.nombre, 'activo': i.activo}
+            for i in instance.instrumentos_a_cargo.all()
+        ]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

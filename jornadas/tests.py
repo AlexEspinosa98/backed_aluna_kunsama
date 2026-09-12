@@ -163,6 +163,29 @@ class UsuarioAdminViewSetTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual([j['slug'] for j in resp.data['jornadas_propias']], ['jornada-x'])
 
+    def test_admin_completo_ve_jornadas_e_instrumentos_del_mismo_usuario(self):
+        # Un usuario de dependencia puede estar a cargo de varias jornadas Y de varios
+        # instrumentos a la vez — /api/admin/usuarios/ es la vista "universal" de ambos módulos.
+        from instrumentos.models import Instrumento
+
+        crear_jornada('jornada-x', propietario=self.dependencia)
+        crear_jornada('jornada-y', propietario=self.dependencia)
+        instrumento_a = Instrumento.objects.create(nombre='Instrumento A')
+        instrumento_a.encargados.add(self.dependencia)
+        instrumento_b = Instrumento.objects.create(nombre='Instrumento B')
+        instrumento_b.encargados.add(self.dependencia)
+
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(f'/api/admin/usuarios/{self.dependencia.id}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            sorted(j['slug'] for j in resp.data['jornadas_propias']), ['jornada-x', 'jornada-y']
+        )
+        self.assertEqual(
+            sorted(i['slug'] for i in resp.data['instrumentos_a_cargo']),
+            ['instrumento-a', 'instrumento-b'],
+        )
+
     def test_dependencia_no_puede_gestionar_usuarios(self):
         self.client.force_authenticate(user=self.dependencia)
         resp = self.client.get('/api/admin/usuarios/')

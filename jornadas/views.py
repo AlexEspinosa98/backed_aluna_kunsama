@@ -117,4 +117,6 @@ class UsuarioAdminViewSet(ModelViewSet):
     tener que cruzarlo a mano contra /api/admin/jornadas/."""
     serializer_class = UsuarioAdminSerializer
     permission_classes = [EsAdminCompleto]
-    queryset = Usuario.objects.filter(is_staff=True).select_related('perfil').prefetch_related('jornadas_propias')
+    queryset = Usuario.objects.filter(is_staff=True).select_related('perfil').prefetch_related(
+        'jornadas_propias', 'instrumentos_a_cargo'
+    )
