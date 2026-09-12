@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'jornadas',
     'participantes',
     'analitica',
+    'instrumentos',
 ]
 
 MIDDLEWARE = [

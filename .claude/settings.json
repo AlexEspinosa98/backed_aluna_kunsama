@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python manage.py makemigrations instrumentos)",
+      "Bash(grep -v \"^$\")",
+      "Bash(.venv/bin/python manage.py migrate)",
+      "Bash(.venv/bin/python manage.py cargar_instrumento_reflexion)",
+      "Bash(.venv/bin/python manage.py test instrumentos -v 2)",
+      "Bash(.venv/bin/python manage.py test)",
+      "Bash(git stash *)",
+      "Bash(.venv/bin/python manage.py test participantes)"
+    ]
+  }
+}

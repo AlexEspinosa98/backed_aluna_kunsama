@@ -43,8 +43,8 @@ Response `201`:
 ### HU-01b — Jornadas por dependencia (rol de usuario)
 Como administrador quiero poder dar de alta usuarios de "dependencia" que solo vean, creen y editen sus propias jornadas, para delegar la operación de una jornada sin darle acceso a las de otras dependencias.
 - Hay dos roles bajo `/api/admin/**`: **admin completo** (ve/gestiona todo) y **dependencia** (solo lo suyo). Una cuenta sin fila en `PerfilUsuario` — todas las que existían antes de este rol — se trata como admin completo, así que nada de lo que ya existía cambió de comportamiento.
-- `Jornada.propietario` es el dueño para efectos de este scoping (distinto de `creada_por`, que es solo auditoría de quién la creó). Al crear una jornada, un usuario de dependencia queda como `propietario` automáticamente — no puede asignársela a otro usuario aunque lo intente en el body. Un admin completo sí puede fijar/reasignar `propietario` en cualquier momento (`PATCH /api/admin/jornadas/{slug}/`), incluida una jornada sin dueño (`propietario: null`, visible solo para admins completos).
-- El scoping por dependencia aplica en cascada a todo lo que cuelga de la jornada: `momentos`, `preguntas`, `opciones`, `participantes`, `respuestas`, `reportes` y `analisis-momento-ia` — un usuario de dependencia ni ve ni puede crear nada bajo una jornada que no es suya (`403` al crear, la jornada ajena simplemente no aparece al listar/consultar).
+- `Jornada.propietarios` (M2M, no un solo dueño) es quien scopea el acceso — distinto de `creada_por`, que es solo auditoría de quién la creó. **Varios usuarios de dependencia pueden compartir una misma jornada** (ej. dos personas de la misma área viéndola/editándola ambas). Al crear una jornada, un usuario de dependencia queda como único integrante de `propietarios` automáticamente — no puede asignársela a otro usuario aunque lo intente en el body, ni agregarse a una jornada ajena. Un admin completo sí puede fijar/reasignar la lista completa de `propietarios` en cualquier momento (`PATCH /api/admin/jornadas/{slug}/` con `{"propietarios": [id, id, ...]}`), incluida una jornada sin ningún dueño (`propietarios: []`, visible solo para admins completos).
+- El scoping por dependencia aplica en cascada a todo lo que cuelga de la jornada: `momentos`, `preguntas`, `opciones`, `participantes`, `respuestas`, `reportes`, `analisis-momento-ia` y `analisis-jornada-ia` (HU-14g) — un usuario de dependencia ni ve ni puede crear nada bajo una jornada que no es suya (`403` al crear, la jornada ajena simplemente no aparece al listar/consultar, o `404` si se pide por id directo).
 - Las plantillas de análisis (`/api/admin/plantillas-analisis/`) son una excepción: son prompts globales, no de una jornada — dependencia puede leerlas (para elegir cuál usar al pedir un reporte) pero solo un admin completo puede crearlas/editarlas/borrarlas.
 
 ### HU-02 — Editar o desactivar una jornada
@@ -81,6 +81,7 @@ Como administrador quiero crear momentos definiendo su orden, título, contexto 
 - El tipo determina cómo se guardan las respuestas de sus preguntas (por participante o por mesa).
 - `GET /api/admin/momentos/` (filtrable `?jornada=<id>`) y `GET /api/admin/momentos/{id}/` consultan los momentos ya creados.
 - `categorias_semilla` (opcional, lista de strings, ej. `["principios", "riesgos y dilemas", ...]`) predefine las categorías temáticas de este momento para el análisis con IA (HU-13) — se repite la misma lista en los momentos que comparten un eje temático (ej. individual + mesa + dinámica de un mismo bloque). Si se deja vacía, los temas se descubren automáticamente sin partir de una lista fija.
+- `mesas_permitidas` (opcional, solo tiene efecto en momentos tipo `mesa`): lista de números de mesa que pueden ver/participar en este momento COMPLETO — pensado para dinámicas tipo "Café del Mundo" donde cada mesa física trabaja un momento/tema distinto, a diferencia de `Pregunta.mesas_permitidas` (HU-05), que restringe una pregunta puntual dentro de un momento compartido por todas las mesas. Vacía (por defecto) = visible para todas las mesas. Una misma mesa puede aparecer en varios momentos si un tema se reparte entre varias mesas físicas.
 
 <details><summary>Ejemplo — <code>POST /api/admin/momentos/</code></summary>
 
@@ -968,6 +969,99 @@ Response `200`: el mismo objeto del paso 1 con `prompt_sistema` y `actualizado_e
 
 **4. Restablecer al comportamiento de fábrica (opcional):** `DELETE /api/admin/plantillas-analisis/{id}/` — sin ninguna plantilla `gpt_momento` predeterminada, HU-14d vuelve a su prompt base sin ningún ajuste adicional.
 
+### HU-14g — Analizar una jornada completa cruzando momentos con IA (experimental)
+Como administrador quiero pedirle a una IA externa que lea TODOS los momentos activos de una jornada de una sola vez — su contexto y todas sus preguntas y respuestas reales — y me entregue hallazgos que crucen momentos distintos, para no perder de vista un patrón que se repite en varias mesas/temas cuando cada momento se analiza aislado (HU-14d). Pensado para jornadas tipo "Café del Mundo": varios momentos cortos, uno por mesa/tema, donde el valor real está en el panorama completo, no mesa por mesa.
+- `POST /api/admin/analisis-jornada-ia/` con `{"jornada": <id>}` — asíncrono (`201` con estado `pendiente`), mismo patrón que HU-14d pero a nivel de jornada en vez de momento; no depende de crear un `Reporte` ni de pedir antes el análisis de cada momento por separado — ambos endpoints son independientes y coexisten.
+- `GET /api/admin/analisis-jornada-ia/?jornada=<id>` lista el historial de análisis de esa jornada; `GET /api/admin/analisis-jornada-ia/{id}/` consulta uno puntual hasta que `estado` sea `"completo"`. `DELETE /api/admin/analisis-jornada-ia/{id}/` elimina uno.
+- 409 si ya hay un análisis en curso para ESA jornada (no bloquea otras jornadas ni el análisis por momento — es un guard independiente); se auto-sana si quedó huérfano por más de 10 minutos (mismo patrón que HU-14d).
+- **`resultado` tiene la misma forma que HU-14d** (`resumen_ejecutivo` + `hallazgos[]`, cada uno con `titulo`, `descripcion`, `tipo_grafica`, `datos[]`) **más `momentos_relacionados`** junto a `preguntas_relacionadas` en cada hallazgo — cuando el patrón realmente cruza momentos, un hallazgo puede citar varios a la vez (ej. `momentos_relacionados: [2, 5]`); si el patrón nace de un solo momento y no se repite en otro lado, también es válido citar solo ese.
+- El prompt instruye explícitamente a NO producir un bloque mecánico por momento — la jornada se lee de corrido como un solo instrumento, buscando activamente dónde reaparece el mismo patrón/tensión/consenso en momentos distintos antes de conformarse con un hallazgo aislado.
+- Entrega siempre entre 6 y 12 hallazgos (ni uno menos ni uno más) — prioriza pocos hallazgos densos y sustanciales sobre muchos superficiales.
+- **Respeta el mismo control de acceso por dependencia que el resto del sistema** (ver HU-01b): un usuario de dependencia solo puede pedir/ver/listar el análisis de una jornada que le pertenece (`403` al pedirlo, `404` al consultar una ajena por id, el listado simplemente no la incluye); un admin completo, de cualquiera.
+- Requiere `OPENAI_API_KEY` configurada en el servidor — mismo comportamiento de error claro que HU-14c/HU-14d si falta.
+- Fuera de alcance por ahora: no reemplaza `AnalisisMomentoIA` (HU-14d) — ambos coexisten, cada uno útil para una necesidad distinta (detalle de una mesa vs. panorama completo) — y no incluye una pantalla nueva en el panel, solo el endpoint (igual que se hizo primero con HU-14d).
+
+<details><summary>Ejemplo — <code>POST /api/admin/analisis-jornada-ia/</code></summary>
+
+Request:
+```json
+{ "jornada": 4 }
+```
+
+Response `201`:
+```json
+{
+  "id": 2,
+  "jornada": "jornada-agil-2",
+  "estado": "pendiente",
+  "resultado": {},
+  "error_mensaje": "",
+  "modelo_usado": "",
+  "solicitado_por": 3,
+  "creado_en": "2026-09-05T10:02:11.204Z",
+  "actualizado_en": "2026-09-05T10:02:11.204Z",
+  "completado_en": null
+}
+```
+
+Luego, consultando `GET /api/admin/analisis-jornada-ia/2/` hasta que `estado` sea `"completo"` (recortado — un `resultado` real trae entre 6 y 12 hallazgos, probado de punta a punta contra "Tu Voz, Nuestra Política": 8 mesas, 40 respuestas, generó 8 hallazgos, la mayoría cruzando entre 2 y 5 mesas distintas):
+```json
+{
+  "estado": "completo",
+  "modelo_usado": "gpt-4o",
+  "resultado": {
+    "jornada_id": 4,
+    "resumen_ejecutivo": "A lo largo de la jornada, los participantes coinciden reiteradamente en la necesidad de mecanismos institucionales más claros para canalizar sus propuestas...",
+    "hallazgos": [
+      {
+        "titulo": "Demanda transversal de acompañamiento institucional",
+        "descripcion": "El mismo reclamo por más acompañamiento institucional aparece de forma independiente en la Mesa 2 (Momento 2) y en la Mesa 5 (Momento 5), pese a tratar temas distintos — indica una necesidad estructural, no puntual de un tema.",
+        "momentos_relacionados": [2, 5],
+        "preguntas_relacionadas": [14, 41],
+        "tipo_grafica": "barras",
+        "datos": [
+          {"etiqueta": "Mesa 2 — lo mencionó", "valor": 6, "unidad": "conteo"},
+          {"etiqueta": "Mesa 5 — lo mencionó", "valor": 5, "unidad": "conteo"}
+        ]
+      }
+    ]
+  },
+  "completado_en": "2026-09-05T10:03:02.114Z"
+}
+```
+
+Error (ya hay un análisis en curso para esta jornada), `409`:
+```json
+{ "detail": "Ya hay un análisis con IA en proceso para esta jornada — espera a que termine (o falle) antes de pedir otro." }
+```
+
+Error (jornada de otra dependencia), `403`:
+```json
+{ "detail": "Esta jornada no te pertenece." }
+```
+</details>
+
+### HU-14h — Editar el prompt del análisis de jornada completa (HU-14g)
+Como administrador quiero editar el tono, foco o reglas del análisis de jornada completa (HU-14g) sin tocar código, igual que ya puedo hacerlo con el análisis de momento individual (HU-14e).
+- Se usa el mismo CRUD de HU-12 (`/api/admin/plantillas-analisis/`), creando o editando una plantilla con `tipo: "gpt_jornada"` y `predeterminada: true` — es un tipo independiente de `"gpt_momento"` (HU-14e), cada uno con su propia plantilla predeterminada.
+- Sus instrucciones se agregan al prompt base de HU-14g en cada llamada — no reemplazan las reglas fijas (mínimo 6/máximo 12 hallazgos, formato JSON, no inventar cifras, buscar patrones transversales), solo ajustan tono/foco encima de ellas.
+- Si no hay ninguna plantilla `gpt_jornada` marcada como predeterminada, HU-14g funciona igual con el prompt base — es un ajuste opcional, no un requisito.
+
+<details><summary>Ejemplo — <code>POST /api/admin/plantillas-analisis/</code></summary>
+
+Request:
+```json
+{
+  "nombre": "Jornada completa — foco en participación estudiantil",
+  "tipo": "gpt_jornada",
+  "prompt_sistema": "Da prioridad a los hallazgos que reflejen el nivel y la calidad de la participación estudiantil transversal a la jornada, por encima de los puramente administrativos.",
+  "predeterminada": true
+}
+```
+
+Response `201`: mismo cuerpo que el ejemplo de HU-12, con `tipo: "gpt_jornada"`.
+</details>
+
 ## Participante / Usuario
 
 ### HU-15 — Ver jornadas disponibles
@@ -1161,6 +1255,7 @@ Error (token de otra jornada), `403`:
 ### HU-19 — Listar los momentos de mi jornada
 Como usuario ya registrado quiero consultar el índice de momentos de la jornada a la que pertenezco, para saber qué pasos debo recorrer.
 - `GET /api/jornadas/{slug}/momentos/` requiere el token del paso anterior y devuelve `id`, `orden`, `título`, `slug` (autogenerado del título, único dentro de la jornada) y `tipo` de cada momento activo, ordenados por `orden`.
+- Si el momento es tipo `mesa` y trae `mesas_permitidas` (HU-03), no aparece en el índice para un participante cuya mesa no esté en esa lista — vacía (lo normal) significa visible para todas las mesas.
 
 <details><summary>Ejemplo — <code>GET /api/jornadas/jornada-agil-2/momentos/</code></summary>
 
@@ -1176,6 +1271,7 @@ Response `200`:
 ### HU-20 — Ver el detalle de un momento
 Como usuario quiero consultar el contexto y las preguntas (con sus opciones) de un momento, para poder responderlo.
 - `GET /api/jornadas/{slug}/momentos/{id}/` requiere token y devuelve 403 si el token no pertenece a esa jornada.
+- 404 ("Este momento no está disponible para tu mesa") si el momento restringe `mesas_permitidas` (HU-03) y la mesa del participante no está en la lista.
 
 <details><summary>Ejemplo — <code>GET /api/jornadas/jornada-agil-2/momentos/3/</code></summary>
 
@@ -1236,6 +1332,7 @@ Como vocero de mi mesa quiero enviar la respuesta compartida de un momento tipo 
 - **Solo participantes con `es_vocero: true`** pueden hacer `POST` en un momento tipo mesa — cualquier otro participante recibe `403`. La mesa NO se manda en el body: se toma automáticamente de `mesa` del participante autenticado (fijada en el registro, HU-17, o corregida por un admin, HU-10b) — así un vocero no puede enviar a nombre de otra mesa por error.
 - Un participante sin `es_vocero: true` puede seguir consultando el momento normalmente (`GET`, HU-20) — el bloqueo es solo al enviar respuestas.
 - Si otro participante de la misma mesa (que también fuera vocero) vuelve a responder, la respuesta se actualiza (no se duplica); se registra quién la envió por última vez (`registrado_por`) para trazabilidad.
+- Si el momento restringe `mesas_permitidas` (HU-03) y la mesa del vocero no está en la lista, `404` (mismo mensaje que HU-20) — no llega ni a validar las respuestas individuales. Si en cambio es una `Pregunta` puntual la que trae `mesas_permitidas` (HU-05) y esa mesa no puede responderla, `400` señalando esa pregunta específica.
 
 <details><summary>Ejemplo — <code>POST /api/jornadas/jornada-agil-2/momentos/5/respuestas/</code> (participante con <code>es_vocero: true</code> y <code>mesa: "Mesa 3"</code>)</summary>
 
@@ -1313,6 +1410,12 @@ Token de otra jornada, `403`:
 { "detail": "Debes autenticarte como participante de esta jornada." }
 ```
 </details>
+
+## Instrumentos de reflexión (aplicación restringida por preregistro)
+
+Caso de uso independiente (instrumento de reflexión con preregistro cerrado, revisión y descarga
+en Word), documentado aparte en
+[USER_STORIES_INSTRUMENTOS.md](USER_STORIES_INSTRUMENTOS.md) (HU-26 a HU-33).
 
 ## Documentación técnica (pública, sin rol)
 

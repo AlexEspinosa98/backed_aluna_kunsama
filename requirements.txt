@@ -12,3 +12,4 @@ sentence-transformers
 reportlab
 openai
 openpyxl
+python-docx
