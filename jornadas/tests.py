@@ -190,3 +190,30 @@ class UsuarioAdminViewSetTests(APITestCase):
         self.client.force_authenticate(user=self.dependencia)
         resp = self.client.get('/api/admin/usuarios/')
         self.assertEqual(resp.status_code, 403)
+
+    def test_no_permite_crear_username_duplicado_por_mayusculas(self):
+        Usuario.objects.create_user(username='john', password='pass12345', is_staff=True)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/usuarios/', {
+            'username': 'John', 'password': 'Contrasena-123',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
+class LoginCaseInsensitiveTests(APITestCase):
+    """Reporte real: un docente con username 'john' no podía entrar escribiendo 'John' (o
+    viceversa) — Postgres compara texto exacto por defecto. Cubre tanto /api/admin/login/ como
+    /api/instrumentos/login/, porque ambos pasan por el mismo AUTHENTICATION_BACKENDS de Django
+    (ver config/auth_backends.py)."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username='john', password='ClaveSegura123', is_staff=True)
+
+    def test_login_admin_no_distingue_mayusculas_en_username(self):
+        resp = self.client.post('/api/admin/login/', {'username': 'John', 'password': 'ClaveSegura123'})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('token', resp.data)
+
+    def test_login_admin_si_distingue_mayusculas_en_password(self):
+        resp = self.client.post('/api/admin/login/', {'username': 'john', 'password': 'clavesegura123'})
+        self.assertEqual(resp.status_code, 400)

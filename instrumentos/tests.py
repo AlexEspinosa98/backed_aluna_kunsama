@@ -82,6 +82,13 @@ class LoginPreregistradoTests(BaseInstrumentoTestCase):
         resp = self.client.get('/api/admin/instrumentos/')
         self.assertEqual(resp.status_code, 403)
 
+    def test_login_no_distingue_mayusculas_en_username(self):
+        resp = self.client.post(
+            '/api/instrumentos/login/', {'username': 'Docente', 'password': 'clave12345'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('token', resp.data)
+
 
 class ParticipanteNoRevientaContraInstrumentosTests(BaseInstrumentoTestCase):
     """Mismo cuidado que ya existe para Participante contra /api/admin/**: un token de Participante
@@ -152,6 +159,20 @@ class PreregistroInstrumentoEndpointTests(BaseInstrumentoTestCase):
         resp = self.client.post(
             '/api/admin/instrumento-preregistrados/',
             {'instrumento': self.instrumento.id, 'usuario_id': self.preregistrado.id},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_no_permite_crear_usuario_nuevo_con_username_duplicado_por_mayusculas(self):
+        # self.preregistrado ya existe con username='docente' (ver setUp) — el login ya no
+        # distingue mayúsculas, así que tampoco se debe poder crear 'Docente' como cuenta aparte.
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            '/api/admin/instrumento-preregistrados/',
+            {
+                'instrumento': self.instrumento.id, 'username': 'Docente',
+                'password': 'OtraClave123',
+            },
             format='json',
         )
         self.assertEqual(resp.status_code, 400)

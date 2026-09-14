@@ -145,6 +145,12 @@ class PreregistroInstrumentoAdminSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'password': 'La contraseña es obligatoria al crear un usuario nuevo.'}
                 )
+            # El login ya no distingue mayúsculas/minúsculas (ver config/auth_backends.py) — sin
+            # este chequeo se podrían crear "john" y "John" como cuentas distintas.
+            if Usuario.objects.filter(username__iexact=username).exists():
+                raise serializers.ValidationError(
+                    {'username': 'Ya existe un usuario con ese nombre de usuario (sin distinguir mayúsculas/minúsculas).'}
+                )
             usuario = Usuario(
                 username=username,
                 email=validated_data.pop('email', ''),

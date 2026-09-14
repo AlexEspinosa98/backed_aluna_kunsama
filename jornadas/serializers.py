@@ -104,6 +104,19 @@ class UsuarioAdminSerializer(serializers.ModelSerializer):
         data['rol'] = perfil.rol if perfil else PerfilUsuario.ROL_ADMIN
         return data
 
+    def validate_username(self, value):
+        # El login ya no distingue mayúsculas/minúsculas (ver config/auth_backends.py) — sin este
+        # chequeo se podrían crear "john" y "John" como cuentas distintas y el login quedaría
+        # ambiguo entre ambas. El UniqueValidator automático de DRF solo compara exacto.
+        queryset = Usuario.objects.filter(username__iexact=value)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError(
+                'Ya existe un usuario con ese nombre de usuario (sin distinguir mayúsculas/minúsculas).'
+            )
+        return value
+
     def validate_password(self, value):
         validate_password(value)
         return value
