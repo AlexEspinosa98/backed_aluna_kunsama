@@ -147,3 +147,78 @@ class PlantillaAnalisisPermisosTests(APITestCase):
             'nombre': 'Otra', 'tipo': PlantillaAnalisis.TIPO_LOCAL, 'prompt_sistema': 'Texto',
         }, format='json')
         self.assertEqual(resp.status_code, 201)
+
+
+class PayloadJornadaConTranscripcionesTests(APITestCase):
+    """El análisis de jornada (AnalisisJornadaIA) reutiliza el informe YA CALCULADO de cualquier
+    grabación vinculada y marcada para incluirse — nunca vuelve a leer la transcripción cruda.
+    Ver analitica/analisis_ia_openai.py::_construir_payload_jornada/_transcripciones_payload."""
+
+    def setUp(self):
+        self.jornada = crear_jornada('jornada-con-grabacion')
+
+    def _payload(self):
+        from .analisis_ia_openai import _construir_payload_jornada
+        return _construir_payload_jornada(self.jornada)
+
+    def test_jornada_sin_transcripciones_da_lista_vacia(self):
+        self.assertEqual(self._payload()['transcripciones'], [])
+
+    def test_incluye_informe_completo_de_sesion_vinculada_e_incluida(self):
+        from transcripciones.models import InformeTranscripcion, SesionTranscripcion
+
+        sesion = SesionTranscripcion.objects.create(
+            nombre='Reunión de comité', jornada=self.jornada, incluir_en_analisis_jornada=True,
+        )
+        InformeTranscripcion.objects.create(
+            sesion=sesion, estado=InformeTranscripcion.ESTADO_COMPLETO,
+            resultado={
+                'resumen_ejecutivo': 'Se acordó revisar el presupuesto.',
+                'temas_discutidos': ['presupuesto'],
+                'hallazgos': [{'titulo': 'Acuerdo presupuestal', 'descripcion': '...', 'citas': []}],
+            },
+        )
+
+        transcripciones = self._payload()['transcripciones']
+        self.assertEqual(len(transcripciones), 1)
+        self.assertEqual(transcripciones[0]['sesion_id'], sesion.id)
+        self.assertEqual(transcripciones[0]['resumen_ejecutivo'], 'Se acordó revisar el presupuesto.')
+
+    def test_excluye_sesion_marcada_para_no_incluirse(self):
+        from transcripciones.models import InformeTranscripcion, SesionTranscripcion
+
+        sesion = SesionTranscripcion.objects.create(
+            nombre='Reunión aparte', jornada=self.jornada, incluir_en_analisis_jornada=False,
+        )
+        InformeTranscripcion.objects.create(sesion=sesion, estado=InformeTranscripcion.ESTADO_COMPLETO)
+
+        self.assertEqual(self._payload()['transcripciones'], [])
+
+    def test_excluye_sesion_sin_informe_completo(self):
+        from transcripciones.models import InformeTranscripcion, SesionTranscripcion
+
+        sesion = SesionTranscripcion.objects.create(nombre='Sin informe listo', jornada=self.jornada)
+        InformeTranscripcion.objects.create(sesion=sesion, estado=InformeTranscripcion.ESTADO_PROCESANDO)
+
+        self.assertEqual(self._payload()['transcripciones'], [])
+
+    def test_toma_el_informe_completo_mas_reciente(self):
+        from django.utils import timezone
+
+        from transcripciones.models import InformeTranscripcion, SesionTranscripcion
+
+        sesion = SesionTranscripcion.objects.create(nombre='Con reintento', jornada=self.jornada)
+        InformeTranscripcion.objects.create(
+            sesion=sesion, estado=InformeTranscripcion.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Versión vieja'},
+            completado_en=timezone.now() - datetime.timedelta(days=1),
+        )
+        InformeTranscripcion.objects.create(
+            sesion=sesion, estado=InformeTranscripcion.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Versión nueva'},
+            completado_en=timezone.now(),
+        )
+
+        transcripciones = self._payload()['transcripciones']
+        self.assertEqual(len(transcripciones), 1)
+        self.assertEqual(transcripciones[0]['resumen_ejecutivo'], 'Versión nueva')

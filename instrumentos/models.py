@@ -8,8 +8,22 @@ class Instrumento(models.Model):
     nombre = models.CharField(max_length=255)
     descripcion = models.TextField(blank=True)
     activo = models.BooleanField(default=True)
+    # Opcional: vincula este instrumento a una jornada (ej. el diagnóstico de un departamento se
+    # aplica como parte de una jornada concreta, junto a sus momentos). Cuando está vinculado,
+    # `encargados` deja de usarse para scoping — pasa a ser Jornada.propietarios, un solo lugar
+    # para gestionar quién administra todo el paquete (ver propietarios_efectivos() más abajo e
+    # instrumentos/scoping.py). null=True/SET_NULL: un instrumento puede seguir existiendo suelto
+    # (sin jornada), como los que ya había antes de este campo.
+    jornada = models.ForeignKey(
+        'jornadas.Jornada',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='instrumentos',
+    )
     # Igual que Jornada.propietarios: varios encargados pueden compartir un mismo instrumento.
-    # Vacío = visible solo para administradores completos (ver instrumentos.scoping).
+    # Vacío = visible solo para administradores completos (ver instrumentos.scoping). Sin efecto
+    # si `jornada` está definida — ver propietarios_efectivos().
     encargados = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         blank=True,
@@ -30,6 +44,12 @@ class Instrumento(models.Model):
 
     def __str__(self):
         return self.nombre
+
+    def propietarios_efectivos(self):
+        """Quién administra este instrumento: Jornada.propietarios si está vinculado a una, si
+        no sus propios `encargados`. Devuelve un manager M2M (mismo tipo en ambos casos), así que
+        el llamador puede encadenar `.filter(...)`/`.all()` sin distinguir el caso."""
+        return self.jornada.propietarios if self.jornada_id else self.encargados
 
     def save(self, *args, **kwargs):
         if not self.slug:

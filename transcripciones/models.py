@@ -6,8 +6,10 @@ from django.utils.text import slugify
 class SesionTranscripcion(models.Model):
     """Una sesión grabada (reunión, entrevista, taller) transcrita por el front vía gpt-transcribe
     — el backend nunca toca audio ni websockets, solo recibe el texto ya transcrito en fragmentos
-    y lo almacena. Recurso independiente de Jornada/Momento/Participante: no es una encuesta con
-    preguntas y respuestas por persona, es UNA conversación continua."""
+    y lo almacena. Puede existir suelta o vinculada a una Jornada (ej. la grabación de una de sus
+    sesiones de trabajo) — no es una encuesta con preguntas y respuestas por persona como Momento,
+    sigue siendo UNA conversación continua, por eso no es un tipo de Momento sino un recurso
+    propio enlazable."""
     EN_CURSO = 'en_curso'
     CERRADA = 'cerrada'
     ESTADO_CHOICES = [
@@ -19,8 +21,26 @@ class SesionTranscripcion(models.Model):
     nombre = models.CharField(max_length=255)
     descripcion = models.TextField(blank=True)
     estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default=EN_CURSO)
+    # Opcional: vincula esta grabación a una jornada. Cuando está vinculada, `encargados` deja de
+    # usarse para scoping — pasa a ser Jornada.propietarios (ver propietarios_efectivos() e
+    # instrumentos/models.py, mismo patrón). null=True/SET_NULL: una grabación puede seguir
+    # existiendo suelta, como las que ya había antes de este campo.
+    jornada = models.ForeignKey(
+        'jornadas.Jornada',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='transcripciones',
+    )
+    # Solo tiene efecto si `jornada` está definida: si esta grabación debe tomarse en cuenta al
+    # generar el análisis de esa jornada (AnalisisJornadaIA en analitica) — ver
+    # analitica/analisis_ia_openai.py, que solo incluye las marcadas True y con un
+    # InformeTranscripcion ya `completo`. Default True: si alguien se toma el trabajo de vincular
+    # una grabación a una jornada, lo más probable es que sí quiera que cuente para el análisis.
+    incluir_en_analisis_jornada = models.BooleanField(default=True)
     # Mismo patrón que Instrumento.encargados/Jornada.propietarios: varios encargados pueden
-    # compartir una sesión; vacía = visible solo para administradores completos.
+    # compartir una sesión; vacía = visible solo para administradores completos. Sin efecto si
+    # `jornada` está definida — ver propietarios_efectivos().
     encargados = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
         blank=True,
@@ -42,6 +62,11 @@ class SesionTranscripcion(models.Model):
 
     def __str__(self):
         return self.nombre
+
+    def propietarios_efectivos(self):
+        """Quién administra esta grabación: Jornada.propietarios si está vinculada a una, si no
+        sus propios `encargados` — mismo mecanismo que Instrumento.propietarios_efectivos()."""
+        return self.jornada.propietarios if self.jornada_id else self.encargados
 
     def save(self, *args, **kwargs):
         if not self.slug:

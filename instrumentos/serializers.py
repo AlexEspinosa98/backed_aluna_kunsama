@@ -53,12 +53,13 @@ class SeccionInstrumentoAdminSerializer(serializers.ModelSerializer):
 
 class InstrumentoAdminSerializer(serializers.ModelSerializer):
     secciones = SeccionInstrumentoAdminSerializer(many=True, read_only=True)
+    jornada_nombre = serializers.CharField(source='jornada.nombre', read_only=True, default=None)
 
     class Meta:
         model = Instrumento
         fields = [
-            'id', 'slug', 'nombre', 'descripcion', 'activo', 'encargados', 'creado_por',
-            'creado_en', 'actualizado_en', 'secciones',
+            'id', 'slug', 'nombre', 'descripcion', 'activo', 'jornada', 'jornada_nombre',
+            'encargados', 'creado_por', 'creado_en', 'actualizado_en', 'secciones',
         ]
         read_only_fields = ['slug', 'creado_por', 'creado_en', 'actualizado_en']
 

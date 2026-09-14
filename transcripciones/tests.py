@@ -58,6 +58,65 @@ class SesionTranscripcionScopingTests(APITestCase):
         self.assertEqual(resp.status_code, 404)
 
 
+class SesionVinculadaAJornadaTests(APITestCase):
+    """Una sesión puede vincularse a una Jornada — en ese caso `encargados` deja de usarse para
+    scoping, la propiedad pasa a ser Jornada.propietarios (mismo mecanismo que Instrumento)."""
+
+    def setUp(self):
+        from jornadas.models import Jornada
+
+        self.admin = crear_admin_completo('admin')
+        self.dependencia_a = crear_dependencia('dependencia_a')
+        self.dependencia_b = crear_dependencia('dependencia_b')
+        self.jornada_a = Jornada.objects.create(
+            slug='jornada-a', nombre='Jornada A',
+            fecha_inicio='2026-09-01', fecha_fin='2026-09-02',
+        )
+        self.jornada_a.propietarios.add(self.dependencia_a)
+
+    def test_sesion_vinculada_hereda_propietarios_de_la_jornada(self):
+        sesion = SesionTranscripcion.objects.create(nombre='Grabación jornada A', jornada=self.jornada_a)
+
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.get(f'/api/admin/transcripciones/{sesion.slug}/')
+        self.assertEqual(resp.status_code, 200)
+
+        self.client.force_authenticate(user=self.dependencia_b)
+        resp = self.client.get(f'/api/admin/transcripciones/{sesion.slug}/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_dependencia_no_puede_vincular_a_jornada_ajena(self):
+        from jornadas.models import Jornada
+
+        jornada_ajena = Jornada.objects.create(
+            slug='jornada-ajena', nombre='Ajena', fecha_inicio='2026-09-01', fecha_fin='2026-09-02',
+        )
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post(
+            '/api/admin/transcripciones/', {'nombre': 'Intento', 'jornada': jornada_ajena.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_dependencia_puede_crear_vinculada_a_su_jornada_sin_forzar_encargados(self):
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post(
+            '/api/admin/transcripciones/', {'nombre': 'Vinculada', 'jornada': self.jornada_a.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sesion = SesionTranscripcion.objects.get(slug=resp.data['slug'])
+        self.assertEqual(sesion.jornada_id, self.jornada_a.id)
+        self.assertEqual(list(sesion.encargados.all()), [])
+
+    def test_desvincular_de_jornada_deja_al_usuario_como_encargado(self):
+        sesion = SesionTranscripcion.objects.create(nombre='Para desvincular', jornada=self.jornada_a)
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.patch(f'/api/admin/transcripciones/{sesion.slug}/', {'jornada': None}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.data)
+        sesion.refresh_from_db()
+        self.assertIsNone(sesion.jornada_id)
+        self.assertEqual(list(sesion.encargados.all()), [self.dependencia_a])
+
+
 class IngestaFragmentosTests(APITestCase):
     def setUp(self):
         self.admin = crear_admin_completo('admin')

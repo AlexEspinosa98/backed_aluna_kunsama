@@ -5,11 +5,14 @@ from .scoping import es_dependencia
 
 
 class SesionTranscripcionAdminSerializer(serializers.ModelSerializer):
+    jornada_nombre = serializers.CharField(source='jornada.nombre', read_only=True, default=None)
+
     class Meta:
         model = SesionTranscripcion
         fields = [
-            'id', 'slug', 'nombre', 'descripcion', 'estado', 'encargados', 'creado_por',
-            'creado_en', 'actualizado_en', 'cerrada_en',
+            'id', 'slug', 'nombre', 'descripcion', 'estado', 'jornada', 'jornada_nombre',
+            'incluir_en_analisis_jornada', 'encargados', 'creado_por', 'creado_en',
+            'actualizado_en', 'cerrada_en',
         ]
         read_only_fields = ['slug', 'estado', 'creado_por', 'creado_en', 'actualizado_en', 'cerrada_en']
 

@@ -1,6 +1,7 @@
-"""Mismo patrón que jornadas/scoping.py e instrumentos/scoping.py, mirando
-SesionTranscripcion.encargados. Reutiliza jornadas.scoping.es_dependencia — es el mismo rol
-admin/dependencia en toda la app."""
+"""Mismo patrón que jornadas/scoping.py e instrumentos/scoping.py, mirando el propietario EFECTIVO
+de una SesionTranscripcion: Jornada.propietarios cuando está vinculada a una jornada, si no sus
+propios `encargados` (ver SesionTranscripcion.propietarios_efectivos())."""
+from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 
 from jornadas.scoping import es_dependencia
@@ -12,18 +13,27 @@ __all__ = [
 ]
 
 
+def _q_propietario_efectivo(user, prefix=''):
+    p = f'{prefix}__' if prefix else ''
+    return (
+        Q(**{f'{p}jornada__isnull': False}) & Q(**{f'{p}jornada__propietarios': user})
+    ) | (
+        Q(**{f'{p}jornada__isnull': True}) & Q(**{f'{p}encargados': user})
+    )
+
+
 def sesiones_visibles(user):
     if es_dependencia(user):
-        return SesionTranscripcion.objects.filter(encargados=user)
+        return SesionTranscripcion.objects.filter(_q_propietario_efectivo(user)).distinct()
     return SesionTranscripcion.objects.all()
 
 
-def filtrar_por_encargado(queryset, user, lookup='sesion__encargados'):
+def filtrar_por_encargado(queryset, user, prefix='sesion'):
     if es_dependencia(user):
-        return queryset.filter(**{lookup: user})
+        return queryset.filter(_q_propietario_efectivo(user, prefix)).distinct()
     return queryset
 
 
 def verificar_acceso_sesion(user, sesion):
-    if es_dependencia(user) and not sesion.encargados.filter(id=user.id).exists():
+    if es_dependencia(user) and not sesion.propietarios_efectivos().filter(id=user.id).exists():
         raise PermissionDenied('Esta sesión de transcripción no te pertenece.')

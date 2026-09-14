@@ -218,7 +218,8 @@ class AnalisisJornadaIA(models.Model):
     resultado = models.JSONField(
         default=dict, blank=True,
         help_text='jornada_id, resumen_ejecutivo, hallazgos[] (cada uno con titulo, descripcion, '
-        'momentos_relacionados, preguntas_relacionadas, tipo_grafica y datos) — ver '
+        'momentos_relacionados, preguntas_relacionadas, transcripciones_relacionadas, '
+        'tipo_grafica y datos) — ver '
         'analisis_ia_openai.py.',
     )
     error_mensaje = models.TextField(blank=True)

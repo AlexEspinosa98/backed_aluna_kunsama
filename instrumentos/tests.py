@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
-from jornadas.models import Jornada
+from jornadas.models import Jornada, PerfilUsuario
 from participantes.models import Participante
 
 from .models import (
@@ -17,6 +17,12 @@ Usuario = get_user_model()
 
 def crear_admin(username='admin'):
     return Usuario.objects.create_user(username=username, password='pass12345', is_staff=True)
+
+
+def crear_dependencia(username='dependencia'):
+    usuario = Usuario.objects.create_user(username=username, password='pass12345', is_staff=True)
+    PerfilUsuario.objects.create(user=usuario, rol=PerfilUsuario.ROL_DEPENDENCIA)
+    return usuario
 
 
 def crear_preregistrado(username='docente', password='clave12345'):
@@ -121,6 +127,82 @@ class InstrumentoAdminScopingTests(BaseInstrumentoTestCase):
     def test_no_admin_no_puede_listar_instrumentos(self):
         self.client.force_authenticate(user=self.preregistrado)
         resp = self.client.get('/api/admin/instrumentos/')
+        self.assertEqual(resp.status_code, 403)
+
+
+class InstrumentoVinculadoAJornadaTests(APITestCase):
+    """Un instrumento puede vincularse a una Jornada — en ese caso `encargados` deja de usarse
+    para scoping, la propiedad pasa a ser Jornada.propietarios (ver
+    Instrumento.propietarios_efectivos())."""
+
+    def setUp(self):
+        self.admin = crear_admin('admin2')
+        self.dependencia_a = crear_dependencia('dependencia_a')
+        self.dependencia_b = crear_dependencia('dependencia_b')
+        self.jornada_a = Jornada.objects.create(
+            slug='jornada-a', nombre='Jornada A',
+            fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
+        )
+        self.jornada_a.propietarios.add(self.dependencia_a)
+
+    def test_instrumento_vinculado_hereda_propietarios_de_la_jornada(self):
+        instrumento = Instrumento.objects.create(nombre='Diagnóstico', jornada=self.jornada_a)
+
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.get(f'/api/admin/instrumentos/{instrumento.slug}/')
+        self.assertEqual(resp.status_code, 200)
+
+        self.client.force_authenticate(user=self.dependencia_b)
+        resp = self.client.get(f'/api/admin/instrumentos/{instrumento.slug}/')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_dependencia_no_puede_vincular_a_jornada_ajena(self):
+        jornada_ajena = Jornada.objects.create(
+            slug='jornada-ajena', nombre='Ajena',
+            fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
+        )
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post(
+            '/api/admin/instrumentos/', {'nombre': 'Intento', 'jornada': jornada_ajena.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_dependencia_puede_crear_vinculado_a_su_jornada_sin_forzar_encargados(self):
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post(
+            '/api/admin/instrumentos/', {'nombre': 'Vinculado', 'jornada': self.jornada_a.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        instrumento = Instrumento.objects.get(slug=resp.data['slug'])
+        self.assertEqual(instrumento.jornada_id, self.jornada_a.id)
+        self.assertEqual(list(instrumento.encargados.all()), [])
+
+    def test_desvincular_de_jornada_deja_al_usuario_como_encargado(self):
+        instrumento = Instrumento.objects.create(nombre='Para desvincular', jornada=self.jornada_a)
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.patch(f'/api/admin/instrumentos/{instrumento.slug}/', {'jornada': None}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.data)
+        instrumento.refresh_from_db()
+        self.assertIsNone(instrumento.jornada_id)
+        self.assertEqual(list(instrumento.encargados.all()), [self.dependencia_a])
+
+    def test_seccion_bajo_instrumento_vinculado_usa_scoping_de_jornada(self):
+        instrumento = Instrumento.objects.create(nombre='Con secciones', jornada=self.jornada_a)
+
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post(
+            '/api/admin/instrumento-secciones/',
+            {'instrumento': instrumento.id, 'orden': 1, 'titulo': 'Intro', 'tipo': 'contenido'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+        self.client.force_authenticate(user=self.dependencia_b)
+        resp = self.client.post(
+            '/api/admin/instrumento-secciones/',
+            {'instrumento': instrumento.id, 'orden': 2, 'titulo': 'Ajena', 'tipo': 'contenido'},
+            format='json',
+        )
         self.assertEqual(resp.status_code, 403)
 
 

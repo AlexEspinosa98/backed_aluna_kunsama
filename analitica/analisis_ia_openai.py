@@ -147,14 +147,21 @@ SYSTEM_PROMPT_JORNADA = (
     "reconocer esos patrones en las respuestas, pero nunca los repitas literal ni marques en tu "
     "salida cuáles 'vinieron' de ahí.\n\n"
 
+    "También puede llegar una lista `transcripciones`: cada una es el resumen YA REDACTADO de una "
+    "sesión grabada (reunión, entrevista o taller) vinculada a esta jornada — resumen_ejecutivo, "
+    "temas_discutidos y hallazgos ya sintetizados por otro proceso a partir de la transcripción "
+    "completa, nunca la transcripción cruda. Trátala como una fuente de evidencia más, con el "
+    "mismo peso que un momento — nunca la ignores ni la trates como un anexo aparte.\n\n"
+
     "=== CÓMO PENSAR ESTE ANÁLISIS (lo más importante) ===\n"
     "NO analices momento por momento de forma mecánica ni produzcas una lista donde cada "
     "momento tiene su propio bloque aislado — eso es lo que ya hacen el pipeline local y el "
     "análisis de momento individual (AnalisisMomentoIA), y precisamente NO es lo que se te "
-    "pide acá. Una jornada con varios momentos es UN SOLO instrumento de principio a fin, no N "
-    "análisis de momento sueltos pegados uno tras otro: léela toda de corrido, como lo haría un "
-    "analista humano con TODO el material de la jornada sobre la mesa, buscando ACTIVAMENTE "
-    "dónde un mismo patrón, tensión o consenso reaparece en momentos distintos antes de "
+    "pide acá. Una jornada con varios momentos (y, si las hay, sus transcripciones vinculadas) "
+    "es UN SOLO instrumento de principio a fin, no N análisis sueltos pegados uno tras otro: "
+    "léela toda de corrido, como lo haría un analista humano con TODO el material de la jornada "
+    "sobre la mesa, buscando ACTIVAMENTE dónde un mismo patrón, tensión o consenso reaparece en "
+    "momentos distintos — o entre un momento y una transcripción, en cualquier dirección — antes de "
     "conformarte con un hallazgo de un solo momento (ej. si en el Momento 2 los participantes "
     "piden más acompañamiento institucional y en el Momento 5, sobre un tema totalmente "
     "distinto, vuelve a aparecer la misma demanda de acompañamiento, esas dos cosas juntas son "
@@ -191,6 +198,8 @@ SYSTEM_PROMPT_JORNADA = (
     '      "descripcion": "<la deducción en sí, 2 a 5 frases, con sus cifras exactas>",\n'
     '      "momentos_relacionados": [<momento_id>, ...],\n'
     '      "preguntas_relacionadas": [<pregunta_id>, ...],\n'
+    '      "transcripciones_relacionadas": [<sesion_id>, ...] (vacío si el hallazgo no se apoya '
+    'en ninguna transcripción),\n'
     '      "tipo_grafica": "<pastel|barras|radar|null>",\n'
     '      "datos": [ {"etiqueta": "<string>", "valor": <número>, '
     '"unidad": "conteo"|"porcentaje"} ]\n'
@@ -290,6 +299,35 @@ def _construir_payload_momento(momento):
     }
 
 
+def _transcripciones_payload(jornada):
+    """Sesiones de transcripción (app `transcripciones`) vinculadas a esta jornada y marcadas
+    `incluir_en_analisis_jornada=True` — se manda el resumen YA CALCULADO por
+    transcripciones.informe_ia (resumen_ejecutivo/temas_discutidos/hallazgos de su propio
+    InformeTranscripcion `completo`), nunca la transcripción cruda: reutiliza el pipeline de
+    mapa-reducción que ya existe para sesiones largas en vez de volver a pagar esa llamada acá.
+    Una sesión sin informe `completo` todavía (o sin ninguno) simplemente no aporta nada."""
+    from transcripciones.models import InformeTranscripcion
+
+    payload = []
+    for sesion in jornada.transcripciones.filter(incluir_en_analisis_jornada=True):
+        informe = (
+            InformeTranscripcion.objects.filter(sesion=sesion, estado=InformeTranscripcion.ESTADO_COMPLETO)
+            .order_by('-completado_en')
+            .first()
+        )
+        if informe is None:
+            continue
+        resultado = informe.resultado or {}
+        payload.append({
+            'sesion_id': sesion.id,
+            'sesion_nombre': sesion.nombre,
+            'resumen_ejecutivo': resultado.get('resumen_ejecutivo'),
+            'temas_discutidos': resultado.get('temas_discutidos'),
+            'hallazgos': resultado.get('hallazgos'),
+        })
+    return payload
+
+
 def _construir_payload_jornada(jornada):
     momentos_payload = [
         {
@@ -307,6 +345,7 @@ def _construir_payload_jornada(jornada):
         'jornada_nombre': jornada.nombre,
         'jornada_descripcion': jornada.descripcion,
         'momentos': momentos_payload,
+        'transcripciones': _transcripciones_payload(jornada),
     }
 
 

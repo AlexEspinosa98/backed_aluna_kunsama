@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
+from jornadas.scoping import verificar_acceso_jornada
+
 from .docx_aplicacion import respuesta_docx_http
 from .models import (
     AplicacionInstrumento, ColumnaMatrizInstrumento, FilaMatrizInstrumento,
@@ -37,7 +39,7 @@ class ValidarEncargadoAlCrearMixin:
         if es_dependencia(self.request.user):
             padre = serializer.validated_data[self.campo_padre]
             instrumento = self._instrumento_del_padre(padre)
-            if not instrumento.encargados.filter(id=self.request.user.id).exists():
+            if not instrumento.propietarios_efectivos().filter(id=self.request.user.id).exists():
                 raise PermissionDenied('No puedes crear contenido bajo un instrumento que no es tuyo.')
         serializer.save()
 
@@ -48,19 +50,46 @@ class InstrumentoAdminViewSet(ModelViewSet):
     lookup_field = 'slug'
 
     def get_queryset(self):
-        return instrumentos_visibles(self.request.user)
+        queryset = instrumentos_visibles(self.request.user)
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        return queryset
 
     def perform_create(self, serializer):
-        if es_dependencia(self.request.user):
-            serializer.save(creado_por=self.request.user, encargados=[self.request.user])
-        else:
+        if not es_dependencia(self.request.user):
             serializer.save(creado_por=self.request.user)
+            return
+
+        jornada = serializer.validated_data.get('jornada')
+        if jornada is not None:
+            # Vinculado desde el vamos a una jornada propia: encargados queda sin uso, la
+            # propiedad pasa por Jornada.propietarios (ver Instrumento.propietarios_efectivos()).
+            verificar_acceso_jornada(self.request.user, jornada)
+            serializer.save(creado_por=self.request.user)
+        else:
+            serializer.save(creado_por=self.request.user, encargados=[self.request.user])
 
     def perform_update(self, serializer):
-        if es_dependencia(self.request.user):
-            serializer.save(encargados=list(serializer.instance.encargados.all()))
-        else:
+        if not es_dependencia(self.request.user):
             serializer.save()
+            return
+
+        instancia = serializer.instance
+        jornada_anterior = instancia.jornada
+        jornada_nueva = serializer.validated_data.get('jornada', jornada_anterior)
+
+        if jornada_nueva is not None:
+            verificar_acceso_jornada(self.request.user, jornada_nueva)
+            serializer.save()
+        elif jornada_anterior is not None:
+            # Se está desvinculando de la jornada: sin esto quedaría sin ningún encargado propio
+            # (encargados nunca se usó mientras estuvo vinculado) y desaparecería del scoping de
+            # todo el mundo, incluido quien lo está desvinculando.
+            serializer.save(encargados=[self.request.user])
+        else:
+            # Ya era suelto y sigue siéndolo: encargados fijos, mismo comportamiento de siempre.
+            serializer.save(encargados=list(instancia.encargados.all()))
 
     @action(detail=True, methods=['get'], url_path='dashboard')
     def dashboard(self, request, slug=None):
@@ -102,7 +131,7 @@ class SeccionInstrumentoAdminViewSet(ValidarEncargadoAlCrearMixin, ModelViewSet)
     ruta_instrumento = ''
 
     def get_queryset(self):
-        queryset = filtrar_por_encargado(SeccionInstrumento.objects.all(), self.request.user, 'instrumento__encargados')
+        queryset = filtrar_por_encargado(SeccionInstrumento.objects.all(), self.request.user, 'instrumento')
         instrumento_id = self.request.query_params.get('instrumento')
         if instrumento_id:
             queryset = queryset.filter(instrumento_id=instrumento_id)
@@ -117,7 +146,7 @@ class PreguntaInstrumentoAdminViewSet(ValidarEncargadoAlCrearMixin, ModelViewSet
 
     def get_queryset(self):
         queryset = filtrar_por_encargado(
-            PreguntaInstrumento.objects.all(), self.request.user, 'seccion__instrumento__encargados'
+            PreguntaInstrumento.objects.all(), self.request.user, 'seccion__instrumento'
         )
         seccion_id = self.request.query_params.get('seccion')
         if seccion_id:
@@ -134,7 +163,7 @@ class OpcionInstrumentoAdminViewSet(ValidarEncargadoAlCrearMixin, ModelViewSet):
     def get_queryset(self):
         queryset = filtrar_por_encargado(
             OpcionPreguntaInstrumento.objects.all(), self.request.user,
-            'pregunta__seccion__instrumento__encargados',
+            'pregunta__seccion__instrumento',
         )
         pregunta_id = self.request.query_params.get('pregunta')
         if pregunta_id:
@@ -151,7 +180,7 @@ class FilaMatrizAdminViewSet(ValidarEncargadoAlCrearMixin, ModelViewSet):
     def get_queryset(self):
         queryset = filtrar_por_encargado(
             FilaMatrizInstrumento.objects.all(), self.request.user,
-            'pregunta__seccion__instrumento__encargados',
+            'pregunta__seccion__instrumento',
         )
         pregunta_id = self.request.query_params.get('pregunta')
         if pregunta_id:
@@ -168,7 +197,7 @@ class ColumnaMatrizAdminViewSet(ValidarEncargadoAlCrearMixin, ModelViewSet):
     def get_queryset(self):
         queryset = filtrar_por_encargado(
             ColumnaMatrizInstrumento.objects.all(), self.request.user,
-            'pregunta__seccion__instrumento__encargados',
+            'pregunta__seccion__instrumento',
         )
         pregunta_id = self.request.query_params.get('pregunta')
         if pregunta_id:
@@ -206,7 +235,7 @@ class AplicacionInstrumentoAdminViewSet(ReadOnlyModelViewSet):
             AplicacionInstrumento.objects.select_related('preregistro__usuario', 'preregistro__instrumento')
             .prefetch_related('respuestas'),
             self.request.user,
-            'preregistro__instrumento__encargados',
+            'preregistro__instrumento',
         )
         instrumento_id = self.request.query_params.get('instrumento')
         if instrumento_id:

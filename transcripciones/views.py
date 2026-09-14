@@ -8,6 +8,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
+from jornadas.scoping import verificar_acceso_jornada
+
 from .informe_ia import generar_informe_transcripcion
 from .models import FragmentoTranscripcion, InformeTranscripcion, SesionTranscripcion
 from .pdf_informe import construir_pdf_response
@@ -33,19 +35,40 @@ class SesionTranscripcionAdminViewSet(viewsets.ModelViewSet):
     lookup_field = 'slug'
 
     def get_queryset(self):
-        return sesiones_visibles(self.request.user)
+        queryset = sesiones_visibles(self.request.user)
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        return queryset
 
     def perform_create(self, serializer):
-        if es_dependencia(self.request.user):
-            serializer.save(creado_por=self.request.user, encargados=[self.request.user])
-        else:
+        if not es_dependencia(self.request.user):
             serializer.save(creado_por=self.request.user)
+            return
+
+        jornada = serializer.validated_data.get('jornada')
+        if jornada is not None:
+            verificar_acceso_jornada(self.request.user, jornada)
+            serializer.save(creado_por=self.request.user)
+        else:
+            serializer.save(creado_por=self.request.user, encargados=[self.request.user])
 
     def perform_update(self, serializer):
-        if es_dependencia(self.request.user):
-            serializer.save(encargados=list(serializer.instance.encargados.all()))
-        else:
+        if not es_dependencia(self.request.user):
             serializer.save()
+            return
+
+        instancia = serializer.instance
+        jornada_anterior = instancia.jornada
+        jornada_nueva = serializer.validated_data.get('jornada', jornada_anterior)
+
+        if jornada_nueva is not None:
+            verificar_acceso_jornada(self.request.user, jornada_nueva)
+            serializer.save()
+        elif jornada_anterior is not None:
+            serializer.save(encargados=[self.request.user])
+        else:
+            serializer.save(encargados=list(instancia.encargados.all()))
 
     @action(detail=True, methods=['post'], url_path='fragmentos')
     def fragmentos(self, request, slug=None):
@@ -157,7 +180,7 @@ class InformeTranscripcionAdminViewSet(
 
     def get_queryset(self):
         queryset = InformeTranscripcion.objects.select_related('sesion')
-        queryset = filtrar_por_encargado(queryset, self.request.user, 'sesion__encargados')
+        queryset = filtrar_por_encargado(queryset, self.request.user, 'sesion')
         sesion_id = self.request.query_params.get('sesion')
         if sesion_id:
             queryset = queryset.filter(sesion_id=sesion_id)
