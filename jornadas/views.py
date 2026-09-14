@@ -118,5 +118,5 @@ class UsuarioAdminViewSet(ModelViewSet):
     serializer_class = UsuarioAdminSerializer
     permission_classes = [EsAdminCompleto]
     queryset = Usuario.objects.filter(is_staff=True).select_related('perfil').prefetch_related(
-        'jornadas_propias', 'instrumentos_a_cargo'
+        'jornadas_propias', 'instrumentos_a_cargo', 'transcripciones_a_cargo'
     )

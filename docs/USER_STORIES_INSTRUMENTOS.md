@@ -1,17 +1,29 @@
-# Historias de usuario — Instrumentos de reflexión (aplicación restringida por preregistro)
+# Historias de usuario — Instrumentos (aplicación restringida por preregistro)
 
 Formato: **Como** `<rol>` **quiero** `<acción>` **para** `<beneficio>`, con criterios de aceptación.
 Complementa a [USER_STORIES.md](USER_STORIES.md) (jornadas/participantes) con un caso de uso
 independiente: ver el contexto completo del módulo en `CLAUDE.md`.
 
 A diferencia de `jornadas`/`participantes` (autorregistro libre por link), un **instrumento** es un
-documento de reflexión —como `Reflexion_Lectura_Escritura_IA_UNIMAGDALENA.docx`, precargado con
-`python manage.py cargar_instrumento_reflexion`— que solo pueden responder usuarios preregistrados
-uno por uno por un encargado, y cuyas respuestas quedan pendientes de revisión (aceptar/rechazar)
-antes de darse por válidas. El árbol de contenido (`Instrumento` → `SeccionInstrumento` →
-`PreguntaInstrumento` → `OpcionPreguntaInstrumento`/`FilaMatrizInstrumento`/
+documento —de reflexión, de diagnóstico, o cualquier otro formato— que solo pueden responder
+usuarios preregistrados uno por uno por un encargado, y cuyas respuestas quedan pendientes de
+revisión (aceptar/rechazar) antes de darse por válidas. El árbol de contenido (`Instrumento` →
+`SeccionInstrumento` → `PreguntaInstrumento` → `OpcionPreguntaInstrumento`/`FilaMatrizInstrumento`/
 `ColumnaMatrizInstrumento`) es 100% editable desde `/api/admin/**` — se puede agregar, quitar o
-reordenar cualquier sección, pregunta, opción, fila o columna sin tocar código.
+reordenar cualquier sección, pregunta, opción, fila o columna sin tocar código, así que cada
+instrumento nuevo es solo un registro más, nunca una app o un modelo aparte. Dos ya precargados
+como ejemplo (ambos idempotentes, correr de nuevo actualiza en vez de duplicar):
+- `python manage.py cargar_instrumento_reflexion` — "Leer, escribir y pensar en tiempos de
+  inteligencia artificial" (`Reflexion_Lectura_Escritura_IA_UNIMAGDALENA.docx`): narrativa +
+  una matriz comparativa de 8×3 + 6 preguntas abiertas.
+- `python manage.py cargar_instrumento_diagnostico_articulacion` — "Diagnóstico para la
+  Articulación Académica" (`Formato_Diagnostico_Articulacion_Academica_UNIMAGDALENA.docx`): 11
+  secciones, 90 preguntas, varias matrices (incluidas 3 con filas prellenadas para "cuantas hagan
+  falta" — mapa de profesores, asuntos y compromisos — porque el tipo `matriz` fija las filas de
+  antemano; el admin agrega más desde `/api/admin/instrumento-filas-matriz/` si una sesión
+  concreta las necesita). La mayoría de sus preguntas quedaron `obligatoria=false` a propósito —
+  exigir cada celda de un instrumento de 90 preguntas en una sesión de 90 minutos no es realista;
+  solo los datos generales de la sesión y la síntesis ejecutiva final son obligatorios.
 
 ### HU-26 — Crear y editar un instrumento y su árbol de secciones/preguntas/matriz
 Como administrador o encargado quiero crear un instrumento y construir libremente sus secciones y preguntas (incluida una matriz comparativa de filas × columnas), para modelar cualquier documento de reflexión sin depender de una estructura fija en el código.
@@ -19,7 +31,8 @@ Como administrador o encargado quiero crear un instrumento y construir librement
 - `POST /api/admin/instrumento-secciones/` — cada sección es `tipo=contenido` (texto de solo lectura, para narrativa) o `tipo=preguntas` (agrupa preguntas a diligenciar).
 - `POST /api/admin/instrumento-preguntas/` — `tipo` es `abierta`, `unica`, `multiple` o `matriz`. Para `unica`/`multiple` se agregan opciones en `POST /api/admin/instrumento-opciones/`; para `matriz` se agregan filas en `POST /api/admin/instrumento-filas-matriz/` y columnas en `POST /api/admin/instrumento-columnas-matriz/`.
 - Todos los niveles se pueden editar (`PATCH`) o eliminar (`DELETE`) independientemente — agregar o quitar una fila de la matriz, por ejemplo, no afecta las demás.
-- Mismo scoping admin-completo/dependencia que `jornadas`: `Instrumento.encargados` (M2M) funciona igual que `Jornada.propietarios` — varios encargados pueden compartir un instrumento; un usuario de dependencia solo ve/crea contenido bajo instrumentos donde es encargado, y queda forzado a sí mismo como único encargado al crear uno.
+- Mismo scoping admin-completo/dependencia que `jornadas`: `Instrumento.encargados` (M2M) funciona igual que `Jornada.propietarios` — varios encargados pueden compartir un instrumento, y un mismo usuario puede ser encargado de varios instrumentos a la vez (y, por separado, propietario de varias jornadas — son M2M independientes). Un usuario de dependencia solo ve/crea contenido bajo instrumentos donde es encargado, y queda forzado a sí mismo como único encargado al crear uno.
+- No hay un CRUD de usuarios aparte para instrumentos: se crean y gestionan con el mismo `/api/admin/usuarios/` de siempre (ver HU-09b en [USER_STORIES.md](USER_STORIES.md)), que ahora incluye `instrumentos_a_cargo` junto a `jornadas_propias` en la respuesta — una sola vista "universal" de todo lo que un usuario tiene asignado en ambos módulos.
 
 <details><summary>Ejemplo — <code>POST /api/admin/instrumento-preguntas/</code> (pregunta tipo matriz)</summary>
 

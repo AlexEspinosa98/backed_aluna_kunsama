@@ -164,9 +164,11 @@ class UsuarioAdminViewSetTests(APITestCase):
         self.assertEqual([j['slug'] for j in resp.data['jornadas_propias']], ['jornada-x'])
 
     def test_admin_completo_ve_jornadas_e_instrumentos_del_mismo_usuario(self):
-        # Un usuario de dependencia puede estar a cargo de varias jornadas Y de varios
-        # instrumentos a la vez — /api/admin/usuarios/ es la vista "universal" de ambos módulos.
+        # Un usuario de dependencia puede estar a cargo de varias jornadas, varios instrumentos Y
+        # varias sesiones de transcripción a la vez — /api/admin/usuarios/ es la vista "universal"
+        # de los tres módulos.
         from instrumentos.models import Instrumento
+        from transcripciones.models import SesionTranscripcion
 
         crear_jornada('jornada-x', propietario=self.dependencia)
         crear_jornada('jornada-y', propietario=self.dependencia)
@@ -174,6 +176,8 @@ class UsuarioAdminViewSetTests(APITestCase):
         instrumento_a.encargados.add(self.dependencia)
         instrumento_b = Instrumento.objects.create(nombre='Instrumento B')
         instrumento_b.encargados.add(self.dependencia)
+        sesion_a = SesionTranscripcion.objects.create(nombre='Sesion A')
+        sesion_a.encargados.add(self.dependencia)
 
         self.client.force_authenticate(user=self.admin)
         resp = self.client.get(f'/api/admin/usuarios/{self.dependencia.id}/')
@@ -184,6 +188,9 @@ class UsuarioAdminViewSetTests(APITestCase):
         self.assertEqual(
             sorted(i['slug'] for i in resp.data['instrumentos_a_cargo']),
             ['instrumento-a', 'instrumento-b'],
+        )
+        self.assertEqual(
+            [s['slug'] for s in resp.data['transcripciones_a_cargo']], ['sesion-a'],
         )
 
     def test_dependencia_no_puede_gestionar_usuarios(self):
