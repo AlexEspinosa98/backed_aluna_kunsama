@@ -99,6 +99,12 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Primer uso de subida de archivos del proyecto (documentos ya diligenciados para
+# ExtraccionInstrumento) — nunca se sirven públicamente por URL, solo los lee el propio backend
+# para mandarlos a OpenAI, así que no hace falta configurar nginx para esto.
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=['http://localhost:3000'])
