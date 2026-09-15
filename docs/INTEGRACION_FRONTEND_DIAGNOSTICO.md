@@ -4,49 +4,60 @@ Guía para el equipo de frontend: cómo mostrar el instrumento de diagnóstico d
 y cómo integrar la nueva función de "subir documento ya diligenciado" (Word o PDF) que lo
 transcribe con IA.
 
-## 1. Contexto — por qué hay 351 preguntas "sueltas"
+## 1. Contexto — 90 preguntas, 7 de ellas tipo matriz real
 
-El documento original tiene varias tablas tipo matriz (ej. "Matriz de responsabilidades": 12
-filas × 4 columnas). El modelo `Pregunta` que ya usa el resto de las jornadas (Jornada Ágil 2, Tu
-Voz Nuestra Política, etc.) **no tiene un tipo "matriz"** — solo `abierta` / `unica` / `multiple`,
-sin filas × columnas. Para que el diagnóstico apareciera en la misma pantalla de jornada sin tocar
-el backend de tipos de pregunta, cada celda de cada matriz quedó convertida en **una pregunta
-suelta** (tipo `abierta`), con su texto combinando fila y columna.
-
-Resultado actual: **1 Momento** ("Instrumento de Diagnóstico para la Articulación Académica") con
-**351 preguntas**, en la jornada `diagnostico-articulacion-academica`.
+El diagnóstico vive en un **único Momento** ("Instrumento de Diagnóstico para la Articulación
+Académica") con **90 preguntas** — la misma cantidad que el documento original. `Pregunta` ahora
+soporta un cuarto tipo, `matriz`, además de `abierta`/`unica`/`multiple`: una pregunta matriz no
+tiene texto de una sola celda, tiene **filas y columnas reales** (cada una con su propio id), y se
+llena una celda a la vez (fila × columna). 7 de las 90 preguntas son de este tipo: Matriz de
+responsabilidades (12×4), Análisis de coherencia × 3 componentes (7×4 cada uno), Mapa de
+capacidades profesorales (12×6), Asuntos para decisión institucional (8×4), Compromisos
+inmediatos (8×4).
 
 ```
 GET /api/admin/momentos/?jornada=<id_jornada>
 GET /api/admin/preguntas/?momento=<id_momento>
 ```
 
-## 2. Cómo agrupar visualmente sin tocar el backend (recomendado)
+Cada pregunta en esa respuesta trae, según su tipo, `opciones` (única/múltiple) o `filas`/`columnas`
+(matriz) ya anidadas — no hace falta ninguna llamada extra ni parsear texto para reconstruir nada:
 
-El `texto` de cada pregunta generada a partir de una matriz sigue un patrón consistente y
-parseable, pensado para que el frontend pueda reconstruir la tabla sin ningún cambio de API:
+```json
+{
+  "id": 901,
+  "tipo": "matriz",
+  "texto": "Para cada proceso, indique quién lo hace hoy, quién debería liderar...",
+  "obligatoria": true,
+  "filas": [{"id": 1, "texto": "Microdiseños", "orden": 1}, {"id": 2, "texto": "Estándares disciplinares", "orden": 2}],
+  "columnas": [{"id": 1, "texto": "¿Quién lo hace hoy?", "orden": 1}, {"id": 2, "texto": "¿Quién debería liderar?", "orden": 2}]
+}
+```
 
-- Celda simple: `"<fila> — <columna>"` — ej. `"Microdiseños — ¿Quién lo hace hoy?"`
-- Celda con contexto adicional (cuando una sección tiene varias matrices, ej. los 3 componentes
-  del análisis de coherencia): `"<contexto> · <fila> — <columna>"` — ej.
-  `"Componente 1 · Nombre — Programa/modalidad A"`
+## 2. Cómo dibujarla: una tabla real, `filas` en el eje Y, `columnas` en el eje X
 
-Heurística sugerida para el frontend:
-1. Separar por `" — "`. Si hay match, la parte izquierda es la **fila** (y si contiene `" · "`,
-   lo que está antes de eso es un contexto/grupo mayor — ej. "Componente 1"), la derecha es la
-   **columna**.
-2. Agrupar preguntas consecutivas que comparten el mismo prefijo de fila (o de contexto) en un
-   bloque/tabla visual — como ya vienen consecutivas en `orden`, agrupar por prefijo igual entre
-   preguntas contiguas es suficiente, no hace falta ninguna llamada extra a la API.
-3. Preguntas sin `" — "` en el texto (datos generales, síntesis ejecutiva, etc.) se muestran igual
-   que cualquier pregunta normal, sin agrupar.
+Con `filas`/`columnas` ya en la respuesta, dibujar la tabla es directo: una fila HTML por cada
+elemento de `filas`, una columna por cada elemento de `columnas`, una celda editable (input/
+textarea) en cada intersección. No hace falta agrupar preguntas ni parsear texto — eso era
+necesario en la versión anterior de este documento, cuando `Pregunta` todavía no tenía tipo
+`matriz` y cada celda llegaba como una pregunta suelta con el texto combinando fila y columna;
+ya no aplica.
 
-Esto da una experiencia tipo tabla con **cero cambios de backend**. Si más adelante se prefiere
-tener soporte real de matriz en la API (tipo `matriz` + filas/columnas explícitas, igual que ya
-existe en el módulo `instrumentos` — ver `instrumentos/models.py` `PreguntaInstrumento`,
-`FilaMatrizInstrumento`, `ColumnaMatrizInstrumento` como referencia de diseño), es una migración
-de modelo aparte que también implica cambios de renderizado en el frontend — avisen cuando quieran
-encararlo y lo construimos de punta a punta.
+**Enviar una celda** (`POST .../momentos/{id}/respuestas/`, mismo endpoint de siempre para
+cualquier tipo de pregunta): una entrada por celda, todas con el mismo `pregunta_id` pero
+`fila_id`/`columna_id` distintos —
+
+```json
+{"respuestas": [
+  {"pregunta_id": 901, "fila_id": 1, "columna_id": 1, "texto_libre": "El jefe de departamento"},
+  {"pregunta_id": 901, "fila_id": 1, "columna_id": 2, "texto_libre": "El comité curricular"}
+]}
+```
+
+Si la pregunta es `obligatoria`, el backend exige **todas** las celdas (todo fila × columna) antes
+de aceptar el envío — si falta una sola, responde `400` con `{"faltantes": [901, ...]}` (el id de
+la pregunta, no celda por celda). `fila_id`/`columna_id` nunca van en preguntas que no son matriz
+(sería `400`), y en una matriz son obligatorios y deben pertenecer a esa pregunta específica.
 
 ## 3. Subir un documento ya diligenciado (Word o PDF)
 
@@ -69,7 +80,7 @@ Content-Type: multipart/form-data
 Campos:
 | Campo | Obligatorio | Descripción |
 |---|---|---|
-| `momento` | sí | id del Momento (351 preguntas del diagnóstico) |
+| `momento` | sí | id del Momento (90 preguntas del diagnóstico, 7 de ellas tipo matriz) |
 | `archivo` | sí | `.pdf` o `.docx` (cualquier otro formato se rechaza con 400) |
 | `participante_id` | uno de los dos | id de un `Participante` ya registrado en la jornada |
 | `correo_institucional` + `nombre` + `apellido` + `rol` (+ `telefono` opcional) | uno de los dos | para registrar a la persona/departamento de una vez, si todavía no existe |
@@ -107,8 +118,9 @@ Con `estado: "completo"`, `resultado` trae lo que la IA transcribió, sin haber 
   "estado": "completo",
   "resultado": {
     "respuestas": [
-      {"pregunta": 8, "texto_libre": "Departamento de Sistemas", "opcion_ids": []},
-      {"pregunta": 21, "texto_libre": "", "opcion_ids": [111]}
+      {"pregunta": 8, "texto_libre": "Departamento de Sistemas", "opcion_ids": [], "fila_id": null, "columna_id": null},
+      {"pregunta": 21, "texto_libre": "", "opcion_ids": [111], "fila_id": null, "columna_id": null},
+      {"pregunta": 901, "texto_libre": "El jefe de departamento", "opcion_ids": [], "fila_id": 1, "columna_id": 1}
     ]
   },
   "preguntas_omitidas": []

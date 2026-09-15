@@ -1673,33 +1673,14 @@ montado como una jornada normal en vez de usar el módulo `instrumentos` (ver m�
 frontend de administración de jornadas no tiene ninguna vista para ese módulo — solo sabe mostrar
 `Momento`/`Pregunta`.
 
-### HU-43 — Ver el diagnóstico como parte de una jornada, en un único recorrido fluido
-Como administrador quiero que el instrumento de diagnóstico aparezca en la pantalla normal de jornada (pestaña "Instrumento" = Momentos/Preguntas), para no depender de una vista aparte que el frontend no tiene construida.
-- El diagnóstico vive en la jornada `diagnostico-articulacion-academica`, con un **único** `Momento` ("Instrumento de Diagnóstico para la Articulación Académica") que agrupa las **351 preguntas** — un solo momento, no uno por sección del documento original, para que la sesión se sienta como un recorrido continuo y no una serie de pasos separados.
-- `GET /api/admin/momentos/?jornada=<id_jornada>` → 1 resultado. `GET /api/admin/preguntas/?momento=<id_momento>` → 351 resultados.
-- El modelo clásico `Pregunta` no tiene tipo "matriz" (solo `abierta`/`unica`/`multiple`, sin filas×columnas) — cada celda de cada tabla del documento original (ej. "Matriz de responsabilidades": 12 filas × 4 columnas) quedó convertida en una pregunta suelta tipo `abierta`, con el texto combinando fila y columna. Es la única forma de que el contenido apareciera en esa pantalla sin agregar un tipo de pregunta nuevo al backend y sin coordinación con el frontend.
-- El comando `python manage.py migrar_diagnostico_a_momentos` (idempotente) reconstruye este momento a partir del contenido ya cargado en `instrumentos.Instrumento` (slug `diagnostico-articulacion-academica`, cargado con `cargar_instrumento_diagnostico_articulacion` — ver módulo Instrumentos) — no retipea ningún texto, solo aplana las matrices en preguntas individuales.
+### HU-43 — Ver el diagnóstico como parte de una jornada, en un único recorrido fluido, con matrices reales
+Como administrador quiero que el instrumento de diagnóstico aparezca en la pantalla normal de jornada (pestaña "Instrumento" = Momentos/Preguntas) y que sus tablas se representen como matrices reales (fila × columna), no como preguntas sueltas, para no depender de una vista aparte y para que el frontend pueda dibujarlas como tabla en vez de una lista plana de campos.
+- El diagnóstico vive en la jornada `diagnostico-articulacion-academica`, con un **único** `Momento` ("Instrumento de Diagnóstico para la Articulación Académica") que agrupa **90 preguntas** — la misma cantidad que el documento original, porque desde que `Pregunta` soporta tipo `matriz` cada tabla del documento se guarda como UNA pregunta matriz (con sus filas y columnas reales), no aplanada celda por celda.
+- **7 de esas 90 preguntas son tipo `matriz`**: Matriz de responsabilidades (12 filas × 4 columnas), Análisis de coherencia académica × 3 componentes (7 filas × 4 columnas cada uno), Mapa de capacidades profesorales (12 filas × 6 columnas), Asuntos para decisión institucional (8 filas × 4 columnas), Compromisos inmediatos (8 filas × 4 columnas).
+- `GET /api/admin/momentos/?jornada=<id_jornada>` → 1 resultado. `GET /api/admin/preguntas/?momento=<id_momento>` → 90 resultados; cada pregunta tipo `matriz` trae `filas: [{id, texto, orden}, ...]` y `columnas: [{id, texto, orden}, ...]` anidadas — el frontend arma la tabla directo de ahí, sin parsear texto ni adivinar agrupaciones.
+- El comando `python manage.py migrar_diagnostico_a_momentos` (idempotente) reconstruye este momento a partir del contenido ya cargado en `instrumentos.Instrumento` (slug `diagnostico-articulacion-academica`, cargado con `cargar_instrumento_diagnostico_articulacion` — ver módulo Instrumentos) — no retipea ningún texto, copia cada pregunta matriz 1:1 con sus filas/columnas reales (versión anterior de este comando las aplanaba porque `Pregunta` todavía no soportaba `matriz`; ya no aplica).
 
-<details><summary>Cómo el frontend puede agrupar visualmente las preguntas "de matriz" como tabla, sin ningún cambio de backend</summary>
-
-El `texto` de cada pregunta aplanada sigue un patrón parseable y consistente:
-- Celda simple: `"<fila> — <columna>"` — ej. `"Microdiseños — ¿Quién lo hace hoy?"`.
-- Celda con contexto (cuando una sección tiene varias matrices, ej. los 3 componentes del
-  análisis de coherencia académica): `"<contexto> · <fila> — <columna>"` — ej.
-  `"Componente 1 · Nombre — Programa/modalidad A"`.
-
-Heurística sugerida: separar por `" — "` (izquierda = fila, si contiene `" · "` lo anterior a eso
-es un contexto/grupo mayor; derecha = columna) y agrupar preguntas **consecutivas** que comparten
-el mismo prefijo de fila/contexto en un bloque visual tipo tabla — como ya vienen consecutivas en
-`orden`, agrupar por prefijo igual entre preguntas contiguas alcanza, sin llamadas extra a la API.
-Preguntas sin `" — "` en el texto (datos generales, síntesis ejecutiva, etc.) se muestran igual
-que cualquier pregunta normal.
-
-Si más adelante se prefiere soporte real de matriz en `Pregunta` (tipo `matriz` + filas/columnas
-explícitas, igual a como ya existe en `instrumentos.PreguntaInstrumento`/`FilaMatrizInstrumento`/
-`ColumnaMatrizInstrumento`), es una migración de modelo aparte que además implica cambios de
-renderizado en el frontend — se construye de punta a punta cuando haya acceso a ese repo.
-</details>
+Ver **HU-46** para el detalle completo del soporte de matriz en `jornadas`/`participantes` (modelo, endpoints de fila/columna, envío y validación) — es una capacidad general del backend, no algo exclusivo de este diagnóstico.
 
 ### HU-44 — Subir un documento ya diligenciado (Word o PDF) para transcribirlo con IA
 Como administrador quiero subir el diagnóstico de un departamento que ya lo llenó en papel o Word antes de que existiera el sistema, para no tener que re-transcribirlo campo por campo a mano.
@@ -1744,8 +1725,25 @@ Response `201`:
 
 ### HU-45 — Revisar y aprobar una extracción antes de que cuente como respuesta real
 Como administrador quiero revisar lo que la IA transcribió antes de que se guarde como respuesta oficial del departamento, para poder detectar un error de lectura sin que quede mezclado con datos reales — hoy no existe forma de corregir una `Respuesta` ya guardada desde el admin (`RespuestaAdminViewSet` es de solo lectura), así que la única ventana de revisión real es antes de escribirla.
-- `GET /api/admin/momento-extracciones/<id>/` — con `estado: "completo"`, el campo `resultado` trae `{"respuestas": [{"pregunta": <id>, "texto_libre": "...", "opcion_ids": [...]}]}` **sin haber tocado ninguna `Respuesta` real todavía**. El frontend debería cruzar cada `pregunta` id contra `GET /api/admin/preguntas/?momento=<id>` para mostrar el texto de la pregunta junto a lo transcrito.
+- `GET /api/admin/momento-extracciones/<id>/` — con `estado: "completo"`, el campo `resultado` trae `{"respuestas": [{"pregunta": <id>, "texto_libre": "...", "opcion_ids": [...], "fila_id": <id o null>, "columna_id": <id o null>}]}` **sin haber tocado ninguna `Respuesta` real todavía** — `fila_id`/`columna_id` solo vienen con valor en preguntas tipo `matriz` (una entrada por celda). El frontend debería cruzar cada `pregunta` id contra `GET /api/admin/preguntas/?momento=<id>` para mostrar el texto de la pregunta (y, si es matriz, el texto de la fila/columna) junto a lo transcrito.
 - `POST /api/admin/momento-extracciones/<id>/aprobar/` — recién acá se copia `resultado` a `Respuesta` reales del participante (mismas reglas de validación que un envío normal desde la web) y se marca `aprobado_en`/`aprobado_por`. Responde `403` si ya estaba aprobada, `400` si `estado` todavía no es `"completo"`.
 - No hay endpoint de "rechazar": si el resultado no sirve, simplemente no se aprueba y se sube el documento de nuevo, o se le pide a la persona que lo diligencie directo en la web.
 - `GET /api/admin/momento-extracciones/?momento=<id>` lista todas las extracciones de un momento — útil para un panel de "documentos pendientes de revisión" filtrando client-side por `estado == "completo" && !aprobado_en`.
 - Mismo scoping admin-completo/dependencia que el resto de la app: un usuario de dependencia solo ve/crea extracciones de momentos de jornadas donde es propietario (`filtrar_por_propietario` sobre `momento__jornada__propietarios`).
+
+### HU-46 — Preguntas tipo matriz en cualquier jornada (no solo el diagnóstico)
+Como administrador quiero crear una pregunta de tipo matriz (fila × columna) en cualquier momento de cualquier jornada, para modelar tablas comparativas sin tener que inventar una pregunta suelta por celda — capacidad general del backend, igual a como ya existía en el módulo `instrumentos` (`PreguntaInstrumento`/`FilaMatrizInstrumento`/`ColumnaMatrizInstrumento`), ahora también en `jornadas`/`participantes`.
+- `Pregunta.tipo` ahora acepta `matriz` además de `abierta`/`unica`/`multiple`. Una pregunta tipo matriz no tiene `opciones` — en su lugar tiene `filas` y `columnas`, cada una un texto + orden.
+- `POST /api/admin/preguntas-filas-matriz/` y `POST /api/admin/preguntas-columnas-matriz/` (`{"pregunta": <id>, "texto": "...", "orden": <n>}`) agregan filas/columnas a una pregunta matriz — mismo patrón CRUD que `/api/admin/opciones/` para preguntas de selección. `GET`/`PATCH`/`DELETE` también disponibles, filtrando por `?pregunta=<id>`.
+- `GET /api/admin/preguntas/?momento=<id>` — cada pregunta tipo matriz trae `filas`/`columnas` anidadas en la respuesta, listas para dibujar la tabla sin llamadas adicionales.
+- **Envío de respuestas** (`POST .../momentos/{id}/respuestas/`, mismo endpoint de siempre): una pregunta matriz se responde con **una entrada por celda**, todas con el mismo `pregunta_id` pero distinto `fila_id`/`columna_id`:
+  ```json
+  {"respuestas": [
+    {"pregunta_id": 901, "fila_id": 1, "columna_id": 1, "texto_libre": "El jefe de departamento"},
+    {"pregunta_id": 901, "fila_id": 1, "columna_id": 2, "texto_libre": "El comité curricular"}
+  ]}
+  ```
+  `fila_id`/`columna_id` son opcionales (`null` o ausentes) en preguntas que NO son matriz — mandarlos ahí es 400. En una pregunta matriz son obligatorios y deben pertenecer a esa pregunta — mandar la fila/columna de otra pregunta también es 400.
+- **Obligatoriedad de una matriz** se evalúa por *todas* sus celdas: si `obligatoria=true`, faltan celdas mientras no haya una respuesta con `texto_libre` no vacío para cada combinación fila×columna — el error `faltantes` devuelve el id de la pregunta (no celda por celda) si falta aunque sea una.
+- `Respuesta` ahora tiene `fila`/`columna` (nulos salvo en preguntas matriz) — una fila de `Respuesta` por celda, igual que ya hacía `RespuestaInstrumento` en el módulo `instrumentos`.
+- La extracción por IA (HU-44/HU-45) ya soporta este tipo: el esquema que se le manda al modelo incluye `filas`/`columnas` cuando la pregunta es matriz, y el prompt le pide una entrada por celda con `fila_id`/`columna_id`.
