@@ -233,6 +233,15 @@ def _guardar_respuestas(aplicacion, items_crudos, preguntas_validas):
             omitidas.append(pregunta_id)
             continue
 
+        # El prompt le pide a la IA mandar SIEMPRE "fila"/"columna" (null si no aplica) para que
+        # nunca olvide el campo en preguntas tipo matriz — pero PrimaryKeyRelatedField(required=
+        # False) sin allow_null=True rechaza un null EXPLÍCITO (solo acepta la ausencia de la
+        # clave). Sin este descarte, toda pregunta no-matriz fallaría la validación.
+        crudo = {
+            clave: valor for clave, valor in crudo.items()
+            if not (clave in ('fila', 'columna') and valor is None)
+        }
+
         entrada = RespuestaInstrumentoEnvioItemSerializer(data=crudo)
         if not entrada.is_valid():
             omitidas.append(pregunta_id)
