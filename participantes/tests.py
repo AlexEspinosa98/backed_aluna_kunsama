@@ -358,9 +358,10 @@ class LimpiarYValidarExtraccionTests(BaseJornadaTestCase):
     def test_conserva_respuesta_abierta_valida(self):
         crudo = {'respuestas': [{'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': []}]}
         limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
-        self.assertEqual(limpio['respuestas'], [
-            {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': []}
-        ])
+        self.assertEqual(limpio['respuestas'], [{
+            'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': [],
+            'fila_id': None, 'columna_id': None,
+        }])
         self.assertEqual(omitidas, [])
 
     def test_conserva_opcion_valida_y_descarta_opcion_ajena(self):
@@ -373,9 +374,10 @@ class LimpiarYValidarExtraccionTests(BaseJornadaTestCase):
             'opcion_ids': [self.opcion_a.id, opcion_ajena.id],
         }]}
         limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
-        self.assertEqual(limpio['respuestas'], [
-            {'pregunta': self.pregunta_unica.id, 'texto_libre': '', 'opcion_ids': [self.opcion_a.id]}
-        ])
+        self.assertEqual(limpio['respuestas'], [{
+            'pregunta': self.pregunta_unica.id, 'texto_libre': '', 'opcion_ids': [self.opcion_a.id],
+            'fila_id': None, 'columna_id': None,
+        }])
         self.assertEqual(omitidas, [])
 
     def test_omite_pregunta_unica_con_mas_de_una_opcion(self):

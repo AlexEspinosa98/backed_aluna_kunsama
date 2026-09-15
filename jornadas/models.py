@@ -115,10 +115,12 @@ class Pregunta(models.Model):
     TIPO_ABIERTA = 'abierta'
     TIPO_UNICA = 'unica'
     TIPO_MULTIPLE = 'multiple'
+    TIPO_MATRIZ = 'matriz'
     TIPO_CHOICES = [
         (TIPO_ABIERTA, 'Abierta'),
         (TIPO_UNICA, 'Selección única'),
         (TIPO_MULTIPLE, 'Selección múltiple'),
+        (TIPO_MATRIZ, 'Matriz comparativa (filas × columnas)'),
     ]
 
     momento = models.ForeignKey(Momento, on_delete=models.CASCADE, related_name='preguntas')
@@ -142,6 +144,35 @@ class Pregunta(models.Model):
 
 class OpcionPregunta(models.Model):
     pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='opciones')
+    texto = models.CharField(max_length=255)
+    orden = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['orden']
+        unique_together = [('pregunta', 'orden')]
+
+    def __str__(self):
+        return self.texto
+
+
+class FilaMatrizPregunta(models.Model):
+    """Solo se usa cuando Pregunta.tipo == matriz — mismo diseño que
+    instrumentos.FilaMatrizInstrumento, portado acá para que una jornada también pueda tener
+    preguntas tipo matriz (fila × columna) en vez de aplanar cada celda en una pregunta suelta."""
+    pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='filas')
+    texto = models.CharField(max_length=255)
+    orden = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ['orden']
+        unique_together = [('pregunta', 'orden')]
+
+    def __str__(self):
+        return self.texto
+
+
+class ColumnaMatrizPregunta(models.Model):
+    pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='columnas')
     texto = models.CharField(max_length=255)
     orden = models.PositiveIntegerField()
 

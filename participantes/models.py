@@ -4,7 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
 
-from jornadas.models import Jornada, Momento, OpcionPregunta, Pregunta
+from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
 
 class Participante(models.Model):
@@ -78,6 +78,11 @@ class Respuesta(models.Model):
         blank=True,
         related_name='respuestas_registradas',
     )
+    # Solo se usan cuando pregunta.tipo == matriz: una Respuesta por celda (fila × columna). Para
+    # el resto de los tipos quedan en null — mismo patrón que RespuestaInstrumento.fila/columna en
+    # el módulo instrumentos.
+    fila = models.ForeignKey(FilaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
+    columna = models.ForeignKey(ColumnaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
     texto_libre = models.TextField(blank=True)
     opciones = models.ManyToManyField(OpcionPregunta, blank=True, related_name='respuestas')
     creado_en = models.DateTimeField(auto_now_add=True)
@@ -85,8 +90,8 @@ class Respuesta(models.Model):
 
     class Meta:
         unique_together = [
-            ('pregunta', 'participante'),
-            ('pregunta', 'mesa'),
+            ('pregunta', 'participante', 'fila', 'columna'),
+            ('pregunta', 'mesa', 'fila', 'columna'),
         ]
 
     def __str__(self):

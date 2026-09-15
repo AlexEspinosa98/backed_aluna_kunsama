@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema_field, extend_schema_serializer
 from rest_framework import serializers
 
-from jornadas.models import Momento, OpcionPregunta, Pregunta
+from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta
 
 from .models import ExtraccionMomento, Participante, Respuesta
 
@@ -88,12 +88,26 @@ class OpcionPreguntaSerializer(serializers.ModelSerializer):
         fields = ['id', 'texto', 'orden']
 
 
+class FilaMatrizPreguntaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FilaMatrizPregunta
+        fields = ['id', 'texto', 'orden']
+
+
+class ColumnaMatrizPreguntaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ColumnaMatrizPregunta
+        fields = ['id', 'texto', 'orden']
+
+
 class PreguntaSerializer(serializers.ModelSerializer):
     opciones = OpcionPreguntaSerializer(many=True, read_only=True)
+    filas = FilaMatrizPreguntaSerializer(many=True, read_only=True)
+    columnas = ColumnaMatrizPreguntaSerializer(many=True, read_only=True)
 
     class Meta:
         model = Pregunta
-        fields = ['id', 'tipo', 'texto', 'orden', 'obligatoria', 'opciones']
+        fields = ['id', 'tipo', 'texto', 'orden', 'obligatoria', 'opciones', 'filas', 'columnas']
 
 
 class MomentoIndiceSerializer(serializers.ModelSerializer):
@@ -130,6 +144,17 @@ class RespuestaEntradaSerializer(serializers.Serializer):
     opcion_ids = serializers.PrimaryKeyRelatedField(
         source='opciones', queryset=OpcionPregunta.objects.all(), many=True, required=False, default=list
     )
+    # Solo se usan en preguntas tipo matriz (una celda = una entrada). allow_null=True a propósito
+    # (no solo required=False): así se puede mandar el campo en null en vez de tener que omitirlo,
+    # que es justo lo que hace la extracción por IA para no tener que armar el payload distinto
+    # según el tipo de cada pregunta — ver el bug ya corregido una vez en
+    # instrumentos/extraccion_ia_openai.py por esto mismo.
+    fila_id = serializers.PrimaryKeyRelatedField(
+        source='fila', queryset=FilaMatrizPregunta.objects.all(), required=False, allow_null=True,
+    )
+    columna_id = serializers.PrimaryKeyRelatedField(
+        source='columna', queryset=ColumnaMatrizPregunta.objects.all(), required=False, allow_null=True,
+    )
 
 
 class RespuestaEnvioSerializer(serializers.Serializer):
@@ -144,7 +169,10 @@ class RespuestaSalidaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Respuesta
-        fields = ['id', 'pregunta', 'participante', 'mesa', 'texto_libre', 'opciones', 'actualizado_en']
+        fields = [
+            'id', 'pregunta', 'participante', 'mesa', 'fila', 'columna', 'texto_libre', 'opciones',
+            'actualizado_en',
+        ]
 
 
 class ExtraccionMomentoSerializer(serializers.ModelSerializer):

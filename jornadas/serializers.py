@@ -2,7 +2,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from .models import Jornada, Momento, OpcionPregunta, PerfilUsuario, Pregunta
+from .models import (
+    ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, PerfilUsuario,
+    Pregunta,
+)
 from .scoping import es_dependencia
 
 Usuario = get_user_model()
@@ -14,14 +17,28 @@ class OpcionPreguntaSerializer(serializers.ModelSerializer):
         fields = ['id', 'pregunta', 'texto', 'orden']
 
 
+class FilaMatrizPreguntaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FilaMatrizPregunta
+        fields = ['id', 'pregunta', 'texto', 'orden']
+
+
+class ColumnaMatrizPreguntaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ColumnaMatrizPregunta
+        fields = ['id', 'pregunta', 'texto', 'orden']
+
+
 class PreguntaAdminSerializer(serializers.ModelSerializer):
     opciones = OpcionPreguntaSerializer(many=True, read_only=True)
+    filas = FilaMatrizPreguntaSerializer(many=True, read_only=True)
+    columnas = ColumnaMatrizPreguntaSerializer(many=True, read_only=True)
 
     class Meta:
         model = Pregunta
         fields = [
             'id', 'momento', 'tipo', 'texto', 'orden', 'obligatoria', 'activa',
-            'mesas_permitidas', 'opciones',
+            'mesas_permitidas', 'opciones', 'filas', 'columnas',
         ]
 
 

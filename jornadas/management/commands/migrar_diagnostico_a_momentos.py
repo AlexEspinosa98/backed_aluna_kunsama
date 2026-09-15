@@ -8,12 +8,11 @@ fluido, no una serie de pasos separados.
 
 Lee el contenido YA CARGADO en `instrumentos.Instrumento` (slug
 'diagnostico-articulacion-academica', ver `cargar_instrumento_diagnostico_articulacion`) y lo
-copia 1:1 — no retipea ningún texto. El modelo clásico `Pregunta` no tiene tipo "matriz" (solo
-abierta/única/múltiple, sin filas×columnas), así que cada celda de una pregunta tipo matriz se
-aplana en su propia Pregunta individual (texto = "<fila> — <columna>", o "<Componente N> ·
-<fila> — <columna>" cuando la misma sección tiene más de una matriz y hace falta desambiguar) —
-mismo patrón que ya usa el semáforo del propio documento original (cada dimensión × columna es
-una pregunta suelta).
+copia 1:1 — no retipea ningún texto. Desde que `jornadas.Pregunta` tiene tipo `matriz` (con
+`FilaMatrizPregunta`/`ColumnaMatrizPregunta`, mismo diseño que ya existía en `instrumentos`), cada
+pregunta tipo matriz del instrumento se copia como UNA pregunta matriz con sus filas y columnas
+reales — ya NO se aplana en una pregunta por celda (esa era la versión anterior de este comando,
+necesaria mientras `Pregunta` solo tenía abierta/única/múltiple).
 
 Idempotente: borra y recrea el Momento de la jornada indicada en cada corrida.
 
@@ -24,7 +23,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from instrumentos.models import Instrumento, PreguntaInstrumento, SeccionInstrumento
-from jornadas.models import Momento, OpcionPregunta, Pregunta
+from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta
 
 SLUG_INSTRUMENTO = 'diagnostico-articulacion-academica'
 
@@ -62,22 +61,19 @@ class Command(BaseCommand):
             for seccion in instrumento.secciones.filter(
                 tipo=SeccionInstrumento.TIPO_PREGUNTAS
             ).order_by('orden'):
-                preguntas_matriz = [
-                    p for p in seccion.preguntas.all() if p.tipo == PreguntaInstrumento.TIPO_MATRIZ
-                ]
                 for pregunta in seccion.preguntas.all().order_by('orden'):
                     if pregunta.tipo == PreguntaInstrumento.TIPO_MATRIZ:
-                        prefijo = pregunta.texto.split(' — ')[0] if len(preguntas_matriz) > 1 else None
+                        nueva = Pregunta.objects.create(
+                            momento=momento, tipo=Pregunta.TIPO_MATRIZ, texto=pregunta.texto,
+                            orden=orden_pregunta, obligatoria=pregunta.obligatoria,
+                        )
+                        orden_pregunta += 1
                         for fila in pregunta.filas.all().order_by('orden'):
-                            for columna in pregunta.columnas.all().order_by('orden'):
-                                texto = f'{fila.texto} — {columna.texto}'
-                                if prefijo:
-                                    texto = f'{prefijo} · {texto}'
-                                Pregunta.objects.create(
-                                    momento=momento, tipo=Pregunta.TIPO_ABIERTA, texto=texto,
-                                    orden=orden_pregunta, obligatoria=pregunta.obligatoria,
-                                )
-                                orden_pregunta += 1
+                            FilaMatrizPregunta.objects.create(pregunta=nueva, texto=fila.texto, orden=fila.orden)
+                        for columna in pregunta.columnas.all().order_by('orden'):
+                            ColumnaMatrizPregunta.objects.create(
+                                pregunta=nueva, texto=columna.texto, orden=columna.orden
+                            )
                         continue
 
                     tipo = (
@@ -94,6 +90,8 @@ class Command(BaseCommand):
                         OpcionPregunta.objects.create(pregunta=nueva, texto=opcion.texto, orden=opcion.orden)
 
         total_preguntas = Pregunta.objects.filter(momento__jornada=jornada).count()
+        total_matriz = Pregunta.objects.filter(momento__jornada=jornada, tipo=Pregunta.TIPO_MATRIZ).count()
         self.stdout.write(self.style.SUCCESS(
-            f'Jornada "{jornada.nombre}" ({jornada.slug}): 1 momento, {total_preguntas} preguntas.'
+            f'Jornada "{jornada.nombre}" ({jornada.slug}): 1 momento, {total_preguntas} preguntas '
+            f'({total_matriz} de tipo matriz).'
         ))

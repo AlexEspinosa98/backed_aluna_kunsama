@@ -3,10 +3,12 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAdminUser
 from rest_framework.viewsets import ModelViewSet
 
-from .models import Momento, OpcionPregunta, Pregunta
+from .models import ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta
 from .permissions import EsAdminCompleto
 from .scoping import es_dependencia, filtrar_por_propietario, jornadas_visibles
 from .serializers import (
+    ColumnaMatrizPreguntaSerializer,
+    FilaMatrizPreguntaSerializer,
     JornadaAdminSerializer,
     MomentoAdminSerializer,
     OpcionPreguntaSerializer,
@@ -104,6 +106,38 @@ class OpcionAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
     def get_queryset(self):
         queryset = filtrar_por_propietario(
             OpcionPregunta.objects.all(), self.request.user, 'pregunta__momento__jornada__propietarios'
+        )
+        pregunta_id = self.request.query_params.get('pregunta')
+        if pregunta_id:
+            queryset = queryset.filter(pregunta_id=pregunta_id)
+        return queryset
+
+
+class FilaMatrizAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
+    serializer_class = FilaMatrizPreguntaSerializer
+    permission_classes = [IsAdminUser]
+    campo_padre = 'pregunta'
+    ruta_jornada = 'momento.jornada'
+
+    def get_queryset(self):
+        queryset = filtrar_por_propietario(
+            FilaMatrizPregunta.objects.all(), self.request.user, 'pregunta__momento__jornada__propietarios'
+        )
+        pregunta_id = self.request.query_params.get('pregunta')
+        if pregunta_id:
+            queryset = queryset.filter(pregunta_id=pregunta_id)
+        return queryset
+
+
+class ColumnaMatrizAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
+    serializer_class = ColumnaMatrizPreguntaSerializer
+    permission_classes = [IsAdminUser]
+    campo_padre = 'pregunta'
+    ruta_jornada = 'momento.jornada'
+
+    def get_queryset(self):
+        queryset = filtrar_por_propietario(
+            ColumnaMatrizPregunta.objects.all(), self.request.user, 'pregunta__momento__jornada__propietarios'
         )
         pregunta_id = self.request.query_params.get('pregunta')
         if pregunta_id:

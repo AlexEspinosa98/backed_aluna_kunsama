@@ -3,8 +3,8 @@ from rest_framework.routers import DefaultRouter
 from participantes.admin_views import ExtraccionMomentoViewSet, ParticipanteAdminViewSet, RespuestaAdminViewSet
 
 from .views import (
-    JornadaAdminViewSet, MomentoAdminViewSet, OpcionAdminViewSet, PreguntaAdminViewSet,
-    UsuarioAdminViewSet,
+    ColumnaMatrizAdminViewSet, FilaMatrizAdminViewSet, JornadaAdminViewSet, MomentoAdminViewSet,
+    OpcionAdminViewSet, PreguntaAdminViewSet, UsuarioAdminViewSet,
 )
 
 router = DefaultRouter()
@@ -12,6 +12,8 @@ router.register('jornadas', JornadaAdminViewSet, basename='admin-jornada')
 router.register('momentos', MomentoAdminViewSet, basename='admin-momento')
 router.register('preguntas', PreguntaAdminViewSet, basename='admin-pregunta')
 router.register('opciones', OpcionAdminViewSet, basename='admin-opcion')
+router.register('preguntas-filas-matriz', FilaMatrizAdminViewSet, basename='admin-pregunta-fila')
+router.register('preguntas-columnas-matriz', ColumnaMatrizAdminViewSet, basename='admin-pregunta-columna')
 router.register('participantes', ParticipanteAdminViewSet, basename='admin-participante')
 router.register('respuestas', RespuestaAdminViewSet, basename='admin-respuesta')
 router.register('momento-extracciones', ExtraccionMomentoViewSet, basename='admin-momento-extraccion')

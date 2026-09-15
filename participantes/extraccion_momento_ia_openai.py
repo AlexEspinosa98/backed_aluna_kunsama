@@ -41,15 +41,19 @@ SYSTEM_PROMPT_EXTRACCION = (
     "4. Pregunta tipo 'unica'/'multiple': una entrada con opcion_ids = [id de la(s) opción(es) "
     "marcada(s)], usando el id de la opción cuyo texto mejor coincida con lo marcado/escrito — "
     "nunca opciones que no estén en el esquema de esa pregunta.\n"
-    "5. Nunca mezcles: no le pongas opcion_ids a una pregunta abierta ni texto_libre a una de "
-    "opción.\n\n"
+    "5. Pregunta tipo 'matriz': UNA entrada POR CADA celda (fila×columna) que tenga contenido, "
+    "con fila_id y columna_id = los ids correspondientes de ESA pregunta y texto_libre = lo "
+    "escrito en esa celda — nunca mezcles filas/columnas de una matriz con otra.\n"
+    "6. Nunca mezcles: no le pongas opcion_ids a una pregunta abierta o matriz, no le pongas "
+    "fila_id/columna_id a una pregunta que no sea matriz, ni texto_libre a una de opción.\n\n"
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin fences "
     "de markdown, con esta forma exacta:\n"
     "{\n"
     '  "respuestas": [\n'
-    '    {"pregunta": <id>, "texto_libre": "<texto o \'\'>", "opcion_ids": [<ids>]}\n'
+    '    {"pregunta": <id>, "texto_libre": "<texto o \'\'>", "opcion_ids": [<ids>], '
+    '"fila_id": <id o null>, "columna_id": <id o null>}\n'
     "  ]\n"
     "}\n"
 )
@@ -110,6 +114,8 @@ def _leer_documento(extraccion):
 
 
 def _construir_payload_esquema(momento):
+    from jornadas.models import Pregunta
+
     preguntas = []
     for pregunta in momento.preguntas.filter(activa=True).order_by('orden'):
         preguntas.append({
@@ -117,6 +123,14 @@ def _construir_payload_esquema(momento):
             'texto': pregunta.texto,
             'tipo': pregunta.tipo,
             'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
+            'filas': (
+                [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()]
+                if pregunta.tipo == Pregunta.TIPO_MATRIZ else []
+            ),
+            'columnas': (
+                [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()]
+                if pregunta.tipo == Pregunta.TIPO_MATRIZ else []
+            ),
         })
     return {'momento': momento.titulo, 'preguntas': preguntas}
 
@@ -188,6 +202,8 @@ def _limpiar_y_validar(resultado_crudo, momento):
     normal (participantes.views._validar_entrada) — a diferencia de ese endpoint, NO aborta todo
     si una entrada falla, solo la omite (queda en preguntas_omitidas). No escribe Respuesta acá —
     solo deja `resultado` listo para que aprobar_extraccion_momento lo escriba después."""
+    from jornadas.models import Pregunta
+
     from participantes.views import _validar_entrada
 
     preguntas_validas = {p.id: p for p in momento.preguntas.filter(activa=True)}
@@ -201,12 +217,21 @@ def _limpiar_y_validar(resultado_crudo, momento):
         texto_libre = crudo.get('texto_libre', '') or ''
         opcion_ids = crudo.get('opcion_ids') or []
         opciones = list(pregunta.opciones.filter(id__in=opcion_ids))
+
+        fila = columna = None
+        if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+            fila = pregunta.filas.filter(id=crudo.get('fila_id')).first()
+            columna = pregunta.columnas.filter(id=crudo.get('columna_id')).first()
+
         try:
-            _validar_entrada(pregunta, texto_libre, opciones)
+            _validar_entrada(pregunta, texto_libre, opciones, fila, columna)
         except Exception:  # noqa: BLE001 — ValidationError u otra inconsistencia de la IA
             omitidas.append(pregunta.id)
             continue
-        limpio.append({'pregunta': pregunta.id, 'texto_libre': texto_libre, 'opcion_ids': [o.id for o in opciones]})
+        limpio.append({
+            'pregunta': pregunta.id, 'texto_libre': texto_libre, 'opcion_ids': [o.id for o in opciones],
+            'fila_id': fila.id if fila else None, 'columna_id': columna.id if columna else None,
+        })
 
     return {'respuestas': limpio}, omitidas
 
@@ -275,6 +300,7 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
             continue
         respuesta, _ = Respuesta.objects.update_or_create(
             pregunta=pregunta, participante=extraccion.participante,
+            fila_id=item.get('fila_id'), columna_id=item.get('columna_id'),
             defaults={'texto_libre': item.get('texto_libre', ''), 'registrado_por': extraccion.participante},
         )
         respuesta.opciones.set(item.get('opcion_ids') or [])

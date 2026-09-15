@@ -126,9 +126,23 @@ class MomentoDetalleView(generics.RetrieveAPIView):
         return momento
 
 
-def _validar_entrada(pregunta, texto_libre, opciones):
+def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None):
     if opciones and any(opcion.pregunta_id != pregunta.id for opcion in opciones):
         raise ValidationError(f'Una opción enviada no pertenece a la pregunta {pregunta.id}.')
+
+    if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+        if fila is None or columna is None:
+            raise ValidationError(
+                f'La pregunta {pregunta.id} es de tipo matriz: cada respuesta debe indicar fila y columna.'
+            )
+        if fila.pregunta_id != pregunta.id or columna.pregunta_id != pregunta.id:
+            raise ValidationError(f'La fila/columna enviada no pertenece a la pregunta {pregunta.id}.')
+        if opciones:
+            raise ValidationError(f'La pregunta {pregunta.id} no acepta opciones.')
+        return
+
+    if fila is not None or columna is not None:
+        raise ValidationError(f'La pregunta {pregunta.id} no es de tipo matriz, no acepta fila/columna.')
 
     if pregunta.tipo == Pregunta.TIPO_ABIERTA:
         if opciones:
@@ -142,6 +156,25 @@ def _validar_entrada(pregunta, texto_libre, opciones):
             raise ValidationError(f'La pregunta {pregunta.id} solo acepta una opción.')
         if pregunta.obligatoria and not opciones:
             raise ValidationError(f'La pregunta {pregunta.id} es obligatoria.')
+
+
+def _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregunta):
+    faltantes = []
+    for pregunta in preguntas_obligatorias:
+        items = entradas_por_pregunta.get(pregunta.id, [])
+        if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+            requeridas = {
+                (f, c) for f in pregunta.filas.values_list('id', flat=True)
+                for c in pregunta.columnas.values_list('id', flat=True)
+            }
+            respondidas = {
+                (i['fila'].id, i['columna'].id) for i in items if i.get('texto_libre', '').strip()
+            }
+            if not requeridas.issubset(respondidas):
+                faltantes.append(pregunta.id)
+        elif not items:
+            faltantes.append(pregunta.id)
+    return faltantes
 
 
 class RespuestasMomentoView(APIView):
@@ -180,6 +213,8 @@ class RespuestasMomentoView(APIView):
             # pegándole directo a la API.
             return momento.tipo != Momento.TIPO_MESA or not pregunta.mesas_permitidas or mesa in pregunta.mesas_permitidas
 
+        # dict de listas (no un único item por pregunta): una pregunta tipo matriz manda una
+        # entrada POR CELDA (fila×columna), todas con el mismo pregunta_id.
         entradas_por_pregunta = {}
         for item in datos['respuestas']:
             pregunta = item['pregunta']
@@ -187,37 +222,40 @@ class RespuestasMomentoView(APIView):
                 raise ValidationError(f'La pregunta {pregunta.id} no pertenece a este momento.')
             if not _aplica_a_mesa(pregunta):
                 raise ValidationError(f'La pregunta {pregunta.id} no está habilitada para tu mesa.')
-            entradas_por_pregunta[pregunta.id] = item
+            entradas_por_pregunta.setdefault(pregunta.id, []).append(item)
 
         preguntas_obligatorias = [
             p for p in momento.preguntas.filter(activa=True, obligatoria=True) if _aplica_a_mesa(p)
         ]
-        faltantes = [p.id for p in preguntas_obligatorias if p.id not in entradas_por_pregunta]
+        faltantes = _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregunta)
         if faltantes:
             raise ValidationError({'faltantes': f'Preguntas obligatorias sin responder: {faltantes}'})
 
         respuestas_guardadas = []
-        for pregunta_id, item in entradas_por_pregunta.items():
-            pregunta = item['pregunta']
-            texto_libre = item.get('texto_libre', '')
-            opciones = item.get('opciones', [])
-            _validar_entrada(pregunta, texto_libre, opciones)
+        for items in entradas_por_pregunta.values():
+            for item in items:
+                pregunta = item['pregunta']
+                texto_libre = item.get('texto_libre', '')
+                opciones = item.get('opciones', [])
+                fila = item.get('fila')
+                columna = item.get('columna')
+                _validar_entrada(pregunta, texto_libre, opciones, fila, columna)
 
-            lookup = {'pregunta': pregunta}
-            if momento.tipo == Momento.TIPO_MESA:
-                lookup['mesa'] = mesa
-            else:
-                lookup['participante'] = participante
+                lookup = {'pregunta': pregunta, 'fila': fila, 'columna': columna}
+                if momento.tipo == Momento.TIPO_MESA:
+                    lookup['mesa'] = mesa
+                else:
+                    lookup['participante'] = participante
 
-            respuesta, _ = Respuesta.objects.update_or_create(
-                **lookup,
-                defaults={
-                    'texto_libre': texto_libre,
-                    'registrado_por': participante,
-                },
-            )
-            respuesta.opciones.set(opciones)
-            respuestas_guardadas.append(respuesta)
+                respuesta, _ = Respuesta.objects.update_or_create(
+                    **lookup,
+                    defaults={
+                        'texto_libre': texto_libre,
+                        'registrado_por': participante,
+                    },
+                )
+                respuesta.opciones.set(opciones)
+                respuestas_guardadas.append(respuesta)
 
         return Response(
             RespuestaSalidaSerializer(respuestas_guardadas, many=True).data,
