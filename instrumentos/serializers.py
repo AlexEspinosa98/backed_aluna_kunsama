@@ -3,9 +3,9 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from .models import (
-    AplicacionInstrumento, ColumnaMatrizInstrumento, FilaMatrizInstrumento, Instrumento,
-    OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento, RespuestaInstrumento,
-    SeccionInstrumento,
+    AplicacionInstrumento, ColumnaMatrizInstrumento, ExtraccionInstrumento, FilaMatrizInstrumento,
+    Instrumento, OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento,
+    RespuestaInstrumento, SeccionInstrumento,
 )
 from .scoping import es_dependencia
 
@@ -184,7 +184,8 @@ class AplicacionInstrumentoAdminSerializer(serializers.ModelSerializer):
         model = AplicacionInstrumento
         fields = [
             'id', 'preregistro', 'instrumento', 'usuario', 'estado', 'estado_visible',
-            'enviado_en', 'revisado_por', 'revisado_en', 'comentario_revision', 'respuestas',
+            'generado_por_ia', 'enviado_en', 'revisado_por', 'revisado_en', 'comentario_revision',
+            'respuestas',
         ]
         read_only_fields = fields
 
@@ -194,3 +195,84 @@ class RevisionAplicacionSerializer(serializers.Serializer):
         choices=[AplicacionInstrumento.ESTADO_ACEPTADO, AplicacionInstrumento.ESTADO_RECHAZADO]
     )
     comentario_revision = serializers.CharField(required=False, allow_blank=True)
+
+
+class ExtraccionInstrumentoSerializer(serializers.ModelSerializer):
+    usuario_username = serializers.CharField(source='usuario.username', read_only=True)
+    instrumento_nombre = serializers.CharField(source='instrumento.nombre', read_only=True)
+
+    class Meta:
+        model = ExtraccionInstrumento
+        fields = [
+            'id', 'instrumento', 'instrumento_nombre', 'usuario', 'usuario_username',
+            'nombre_archivo_original', 'estado', 'aplicacion', 'preguntas_omitidas',
+            'error_mensaje', 'modelo_usado', 'solicitado_por', 'creado_en', 'actualizado_en',
+            'completado_en',
+        ]
+        read_only_fields = fields
+
+
+class ExtraccionInstrumentoCrearSerializer(serializers.ModelSerializer):
+    """Sube un .pdf o .docx ya diligenciado para dispararle la extracción con IA. Admite
+    `usuario_id` (persona ya existente) o `username`+`password` para dar de alta a alguien nuevo
+    en el mismo request — mismo patrón que PreregistroInstrumentoAdminSerializer.create, porque el
+    departamento que ya llenó el papel puede no tener cuenta todavía."""
+    usuario_id = serializers.PrimaryKeyRelatedField(
+        source='usuario', queryset=Usuario.objects.all(), required=False,
+    )
+    username = serializers.CharField(write_only=True, required=False)
+    email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
+    first_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    last_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+
+    class Meta:
+        model = ExtraccionInstrumento
+        fields = [
+            'id', 'instrumento', 'archivo', 'usuario_id', 'username', 'email', 'first_name',
+            'last_name', 'password', 'estado', 'creado_en',
+        ]
+        read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate_archivo(self, archivo):
+        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+        if extension not in ('pdf', 'docx'):
+            raise serializers.ValidationError('Solo se aceptan archivos .pdf o .docx.')
+        return archivo
+
+    def validate(self, attrs):
+        if 'usuario' not in attrs and 'username' not in attrs:
+            raise serializers.ValidationError(
+                'Debes indicar usuario_id (de un usuario existente) o username+password (para '
+                'crear uno nuevo).'
+            )
+        return attrs
+
+    def create(self, validated_data):
+        usuario = validated_data.pop('usuario', None)
+        if usuario is None:
+            username = validated_data.pop('username', None)
+            password = validated_data.pop('password', None)
+            if not username or not password:
+                raise serializers.ValidationError(
+                    {'password': 'La contraseña es obligatoria al crear un usuario nuevo.'}
+                )
+            if Usuario.objects.filter(username__iexact=username).exists():
+                raise serializers.ValidationError(
+                    {'username': 'Ya existe un usuario con ese nombre de usuario (sin distinguir mayúsculas/minúsculas).'}
+                )
+            usuario = Usuario(
+                username=username,
+                email=validated_data.pop('email', ''),
+                first_name=validated_data.pop('first_name', ''),
+                last_name=validated_data.pop('last_name', ''),
+                is_staff=False,
+            )
+            usuario.set_password(password)
+            usuario.save()
+        else:
+            for campo in ['username', 'email', 'first_name', 'last_name', 'password']:
+                validated_data.pop(campo, None)
+        validated_data['usuario'] = usuario
+        validated_data['nombre_archivo_original'] = validated_data['archivo'].name
+        return super().create(validated_data)

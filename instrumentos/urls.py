@@ -1,13 +1,16 @@
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    AplicacionInstrumentoAdminViewSet, ColumnaMatrizAdminViewSet, FilaMatrizAdminViewSet,
-    InstrumentoAdminViewSet, OpcionInstrumentoAdminViewSet, PreguntaInstrumentoAdminViewSet,
-    PreregistroInstrumentoAdminViewSet, SeccionInstrumentoAdminViewSet,
+    AplicacionInstrumentoAdminViewSet, ColumnaMatrizAdminViewSet, ExtraccionInstrumentoViewSet,
+    FilaMatrizAdminViewSet, InstrumentoAdminViewSet, OpcionInstrumentoAdminViewSet,
+    PreguntaInstrumentoAdminViewSet, PreregistroInstrumentoAdminViewSet, SeccionInstrumentoAdminViewSet,
 )
 
 router = DefaultRouter()
 router.register('instrumentos', InstrumentoAdminViewSet, basename='admin-instrumento')
+router.register(
+    'instrumento-extracciones', ExtraccionInstrumentoViewSet, basename='admin-instrumento-extraccion'
+)
 router.register('instrumento-secciones', SeccionInstrumentoAdminViewSet, basename='admin-instrumento-seccion')
 router.register('instrumento-preguntas', PreguntaInstrumentoAdminViewSet, basename='admin-instrumento-pregunta')
 router.register('instrumento-opciones', OpcionInstrumentoAdminViewSet, basename='admin-instrumento-opcion')

@@ -210,6 +210,11 @@ class AplicacionInstrumento(models.Model):
     )
     revisado_en = models.DateTimeField(null=True, blank=True)
     comentario_revision = models.TextField(blank=True)
+    # True cuando estas respuestas vinieron de ExtraccionInstrumento (IA leyendo un PDF/Word ya
+    # diligenciado) en vez de que la persona las haya tecleado en la web — el frontend lo usa para
+    # avisar "esto lo llenó la IA, revisa antes de aceptar". No cambia el flujo de revisión: sigue
+    # siendo pendiente/aceptado/rechazado igual que cualquier otra aplicación.
+    generado_por_ia = models.BooleanField(default=False)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 
@@ -237,3 +242,61 @@ class RespuestaInstrumento(models.Model):
 
     def __str__(self):
         return f'{self.pregunta_id} · aplicacion:{self.aplicacion_id}'
+
+
+class ExtraccionInstrumento(models.Model):
+    """Carga un instrumento ya diligenciado en papel/PDF/Word: una sola llamada a OpenAI lee el
+    documento (texto si es seleccionable —.docx o PDF con texto—, o las páginas como imagen si es
+    un PDF escaneado/a mano) y transcribe las respuestas al MISMO formato que ya usa el envío
+    normal (RespuestaInstrumentoEnvioSerializer, ver instrumentos/extraccion_ia_openai.py) — no
+    inventa una estructura nueva, solo llena "el mismo formulario" que llenaría la persona en la
+    web. El resultado SIEMPRE cae en revisión humana (AplicacionInstrumento.estado='pendiente',
+    generado_por_ia=True): la extracción puede equivocarse (letra ilegible, celda ambigua), así
+    que nunca se acepta sola."""
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    instrumento = models.ForeignKey(Instrumento, on_delete=models.CASCADE, related_name='extracciones')
+    # A quién (persona/departamento) pertenece el documento ya diligenciado. Si todavía no tiene
+    # PreregistroInstrumento para este instrumento, se le crea uno al procesar — mismo espíritu
+    # que un preregistro manual, solo que disparado por esta carga en vez de un alta explícita.
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='extracciones_instrumento',
+    )
+    archivo = models.FileField(upload_to='instrumentos/extracciones/%Y/%m/')
+    nombre_archivo_original = models.CharField(max_length=255, blank=True)
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    aplicacion = models.ForeignKey(
+        AplicacionInstrumento, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='extraccion_origen',
+    )
+    # ids de PreguntaInstrumento que la IA intentó llenar pero no pasaron validación (celda mal
+    # formada, opción que no pertenece a la pregunta, etc.) — quedan sin respuesta, a completar a
+    # mano en la revisión. No es lo mismo que "obligatoria sin responder": esto es "se intentó y
+    # falló", ver `_omitir_error` en extraccion_ia_openai.py.
+    preguntas_omitidas = models.JSONField(default=list, blank=True)
+    error_mensaje = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='extracciones_solicitadas',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Extracción de instrumento con IA (documento diligenciado)'
+        verbose_name_plural = 'Extracciones de instrumento con IA (documentos diligenciados)'
+
+    def __str__(self):
+        return f'Extracción {self.id} · {self.instrumento.slug} · {self.estado}'

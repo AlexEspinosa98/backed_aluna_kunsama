@@ -1,4 +1,7 @@
+import threading
+
 from django.utils import timezone
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAdminUser
@@ -8,13 +11,15 @@ from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 from jornadas.scoping import verificar_acceso_jornada
 
 from .docx_aplicacion import respuesta_docx_http
+from .extraccion_ia_openai import procesar_extraccion_instrumento
 from .models import (
-    AplicacionInstrumento, ColumnaMatrizInstrumento, FilaMatrizInstrumento,
+    AplicacionInstrumento, ColumnaMatrizInstrumento, ExtraccionInstrumento, FilaMatrizInstrumento,
     OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento, SeccionInstrumento,
 )
 from .scoping import es_dependencia, filtrar_por_encargado, instrumentos_visibles, verificar_acceso_instrumento
 from .serializers import (
     AplicacionInstrumentoAdminSerializer, ColumnaMatrizInstrumentoSerializer,
+    ExtraccionInstrumentoCrearSerializer, ExtraccionInstrumentoSerializer,
     FilaMatrizInstrumentoSerializer, InstrumentoAdminSerializer, OpcionPreguntaInstrumentoSerializer,
     PreguntaInstrumentoAdminSerializer, PreregistroInstrumentoAdminSerializer,
     RevisionAplicacionSerializer, SeccionInstrumentoAdminSerializer,
@@ -263,3 +268,42 @@ class AplicacionInstrumentoAdminViewSet(ReadOnlyModelViewSet):
     def descargar(self, request, pk=None):
         aplicacion = self.get_object()
         return respuesta_docx_http(aplicacion)
+
+
+class ExtraccionInstrumentoViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Sube un .pdf o .docx ya diligenciado fuera de la web y dispara su transcripción con IA
+    (ver instrumentos/extraccion_ia_openai.py) — mismo mecanismo asíncrono que
+    analitica.AnalisisMomentoIAViewSet (hilo de background, estado pendiente→procesando→completo/
+    error), pero acá el resultado alimenta una AplicacionInstrumento en vez de un reporte."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = filtrar_por_encargado(ExtraccionInstrumento.objects.all(), self.request.user, 'instrumento')
+        instrumento_id = self.request.query_params.get('instrumento')
+        if instrumento_id:
+            queryset = queryset.filter(instrumento_id=instrumento_id)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ExtraccionInstrumentoCrearSerializer
+        return ExtraccionInstrumentoSerializer
+
+    def create(self, request, *args, **kwargs):
+        entrada = ExtraccionInstrumentoCrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        instrumento = entrada.validated_data['instrumento']
+        verificar_acceso_instrumento(request.user, instrumento)
+
+        extraccion = entrada.save(solicitado_por=request.user)
+        threading.Thread(target=procesar_extraccion_instrumento, args=(extraccion.id,), daemon=True).start()
+
+        salida = ExtraccionInstrumentoSerializer(extraccion)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
