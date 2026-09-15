@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
-from jornadas.models import Jornada, Momento, OpcionPregunta, Pregunta
+from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
 from .extraccion_momento_ia_openai import _limpiar_y_validar, aprobar_extraccion_momento
 from .models import ExtraccionMomento, Participante, Respuesta
@@ -508,3 +508,82 @@ class ExtraccionMomentoScopingTests(BaseJornadaTestCase):
         }, format='multipart')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('archivo', resp.data)
+
+
+class RespuestaMatrizTests(BaseJornadaTestCase):
+    """Pregunta.tipo == matriz sobre el momento individual — una celda (fila×columna) por
+    entrada, todas con el mismo pregunta_id. Mismo endpoint que las demás respuestas
+    (RespuestasMomentoView), sin nada nuevo del lado del cliente salvo fila_id/columna_id."""
+    def setUp(self):
+        super().setUp()
+        self.pregunta_matriz_2 = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_MATRIZ,
+            texto='Responsabilidades', orden=3, obligatoria=True,
+        )
+        self.fila_1 = FilaMatrizPregunta.objects.create(pregunta=self.pregunta_matriz_2, texto='Proceso A', orden=1)
+        self.fila_2 = FilaMatrizPregunta.objects.create(pregunta=self.pregunta_matriz_2, texto='Proceso B', orden=2)
+        self.col_1 = ColumnaMatrizPregunta.objects.create(pregunta=self.pregunta_matriz_2, texto='Quién', orden=1)
+        self.col_2 = ColumnaMatrizPregunta.objects.create(pregunta=self.pregunta_matriz_2, texto='Cuándo', orden=2)
+
+        self.token = self.registrar_participante().data['token']
+
+    def _respuestas_base(self, extra=None):
+        base = [
+            {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Mi reflexión.'},
+            {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_a.id]},
+        ]
+        return {'respuestas': base + (extra or [])}
+
+    def test_guarda_una_respuesta_por_celda(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_2.id, 'texto_libre': 'Hoy'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_1.id, 'texto_libre': 'Ana'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_2.id, 'texto_libre': 'Mañana'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_matriz_2).count(), 4)
+        celda = Respuesta.objects.get(pregunta=self.pregunta_matriz_2, fila=self.fila_1, columna=self.col_1)
+        self.assertEqual(celda.texto_libre, 'Juan')
+
+    def test_matriz_obligatoria_exige_todas_las_celdas(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('faltantes', resp.data)
+
+    def test_rechaza_celda_sin_fila_o_columna(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'texto_libre': 'Juan'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_2.id, 'texto_libre': 'x'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_1.id, 'texto_libre': 'x'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_2.id, 'texto_libre': 'x'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_rechaza_fila_columna_en_pregunta_no_matriz(self):
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_1.id, 'columna_id': self.col_2.id, 'texto_libre': 'x'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_1.id, 'texto_libre': 'x'},
+                {'pregunta_id': self.pregunta_matriz_2.id, 'fila_id': self.fila_2.id, 'columna_id': self.col_2.id, 'texto_libre': 'x'},
+                {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'x', 'fila_id': self.fila_1.id},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)

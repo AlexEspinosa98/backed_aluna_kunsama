@@ -168,7 +168,9 @@ def _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregu
                 for c in pregunta.columnas.values_list('id', flat=True)
             }
             respondidas = {
-                (i['fila'].id, i['columna'].id) for i in items if i.get('texto_libre', '').strip()
+                (i['fila'].id, i['columna'].id) for i in items
+                if i.get('fila') is not None and i.get('columna') is not None
+                and i.get('texto_libre', '').strip()
             }
             if not requeridas.issubset(respondidas):
                 faltantes.append(pregunta.id)
