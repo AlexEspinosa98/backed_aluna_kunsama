@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from jornadas.models import Momento, OpcionPregunta, Pregunta
 
-from .models import Participante, Respuesta
+from .models import ExtraccionMomento, Participante, Respuesta
 
 
 def _validar_vocero_unico(jornada, mesa, es_vocero, excluir_id=None):
@@ -145,3 +145,88 @@ class RespuestaSalidaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Respuesta
         fields = ['id', 'pregunta', 'participante', 'mesa', 'texto_libre', 'opciones', 'actualizado_en']
+
+
+class ExtraccionMomentoSerializer(serializers.ModelSerializer):
+    momento_titulo = serializers.CharField(source='momento.titulo', read_only=True)
+    participante_nombre = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ExtraccionMomento
+        fields = [
+            'id', 'momento', 'momento_titulo', 'participante', 'participante_nombre',
+            'nombre_archivo_original', 'estado', 'resultado', 'preguntas_omitidas',
+            'error_mensaje', 'modelo_usado', 'aprobado_en', 'aprobado_por', 'solicitado_por',
+            'creado_en', 'actualizado_en', 'completado_en',
+        ]
+        read_only_fields = fields
+
+    def get_participante_nombre(self, extraccion):
+        return f'{extraccion.participante.nombre} {extraccion.participante.apellido}'.strip()
+
+
+class ExtraccionMomentoCrearSerializer(serializers.ModelSerializer):
+    """Sube un .pdf o .docx ya diligenciado para dispararle la extracción con IA. Admite
+    `participante_id` (persona ya registrada en la jornada) o los mismos campos que
+    ParticipanteRegistroSerializer para dar de alta a alguien nuevo en el mismo request — el
+    departamento que ya llenó el papel puede no haberse registrado nunca en el sistema."""
+    participante_id = serializers.PrimaryKeyRelatedField(
+        source='participante', queryset=Participante.objects.all(), required=False,
+    )
+    correo_institucional = serializers.EmailField(write_only=True, required=False)
+    nombre = serializers.CharField(write_only=True, required=False)
+    apellido = serializers.CharField(write_only=True, required=False)
+    telefono = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    rol = serializers.CharField(write_only=True, required=False)
+
+    class Meta:
+        model = ExtraccionMomento
+        fields = [
+            'id', 'momento', 'archivo', 'participante_id', 'correo_institucional', 'nombre',
+            'apellido', 'telefono', 'rol', 'estado', 'creado_en',
+        ]
+        read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate_archivo(self, archivo):
+        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+        if extension not in ('pdf', 'docx'):
+            raise serializers.ValidationError('Solo se aceptan archivos .pdf o .docx.')
+        return archivo
+
+    def validate(self, attrs):
+        if 'participante' in attrs:
+            if attrs['participante'].jornada_id != attrs['momento'].jornada_id:
+                raise serializers.ValidationError(
+                    {'participante_id': 'Ese participante no pertenece a la jornada de este momento.'}
+                )
+            return attrs
+        faltantes = [c for c in ('correo_institucional', 'nombre', 'apellido', 'rol') if c not in attrs]
+        if faltantes:
+            raise serializers.ValidationError(
+                'Debes indicar participante_id (de alguien ya registrado) o '
+                'correo_institucional+nombre+apellido+rol (para registrar a alguien nuevo).'
+            )
+        return attrs
+
+    def create(self, validated_data):
+        participante = validated_data.pop('participante', None)
+        if participante is None:
+            jornada = validated_data['momento'].jornada
+            correo = validated_data.pop('correo_institucional')
+            existente = Participante.objects.filter(jornada=jornada, correo_institucional=correo).first()
+            if existente:
+                participante = existente
+                for campo in ('nombre', 'apellido', 'telefono', 'rol'):
+                    validated_data.pop(campo, None)
+            else:
+                participante = Participante.objects.create(
+                    jornada=jornada, correo_institucional=correo,
+                    nombre=validated_data.pop('nombre'), apellido=validated_data.pop('apellido'),
+                    telefono=validated_data.pop('telefono', ''), rol=validated_data.pop('rol'),
+                )
+        else:
+            for campo in ('correo_institucional', 'nombre', 'apellido', 'telefono', 'rol'):
+                validated_data.pop(campo, None)
+        validated_data['participante'] = participante
+        validated_data['nombre_archivo_original'] = validated_data['archivo'].name
+        return super().create(validated_data)

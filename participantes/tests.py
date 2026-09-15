@@ -1,11 +1,13 @@
 import datetime
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
 from jornadas.models import Jornada, Momento, OpcionPregunta, Pregunta
 
-from .models import Participante, Respuesta
+from .extraccion_momento_ia_openai import _limpiar_y_validar, aprobar_extraccion_momento
+from .models import ExtraccionMomento, Participante, Respuesta
 
 
 class BaseJornadaTestCase(APITestCase):
@@ -348,3 +350,159 @@ class ParticipantesAdminScopingTests(BaseJornadaTestCase):
         self.assertEqual(resp.status_code, 200)
         jornadas_devueltas = {p['jornada'] for p in resp.data}
         self.assertEqual(jornadas_devueltas, {self.jornada.slug})
+
+
+class LimpiarYValidarExtraccionTests(BaseJornadaTestCase):
+    """_limpiar_y_validar es lo que la IA usa para filtrar su transcripción antes de dejarla en
+    ExtraccionMomento.resultado — no depende de OpenAI, se prueba directo con datos "crudos"."""
+    def test_conserva_respuesta_abierta_valida(self):
+        crudo = {'respuestas': [{'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': []}]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(limpio['respuestas'], [
+            {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': []}
+        ])
+        self.assertEqual(omitidas, [])
+
+    def test_conserva_opcion_valida_y_descarta_opcion_ajena(self):
+        otra_pregunta = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_ABIERTA, texto='Otra', orden=3,
+        )
+        opcion_ajena = OpcionPregunta.objects.create(pregunta=otra_pregunta, texto='No es de esta pregunta', orden=1)
+        crudo = {'respuestas': [{
+            'pregunta': self.pregunta_unica.id, 'texto_libre': '',
+            'opcion_ids': [self.opcion_a.id, opcion_ajena.id],
+        }]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(limpio['respuestas'], [
+            {'pregunta': self.pregunta_unica.id, 'texto_libre': '', 'opcion_ids': [self.opcion_a.id]}
+        ])
+        self.assertEqual(omitidas, [])
+
+    def test_omite_pregunta_unica_con_mas_de_una_opcion(self):
+        crudo = {'respuestas': [{
+            'pregunta': self.pregunta_unica.id, 'texto_libre': '',
+            'opcion_ids': [self.opcion_a.id, self.opcion_b.id],
+        }]}
+        _limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [self.pregunta_unica.id])
+
+    def test_omite_pregunta_que_no_pertenece_al_momento(self):
+        crudo = {'respuestas': [{'pregunta': 999999, 'texto_libre': 'x', 'opcion_ids': []}]}
+        _limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [999999])
+
+
+class AprobarExtraccionMomentoTests(BaseJornadaTestCase):
+    def setUp(self):
+        super().setUp()
+        self.participante = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='depto@uni.edu.co',
+            nombre='Depto', apellido='Sistemas', rol='jefe',
+        )
+        self.admin = get_user_model().objects.create_user(username='admin_test', password='pass12345', is_staff=True)
+        self.extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.participante,
+            archivo=SimpleUploadedFile('a.pdf', b'contenido', content_type='application/pdf'),
+            estado=ExtraccionMomento.ESTADO_COMPLETO,
+            resultado={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Todo bien.', 'opcion_ids': []},
+                {'pregunta': self.pregunta_unica.id, 'texto_libre': '', 'opcion_ids': [self.opcion_a.id]},
+            ]},
+        )
+
+    def test_aprobar_escribe_respuestas_reales_del_participante(self):
+        guardadas = aprobar_extraccion_momento(self.extraccion, self.admin)
+        self.assertEqual(len(guardadas), 2)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=self.participante).texto_libre,
+            'Todo bien.',
+        )
+        opciones = list(
+            Respuesta.objects.get(pregunta=self.pregunta_unica, participante=self.participante).opciones.all()
+        )
+        self.assertEqual(opciones, [self.opcion_a])
+        self.extraccion.refresh_from_db()
+        self.assertIsNotNone(self.extraccion.aprobado_en)
+        self.assertEqual(self.extraccion.aprobado_por, self.admin)
+
+    def test_endpoint_no_deja_aprobar_dos_veces(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
+        self.assertEqual(resp.status_code, 200)
+        resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_endpoint_no_deja_aprobar_extraccion_sin_completar(self):
+        self.extraccion.estado = ExtraccionMomento.ESTADO_PROCESANDO
+        self.extraccion.save(update_fields=['estado'])
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
+        self.assertEqual(resp.status_code, 400)
+
+
+class ExtraccionMomentoScopingTests(BaseJornadaTestCase):
+    def setUp(self):
+        super().setUp()
+        from jornadas.models import PerfilUsuario
+        User = get_user_model()
+
+        self.admin = User.objects.create_user(username='admin_scope', password='pass12345', is_staff=True)
+        self.dependencia = User.objects.create_user(username='dep_scope', password='pass12345', is_staff=True)
+        PerfilUsuario.objects.create(user=self.dependencia, rol=PerfilUsuario.ROL_DEPENDENCIA)
+        self.jornada.propietarios.set([self.dependencia])
+
+        self.otra_jornada = Jornada.objects.create(
+            slug='otra-jornada-extraccion', nombre='Otra', fecha_inicio=datetime.date(2026, 1, 1),
+            fecha_fin=datetime.date(2026, 1, 2),
+        )
+        self.otro_momento = Momento.objects.create(
+            jornada=self.otra_jornada, orden=1, titulo='Otro momento', tipo=Momento.TIPO_INDIVIDUAL,
+        )
+        self.otro_participante = Participante.objects.create(
+            jornada=self.otra_jornada, correo_institucional='otro@uni.edu.co',
+            nombre='Otro', apellido='Depto', rol='jefe',
+        )
+
+        self.participante = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='propio@uni.edu.co',
+            nombre='Propio', apellido='Depto', rol='jefe',
+        )
+        self.extraccion_propia = ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.participante,
+            archivo=SimpleUploadedFile('a.pdf', b'x', content_type='application/pdf'),
+        )
+        self.extraccion_ajena = ExtraccionMomento.objects.create(
+            momento=self.otro_momento, participante=self.otro_participante,
+            archivo=SimpleUploadedFile('b.pdf', b'x', content_type='application/pdf'),
+        )
+
+    def test_dependencia_solo_ve_extracciones_de_su_jornada(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get('/api/admin/momento-extracciones/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([e['id'] for e in resp.data], [self.extraccion_propia.id])
+
+    def test_admin_completo_ve_todas_las_extracciones(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/momento-extracciones/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            {e['id'] for e in resp.data}, {self.extraccion_propia.id, self.extraccion_ajena.id}
+        )
+
+    def test_dependencia_no_puede_subir_documento_para_momento_ajeno(self):
+        self.client.force_authenticate(user=self.dependencia)
+        archivo = SimpleUploadedFile('c.pdf', b'x', content_type='application/pdf')
+        resp = self.client.post('/api/admin/momento-extracciones/', {
+            'momento': self.otro_momento.id, 'participante_id': self.otro_participante.id, 'archivo': archivo,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_rechaza_formato_no_soportado(self):
+        self.client.force_authenticate(user=self.admin)
+        archivo = SimpleUploadedFile('c.txt', b'x', content_type='text/plain')
+        resp = self.client.post('/api/admin/momento-extracciones/', {
+            'momento': self.momento_individual.id, 'participante_id': self.participante.id, 'archivo': archivo,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)

@@ -1,6 +1,6 @@
 from rest_framework.routers import DefaultRouter
 
-from participantes.admin_views import ParticipanteAdminViewSet, RespuestaAdminViewSet
+from participantes.admin_views import ExtraccionMomentoViewSet, ParticipanteAdminViewSet, RespuestaAdminViewSet
 
 from .views import (
     JornadaAdminViewSet, MomentoAdminViewSet, OpcionAdminViewSet, PreguntaAdminViewSet,
@@ -14,6 +14,7 @@ router.register('preguntas', PreguntaAdminViewSet, basename='admin-pregunta')
 router.register('opciones', OpcionAdminViewSet, basename='admin-opcion')
 router.register('participantes', ParticipanteAdminViewSet, basename='admin-participante')
 router.register('respuestas', RespuestaAdminViewSet, basename='admin-respuesta')
+router.register('momento-extracciones', ExtraccionMomentoViewSet, basename='admin-momento-extraccion')
 router.register('usuarios', UsuarioAdminViewSet, basename='admin-usuario')
 
 urlpatterns = router.urls
