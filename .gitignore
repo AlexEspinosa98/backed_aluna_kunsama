@@ -8,3 +8,4 @@ analitica/.models/
 venv/
 staticfiles/
 gunicorn-*.log
+media/
