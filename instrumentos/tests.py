@@ -1,15 +1,19 @@
 import datetime
+import io
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APITestCase
 
 from jornadas.models import Jornada, PerfilUsuario
 from participantes.models import Participante
 
+from .extraccion_ia_openai import _guardar_respuestas
 from .models import (
-    AplicacionInstrumento, ColumnaMatrizInstrumento, FilaMatrizInstrumento, Instrumento,
-    PreguntaInstrumento, PreregistroInstrumento, SeccionInstrumento,
+    AplicacionInstrumento, ColumnaMatrizInstrumento, ExtraccionInstrumento, FilaMatrizInstrumento,
+    Instrumento, OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento,
+    RespuestaInstrumento, SeccionInstrumento,
 )
 
 Usuario = get_user_model()
@@ -353,3 +357,106 @@ class InstrumentoDetalleYRespuestasTests(BaseInstrumentoTestCase):
             resp['Content-Type'],
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         )
+
+
+class GuardarRespuestasExtraccionTests(BaseInstrumentoTestCase):
+    """_guardar_respuestas es lo que la IA usa para volcar su transcripción a
+    RespuestaInstrumento — no depende de OpenAI, así que se prueba directo con datos "crudos"
+    como los que devolvería el modelo."""
+    def setUp(self):
+        super().setUp()
+        self.aplicacion = AplicacionInstrumento.objects.create(preregistro=self.preregistro)
+        self.preguntas_validas = {self.pregunta_abierta.id: self.pregunta_abierta, self.pregunta_matriz.id: self.pregunta_matriz}
+
+    def test_guarda_pregunta_abierta_aunque_la_ia_mande_fila_columna_null_explicitos(self):
+        # Regresión: el prompt le pide a la IA mandar siempre fila/columna (null si no aplica),
+        # pero PrimaryKeyRelatedField(required=False) sin allow_null=True rechaza un null
+        # explícito — sin el filtrado en _guardar_respuestas, esto se omitía siempre.
+        crudo = [{
+            'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Respuesta de la IA.',
+            'opciones': [], 'fila': None, 'columna': None,
+        }]
+        guardadas, omitidas = _guardar_respuestas(self.aplicacion, crudo, self.preguntas_validas)
+        self.assertEqual(guardadas, 1)
+        self.assertEqual(omitidas, [])
+        respuesta = RespuestaInstrumento.objects.get(aplicacion=self.aplicacion, pregunta=self.pregunta_abierta)
+        self.assertEqual(respuesta.texto_libre, 'Respuesta de la IA.')
+
+    def test_guarda_celda_de_matriz_con_fila_y_columna_reales(self):
+        crudo = [{
+            'pregunta': self.pregunta_matriz.id, 'texto_libre': 'Celda IA.',
+            'opciones': [], 'fila': self.fila.id, 'columna': self.columna.id,
+        }]
+        guardadas, omitidas = _guardar_respuestas(self.aplicacion, crudo, self.preguntas_validas)
+        self.assertEqual(guardadas, 1)
+        self.assertEqual(omitidas, [])
+        respuesta = RespuestaInstrumento.objects.get(aplicacion=self.aplicacion, pregunta=self.pregunta_matriz)
+        self.assertEqual(respuesta.fila_id, self.fila.id)
+        self.assertEqual(respuesta.columna_id, self.columna.id)
+
+    def test_omite_pregunta_matriz_sin_fila_ni_columna(self):
+        crudo = [{
+            'pregunta': self.pregunta_matriz.id, 'texto_libre': 'Sin ubicar.',
+            'opciones': [], 'fila': None, 'columna': None,
+        }]
+        guardadas, omitidas = _guardar_respuestas(self.aplicacion, crudo, self.preguntas_validas)
+        self.assertEqual(guardadas, 0)
+        self.assertEqual(omitidas, [self.pregunta_matriz.id])
+
+    def test_omite_pregunta_que_no_pertenece_al_instrumento(self):
+        crudo = [{'pregunta': 999999, 'texto_libre': 'Inventada.', 'opciones': [], 'fila': None, 'columna': None}]
+        guardadas, omitidas = _guardar_respuestas(self.aplicacion, crudo, self.preguntas_validas)
+        self.assertEqual(guardadas, 0)
+        self.assertEqual(omitidas, [999999])
+
+
+class ExtraccionInstrumentoScopingTests(BaseInstrumentoTestCase):
+    """Scoping por dependencia sobre ExtraccionInstrumento — mismo patrón que
+    AnalisisJornadaIAScopingTests en analitica/tests.py, aplicado a esta subida de PDF/Word."""
+    def setUp(self):
+        super().setUp()
+        self.dependencia = crear_dependencia()
+        self.instrumento.encargados.add(self.dependencia)
+
+        self.otro_instrumento = Instrumento.objects.create(nombre='Otro instrumento')
+        self.otro_instrumento.encargados.add(self.admin)
+
+        self.extraccion_propia = ExtraccionInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.preregistrado,
+            archivo=SimpleUploadedFile('a.pdf', b'contenido', content_type='application/pdf'),
+        )
+        self.extraccion_ajena = ExtraccionInstrumento.objects.create(
+            instrumento=self.otro_instrumento, usuario=self.preregistrado,
+            archivo=SimpleUploadedFile('b.pdf', b'contenido', content_type='application/pdf'),
+        )
+
+    def test_dependencia_solo_ve_extracciones_de_su_instrumento(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get('/api/admin/instrumento-extracciones/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([e['id'] for e in resp.data], [self.extraccion_propia.id])
+
+    def test_admin_completo_ve_todas_las_extracciones(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/instrumento-extracciones/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            {e['id'] for e in resp.data}, {self.extraccion_propia.id, self.extraccion_ajena.id}
+        )
+
+    def test_dependencia_no_puede_subir_documento_para_instrumento_ajeno(self):
+        self.client.force_authenticate(user=self.dependencia)
+        archivo = SimpleUploadedFile('c.pdf', b'contenido', content_type='application/pdf')
+        resp = self.client.post('/api/admin/instrumento-extracciones/', {
+            'instrumento': self.otro_instrumento.id, 'usuario_id': self.preregistrado.id, 'archivo': archivo,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_rechaza_formato_no_soportado(self):
+        self.client.force_authenticate(user=self.admin)
+        archivo = SimpleUploadedFile('c.txt', b'contenido', content_type='text/plain')
+        resp = self.client.post('/api/admin/instrumento-extracciones/', {
+            'instrumento': self.instrumento.id, 'usuario_id': self.preregistrado.id, 'archivo': archivo,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)
