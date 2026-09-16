@@ -182,6 +182,33 @@ def _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregu
 class RespuestasMomentoView(APIView):
     permission_classes = [EsParticipanteDeLaJornada]
 
+    @extend_schema(responses=RespuestaSalidaSerializer(many=True))
+    def get(self, request, jornada_slug, momento_id):
+        """Las respuestas YA GUARDADAS del participante (o de su mesa, en momentos tipo mesa)
+        para este momento — para que el front pueda pre-llenar el formulario cuando alguien
+        vuelve a un momento a medio responder o a corregir algo, en vez de partir en blanco.
+        Antes de esto no existía ningún GET de respuestas: MomentoDetalleView solo devuelve la
+        estructura (preguntas/opciones/filas/columnas), nunca lo que ya se respondió."""
+        momento = get_object_or_404(
+            Momento, pk=momento_id, jornada__slug=jornada_slug, activo=True
+        )
+        participante = request.user
+        if not _momento_visible_para(momento, participante):
+            raise NotFound('Este momento no está disponible para tu mesa.')
+
+        if momento.tipo == Momento.TIPO_MESA:
+            # Mismo criterio de dueño que en el POST: en un momento de mesa, las respuestas son
+            # de la mesa, no de la persona — así que cualquier integrante de la mesa (no solo el
+            # vocero, que es el único que puede escribir) puede ver lo que ya se respondió.
+            if participante.mesa is None:
+                return Response([], status=status.HTTP_200_OK)
+            respuestas = Respuesta.objects.filter(pregunta__momento=momento, mesa=participante.mesa)
+        else:
+            respuestas = Respuesta.objects.filter(pregunta__momento=momento, participante=participante)
+
+        respuestas = respuestas.select_related('pregunta').prefetch_related('opciones')
+        return Response(RespuestaSalidaSerializer(respuestas, many=True).data, status=status.HTTP_200_OK)
+
     @extend_schema(request=RespuestaEnvioSerializer, responses=RespuestaSalidaSerializer(many=True))
     def post(self, request, jornada_slug, momento_id):
         momento = get_object_or_404(
