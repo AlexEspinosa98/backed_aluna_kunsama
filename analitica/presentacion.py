@@ -120,7 +120,10 @@ def _llamar_openai(system, user, max_tokens=MAX_OUTPUT_TOKENS, model=None):
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
                 ],
-                max_tokens=max_tokens,
+                # max_completion_tokens, no max_tokens: los modelos más nuevos (ej.
+                # OPENAI_MODEL=gpt-5.6-terra en producción) rechazan el nombre viejo del
+                # parámetro con 400 "Unsupported parameter: 'max_tokens'".
+                max_completion_tokens=max_tokens,
                 temperature=0.4,
             )
             resultado['texto'] = respuesta.choices[0].message.content.strip()
