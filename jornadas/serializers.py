@@ -49,9 +49,14 @@ class PreguntaAdminSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'depende_de_opcion': 'Una pregunta no puede depender de una opción de sí misma.'}
                 )
-            if momento is not None and depende_de_opcion.pregunta.momento_id != momento.id:
+            # Misma JORNADA, no necesariamente el mismo momento — un cuestionario real puede
+            # tener un momento por bloque/letra (A, B, C...) y una pregunta condicionada por algo
+            # respondido en un bloque anterior sigue siendo un caso válido (ej. "C5 depende de
+            # A5"). condicion_cumplida (participantes/utils.py) ya soporta esto sin cambios: solo
+            # consulta Respuesta por pregunta+opción, nunca asumió que fueran del mismo momento.
+            if momento is not None and depende_de_opcion.pregunta.momento.jornada_id != momento.jornada_id:
                 raise serializers.ValidationError(
-                    {'depende_de_opcion': 'La opción de la que depende debe ser de una pregunta del mismo momento.'}
+                    {'depende_de_opcion': 'La opción de la que depende debe ser de una pregunta de la misma jornada.'}
                 )
         return attrs
 

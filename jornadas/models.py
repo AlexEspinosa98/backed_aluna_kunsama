@@ -171,8 +171,9 @@ class Pregunta(models.Model):
     # mesa/rol). A diferencia de mesas_permitidas/roles_permitidos (estáticos, dependen solo de
     # quién es el participante), esto depende de una Respuesta ya guardada — se evalúa en
     # participantes/utils.py::condicion_cumplida, no acá. La pregunta "dueña" de la opción debe
-    # estar en el MISMO momento (se valida en PreguntaAdminSerializer) para no tener que resolver
-    # visibilidad de un momento en función de respuestas de otro momento distinto.
+    # estar en la MISMA JORNADA (se valida en PreguntaAdminSerializer), pero puede estar en un
+    # momento distinto — un cuestionario real con un momento por bloque (A, B, C...) necesita
+    # exactamente esto (ej. la pregunta C5 del bloque C depende de la A5 del bloque A).
     depende_de_opcion = models.ForeignKey(
         'OpcionPregunta',
         on_delete=models.SET_NULL,
