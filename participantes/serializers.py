@@ -4,6 +4,7 @@ from rest_framework import serializers
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta
 
 from .models import ExtraccionMomento, Participante, Respuesta
+from .utils import condicion_cumplida
 
 
 def _validar_vocero_unico(jornada, mesa, es_vocero, excluir_id=None):
@@ -130,10 +131,13 @@ class MomentoDetalleSerializer(serializers.ModelSerializer):
         # momentos individuales, donde no existe el concepto de "mesa" del participante.
         # Pregunta.roles_permitidos (opcional) hace lo mismo por rol — a diferencia de mesa, sí
         # aplica en cualquier tipo de momento, porque todo participante tiene un rol.
+        # depende_de_opcion (opcional) oculta la pregunta hasta que el participante ya haya
+        # marcado esa opción específica en la pregunta de la que depende (condicion_cumplida).
         participante = self.context['request'].user
         preguntas = [
             p for p in momento.preguntas.all()
-            if not p.roles_permitidos or participante.rol in p.roles_permitidos
+            if (not p.roles_permitidos or participante.rol in p.roles_permitidos)
+            and condicion_cumplida(p, participante)
         ]
         if momento.tipo == Momento.TIPO_MESA:
             preguntas = [

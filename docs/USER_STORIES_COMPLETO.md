@@ -1795,3 +1795,29 @@ PATCH /api/admin/momentos/41/
 
 Un participante con `rol: "docente"` deja de ver el momento 41 en `GET /api/jornadas/{slug}/momentos/` (HU-19) y recibe `404` si intenta acceder directo a `GET .../momentos/41/` (HU-20) — mismo comportamiento que ya existía para mesas no permitidas.
 </details>
+
+### HU-50 — Preguntas condicionadas por la respuesta a otra pregunta
+Como administrador quiero que una pregunta solo aparezca si el participante ya marcó una opción específica en una pregunta anterior del mismo momento (ej. "¿Tiene hijos?" → si responde "Sí", aparece "¿Cuántos?"), para no mostrar preguntas que no aplican según lo ya respondido.
+- `Pregunta.depende_de_opcion` — FK opcional a una `OpcionPregunta` de **otra pregunta del mismo momento** (se valida al crear/editar: `400` si es de un momento distinto, o si una pregunta intenta depender de sí misma). `null` = sin condición, visible siempre (según mesa/rol, igual que hoy).
+- A diferencia de `mesas_permitidas`/`roles_permitidos` (estáticos, dependen solo de quién es el participante), esto depende de una `Respuesta` ya guardada — se evalúa contra la base en cada consulta, no se cachea nada.
+- **Un momento se responde completo en un solo `POST`**: si la pregunta disparadora y la condicionada van en el mismo envío, la disparadora todavía no está guardada en la base cuando se valida la condicionada — por eso las opciones marcadas en ese mismo envío también cuentan como "ya cumplida la condición", no solo lo que ya había en la base de antes.
+- Se aplica en los mismos lugares que mesa/rol: `GET .../momentos/{id}/` (HU-20, la pregunta condicionada no aparece hasta que se cumpla) y `POST .../respuestas/` (HU-21, se rechaza con `400` si se intenta responder una condicionada que todavía no debería estar habilitada).
+- Una pregunta condicionada que además es `obligatoria=true` **no cuenta como obligatoria** mientras su condición no se cumpla (HU-24) — no tiene sentido exigir una respuesta a algo que ni siquiera debería mostrarse.
+
+<details><summary>Ejemplo — "¿Tiene hijos?" → "¿Cuántos?"</summary>
+
+```bash
+# Pregunta 10: "¿Tiene hijos?" (única), con opciones 101="Sí", 102="No"
+PATCH /api/admin/preguntas/11/
+{ "depende_de_opcion": 101 }   # Pregunta 11: "¿Cuántos hijos tiene?"
+```
+
+Antes de responder la pregunta 10, `GET .../momentos/{id}/` no incluye la pregunta 11 en absoluto. Al enviar:
+```json
+{ "respuestas": [
+  { "pregunta_id": 10, "opcion_ids": [101] },
+  { "pregunta_id": 11, "texto_libre": "2" }
+] }
+```
+ambas se guardan en el mismo `POST` — la 11 se acepta porque la opción 101 viene en el mismo envío, aunque la 10 todavía no estuviera guardada al momento de validar.
+</details>

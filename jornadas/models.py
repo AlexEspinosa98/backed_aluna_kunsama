@@ -166,6 +166,20 @@ class Pregunta(models.Model):
         'Lista opcional de nombres de rol que pueden ver/responder esta pregunta. Vacía = '
         'visible para todos los roles, igual que hoy.'
     ))
+    # Pregunta condicionada: solo se muestra si el participante (o su mesa) ya marcó ESTA opción
+    # específica en la pregunta dueña de esa opción. null = sin condición, visible siempre (según
+    # mesa/rol). A diferencia de mesas_permitidas/roles_permitidos (estáticos, dependen solo de
+    # quién es el participante), esto depende de una Respuesta ya guardada — se evalúa en
+    # participantes/utils.py::condicion_cumplida, no acá. La pregunta "dueña" de la opción debe
+    # estar en el MISMO momento (se valida en PreguntaAdminSerializer) para no tener que resolver
+    # visibilidad de un momento en función de respuestas de otro momento distinto.
+    depende_de_opcion = models.ForeignKey(
+        'OpcionPregunta',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='preguntas_condicionadas',
+    )
 
     class Meta:
         ordering = ['orden']

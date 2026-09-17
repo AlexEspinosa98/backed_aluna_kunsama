@@ -38,8 +38,22 @@ class PreguntaAdminSerializer(serializers.ModelSerializer):
         model = Pregunta
         fields = [
             'id', 'momento', 'tipo', 'texto', 'orden', 'obligatoria', 'activa',
-            'mesas_permitidas', 'roles_permitidos', 'opciones', 'filas', 'columnas',
+            'mesas_permitidas', 'roles_permitidos', 'depende_de_opcion', 'opciones', 'filas', 'columnas',
         ]
+
+    def validate(self, attrs):
+        depende_de_opcion = attrs.get('depende_de_opcion')
+        if depende_de_opcion is not None:
+            momento = attrs.get('momento') or getattr(self.instance, 'momento', None)
+            if depende_de_opcion.pregunta_id == getattr(self.instance, 'id', None):
+                raise serializers.ValidationError(
+                    {'depende_de_opcion': 'Una pregunta no puede depender de una opción de sí misma.'}
+                )
+            if momento is not None and depende_de_opcion.pregunta.momento_id != momento.id:
+                raise serializers.ValidationError(
+                    {'depende_de_opcion': 'La opción de la que depende debe ser de una pregunta del mismo momento.'}
+                )
+        return attrs
 
 
 class MomentoAdminSerializer(serializers.ModelSerializer):

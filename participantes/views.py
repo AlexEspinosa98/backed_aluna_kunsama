@@ -20,6 +20,7 @@ from .serializers import (
     RespuestaEnvioSerializer,
     RespuestaSalidaSerializer,
 )
+from .utils import condicion_cumplida
 
 
 class JornadaListaView(generics.ListAPIView):
@@ -251,12 +252,23 @@ class RespuestasMomentoView(APIView):
                               'asigne antes de responder.'}
                 )
 
+        # Un momento se responde completo en un solo POST — si la pregunta disparadora y la
+        # condicionada van en el mismo envío, la disparadora todavía no está guardada cuando se
+        # valida la condicionada (ver condicion_cumplida), así que estas opciones del propio
+        # envío también cuentan como "ya marcadas".
+        opciones_en_este_envio = {
+            opcion.id for item in datos['respuestas'] for opcion in item.get('opciones', [])
+        }
+
         def _pregunta_visible_para(pregunta):
             # mesas_permitidas/roles_permitidas vacías = aplica a todas las mesas/todos los
             # roles, igual que siempre. Esto se revalida acá (no solo se oculta en el listado,
             # ver MomentoDetalleSerializer) para que un vocero no pueda colar una respuesta a una
-            # pregunta que no le corresponde pegándole directo a la API.
+            # pregunta que no le corresponde pegándole directo a la API — incluida una
+            # condicionada (depende_de_opcion) que todavía no debería estar habilitada.
             if pregunta.roles_permitidos and participante.rol not in pregunta.roles_permitidos:
+                return False
+            if not condicion_cumplida(pregunta, participante, opciones_en_este_envio):
                 return False
             return momento.tipo != Momento.TIPO_MESA or not pregunta.mesas_permitidas or mesa in pregunta.mesas_permitidas
 
