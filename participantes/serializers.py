@@ -128,9 +128,14 @@ class MomentoDetalleSerializer(serializers.ModelSerializer):
         # Pregunta.mesas_permitidas (opcional) restringe una pregunta a ciertas mesas dentro de
         # un momento tipo mesa — vacía = visible para todas, igual que siempre. No aplica a
         # momentos individuales, donde no existe el concepto de "mesa" del participante.
-        preguntas = momento.preguntas.all()
+        # Pregunta.roles_permitidos (opcional) hace lo mismo por rol — a diferencia de mesa, sí
+        # aplica en cualquier tipo de momento, porque todo participante tiene un rol.
+        participante = self.context['request'].user
+        preguntas = [
+            p for p in momento.preguntas.all()
+            if not p.roles_permitidos or participante.rol in p.roles_permitidos
+        ]
         if momento.tipo == Momento.TIPO_MESA:
-            participante = self.context['request'].user
             preguntas = [
                 p for p in preguntas
                 if not p.mesas_permitidas or participante.mesa in p.mesas_permitidas

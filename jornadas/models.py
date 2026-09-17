@@ -60,6 +60,26 @@ class Jornada(models.Model):
         return self.nombre
 
 
+class RolJornada(models.Model):
+    """Catálogo de roles institucionales válidos para una jornada (ej. "estudiante",
+    "directivo") — igual que la mesa (un entero simple, sin modelo propio) no le da a esto un
+    catálogo obligatorio: Participante.rol sigue siendo texto libre (ver ese modelo), esto es
+    solo la lista que un admin puede definir para (a) restringir momentos/preguntas por rol
+    (Momento.roles_permitidos/Pregunta.roles_permitidos, mismo patrón que mesas_permitidas) y
+    (b) que el front tenga qué mostrar en un dropdown al registrar un participante — una jornada
+    sin roles definidos aquí no se ve afectada en nada, sigue aceptando cualquier texto libre."""
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='roles_definidos')
+    nombre = models.CharField(max_length=100)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['nombre']
+        unique_together = [('jornada', 'nombre')]
+
+    def __str__(self):
+        return f'{self.nombre} ({self.jornada.slug})'
+
+
 class Momento(models.Model):
     TIPO_INDIVIDUAL = 'individual'
     TIPO_MESA = 'mesa'
@@ -87,6 +107,15 @@ class Momento(models.Model):
     mesas_permitidas = models.JSONField(default=list, blank=True, help_text=(
         'Lista opcional de números de mesa que pueden ver/participar en este momento completo '
         '(solo aplica en momentos tipo mesa). Vacía = visible para todas las mesas.'
+    ))
+    # Mismo patrón que mesas_permitidas, pero por rol institucional (RolJornada.nombre — o
+    # cualquier texto, ya que Participante.rol es libre) en vez de por mesa física. Se combina
+    # con mesas_permitidas por AND: si un momento restringe ambos, hay que cumplir los dos. No
+    # depende de que la jornada tenga RolJornada definidos — compara directo contra
+    # Participante.rol como texto.
+    roles_permitidos = models.JSONField(default=list, blank=True, help_text=(
+        'Lista opcional de nombres de rol que pueden ver/participar en este momento. Vacía = '
+        'visible para todos los roles.'
     ))
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
@@ -132,6 +161,10 @@ class Pregunta(models.Model):
     mesas_permitidas = models.JSONField(default=list, blank=True, help_text=(
         'Lista opcional de números de mesa que pueden ver/responder esta pregunta (solo aplica '
         'en momentos tipo mesa). Vacía = visible para todas las mesas, igual que hoy.'
+    ))
+    roles_permitidos = models.JSONField(default=list, blank=True, help_text=(
+        'Lista opcional de nombres de rol que pueden ver/responder esta pregunta. Vacía = '
+        'visible para todos los roles, igual que hoy.'
     ))
 
     class Meta:

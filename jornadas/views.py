@@ -3,7 +3,9 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAdminUser
 from rest_framework.viewsets import ModelViewSet
 
-from .models import ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta
+from .models import (
+    ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta, RolJornada,
+)
 from .permissions import EsAdminCompleto
 from .scoping import es_dependencia, filtrar_por_propietario, jornadas_visibles
 from .serializers import (
@@ -13,6 +15,7 @@ from .serializers import (
     MomentoAdminSerializer,
     OpcionPreguntaSerializer,
     PreguntaAdminSerializer,
+    RolJornadaSerializer,
     UsuarioAdminSerializer,
 )
 
@@ -65,6 +68,20 @@ class JornadaAdminViewSet(ModelViewSet):
             serializer.save(propietarios=list(serializer.instance.propietarios.all()))
         else:
             serializer.save()
+
+
+class RolJornadaAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
+    serializer_class = RolJornadaSerializer
+    permission_classes = [IsAdminUser]
+    campo_padre = 'jornada'
+    ruta_jornada = ''
+
+    def get_queryset(self):
+        queryset = filtrar_por_propietario(RolJornada.objects.all(), self.request.user, 'jornada__propietarios')
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        return queryset
 
 
 class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):

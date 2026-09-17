@@ -4,7 +4,7 @@ from rest_framework import serializers
 
 from .models import (
     ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, PerfilUsuario,
-    Pregunta,
+    Pregunta, RolJornada,
 )
 from .scoping import es_dependencia
 
@@ -38,7 +38,7 @@ class PreguntaAdminSerializer(serializers.ModelSerializer):
         model = Pregunta
         fields = [
             'id', 'momento', 'tipo', 'texto', 'orden', 'obligatoria', 'activa',
-            'mesas_permitidas', 'opciones', 'filas', 'columnas',
+            'mesas_permitidas', 'roles_permitidos', 'opciones', 'filas', 'columnas',
         ]
 
 
@@ -49,9 +49,15 @@ class MomentoAdminSerializer(serializers.ModelSerializer):
         model = Momento
         fields = [
             'id', 'jornada', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'categorias_semilla',
-            'mesas_permitidas', 'activo', 'preguntas',
+            'mesas_permitidas', 'roles_permitidos', 'activo', 'preguntas',
         ]
         read_only_fields = ['slug']
+
+
+class RolJornadaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RolJornada
+        fields = ['id', 'jornada', 'nombre', 'creado_en']
 
 
 class JornadaAdminSerializer(serializers.ModelSerializer):

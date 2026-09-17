@@ -1747,3 +1747,51 @@ Como administrador quiero crear una pregunta de tipo matriz (fila × columna) en
 - **Obligatoriedad de una matriz** se evalúa por *todas* sus celdas: si `obligatoria=true`, faltan celdas mientras no haya una respuesta con `texto_libre` no vacío para cada combinación fila×columna — el error `faltantes` devuelve el id de la pregunta (no celda por celda) si falta aunque sea una.
 - `Respuesta` ahora tiene `fila`/`columna` (nulos salvo en preguntas matriz) — una fila de `Respuesta` por celda, igual que ya hacía `RespuestaInstrumento` en el módulo `instrumentos`.
 - La extracción por IA (HU-44/HU-45) ya soporta este tipo: el esquema que se le manda al modelo incluye `filas`/`columnas` cuando la pregunta es matriz, y el prompt le pide una entrada por celda con `fila_id`/`columna_id`.
+
+### HU-47 — Ver mis respuestas ya guardadas de un momento
+Como usuario quiero poder recuperar lo que ya respondí en un momento (no solo enviarlo), para que si vuelvo más tarde — cerré el navegador, cambié de dispositivo, quiero revisar antes de avanzar — el formulario se muestre prellenado en vez de en blanco, y HU-23 (corregir una respuesta) tenga sentido en una UI real: hasta ahora el único `GET` de un momento (HU-20) devuelve la estructura (preguntas/opciones/filas/columnas), nunca lo que ya se respondió.
+- `GET /api/jornadas/{slug}/momentos/{id}/respuestas/` — mismo endpoint que HU-21/HU-22/HU-23, ahora también acepta `GET`. Devuelve la lista de `Respuesta` ya guardadas, mismo shape que la respuesta de un `POST`.
+- Mismo criterio de dueño que al enviar: en un momento `individual` se filtra por mi `Participante`; en un momento tipo `mesa` se filtra por mi `mesa` — cualquier integrante de la mesa puede **ver** lo ya respondido, aunque solo el vocero (HU-22) pueda **escribir**. Si todavía no tengo mesa asignada, devuelve `[]` en vez de error.
+- En preguntas tipo matriz (HU-46) trae una entrada por celda ya respondida (`fila`/`columna` con valor); en el resto, `fila`/`columna` vienen `null`.
+
+<details><summary>Ejemplo — <code>GET /api/jornadas/diagnostico-articulacion-academica/momentos/41/respuestas/</code></summary>
+
+Response `200` (probado contra un participante real con 12 de 81 preguntas ya respondidas):
+```json
+[
+  { "id": 4792, "pregunta": 832, "participante": 343, "mesa": null, "fila": null, "columna": null, "texto_libre": "Departamento de Estudios Generales", "opciones": [], "actualizado_en": "2026-09-15T22:05:11.000Z" },
+  { "id": 4801, "pregunta": 843, "participante": 343, "mesa": null, "fila": null, "columna": null, "texto_libre": "", "opciones": [], "actualizado_en": "2026-09-15T22:03:24.000Z" }
+]
+```
+Nota: se devuelve una `Respuesta` por cada pregunta a la que el participante ya llegó a responder, incluidas las que dejó con `texto_libre` vacío — el front distingue "todavía no llegó a esta pregunta" (no aparece en la lista) de "llegó pero la dejó vacía" (aparece con `texto_libre: ""`).
+</details>
+
+### HU-48 — Restringir momentos y preguntas por rol institucional (además de por mesa)
+Como administrador quiero poder limitar qué participantes ven un momento o una pregunta según su rol institucional (ej. "solo directivos", "solo docentes"), igual que ya se puede limitar por mesa (HU-03/HU-05), para dinámicas donde ciertos contenidos no aplican a todos los roles de la jornada.
+- `Momento.roles_permitidos` y `Pregunta.roles_permitidos` — mismo patrón que `mesas_permitidas`: lista opcional de nombres de rol (`JSONField`), vacía = visible para todos. A diferencia de mesa (que solo aplica en momentos tipo `mesa`), rol **aplica siempre** — todo participante tiene un `rol`, sea el momento individual o de mesa.
+- Si un momento/pregunta restringe ambos (`mesas_permitidas` y `roles_permitidos`), se combinan por **AND**: hay que cumplir las dos condiciones.
+- Se edita vía `PATCH /api/admin/momentos/{id}/` / `PATCH /api/admin/preguntas/{id}/`, mismos endpoints que ya existían — no hay endpoint nuevo para esto, solo el campo nuevo en el serializer.
+- La restricción se aplica en los tres lugares donde ya se filtraba por mesa: índice de momentos (HU-19), detalle de un momento (HU-20) y envío/lectura de respuestas (HU-21/HU-47) — reutiliza la misma función de visibilidad, no una lógica paralela.
+- `Participante.rol` **sigue siendo texto libre** (sin cambios, sin migración de datos existentes) — la comparación es directa contra ese texto, no contra un catálogo obligatorio.
+
+### HU-49 — Catálogo de roles por jornada
+Como administrador quiero poder definir la lista de roles válidos de una jornada (para tener qué mostrar en HU-48 y, opcionalmente, en el formulario de registro), sin que esto sea obligatorio — una jornada que nunca define roles sigue funcionando exactamente igual que antes.
+- Nuevo modelo `RolJornada` (`jornada` + `nombre`, únicos por jornada) — **no reemplaza** `Participante.rol` (que sigue siendo texto libre): es solo un catálogo de referencia, igual que mesa no tiene un modelo propio (`mesa` es un entero simple en `Participante`).
+- Admin: `GET/POST /api/admin/jornadas-roles/?jornada=<id>`, `GET/PATCH/DELETE /api/admin/jornadas-roles/{id}/` — mismo patrón CRUD que `preguntas-filas-matriz`/`opciones`, mismo scoping admin-completo/dependencia.
+- Público: `GET /api/jornadas/{slug}/roles/` — sin autenticación, para que el front pueda mostrar los roles definidos como opciones en el registro (HU-17). Una jornada sin roles definidos devuelve `[]`.
+
+<details><summary>Ejemplo — definir roles y restringir un momento</summary>
+
+```bash
+POST /api/admin/jornadas-roles/
+{ "jornada": 12, "nombre": "directivo" }
+
+POST /api/admin/jornadas-roles/
+{ "jornada": 12, "nombre": "docente" }
+
+PATCH /api/admin/momentos/41/
+{ "roles_permitidos": ["directivo"] }
+```
+
+Un participante con `rol: "docente"` deja de ver el momento 41 en `GET /api/jornadas/{slug}/momentos/` (HU-19) y recibe `404` si intenta acceder directo a `GET .../momentos/41/` (HU-20) — mismo comportamiento que ya existía para mesas no permitidas.
+</details>

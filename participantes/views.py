@@ -6,8 +6,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from jornadas.models import Jornada, Momento, Pregunta
-from jornadas.serializers import JornadaPublicaSerializer
+from jornadas.models import Jornada, Momento, Pregunta, RolJornada
+from jornadas.serializers import JornadaPublicaSerializer, RolJornadaSerializer
 
 from .models import Participante, Respuesta
 from .permissions import EsParticipanteDeLaJornada
@@ -34,6 +34,18 @@ class JornadaDetalleView(generics.RetrieveAPIView):
     permission_classes = [AllowAny]
     lookup_field = 'slug'
     lookup_url_kwarg = 'jornada_slug'
+
+
+class RolesJornadaView(generics.ListAPIView):
+    """Catálogo de roles que un admin definió para esta jornada (RolJornada) — público y sin
+    autenticación, igual que JornadaDetalleView, para que el front pueda mostrarlos como opciones
+    en el formulario de registro (HU-17). Una jornada sin roles definidos devuelve una lista
+    vacía; el registro (Participante.rol) sigue aceptando texto libre de todas formas."""
+    serializer_class = RolJornadaSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return RolJornada.objects.filter(jornada__slug=self.kwargs['jornada_slug'])
 
 
 class RegistroParticipanteView(APIView):
@@ -92,6 +104,10 @@ class MeParticipanteView(APIView):
 
 
 def _momento_visible_para(momento, participante):
+    # roles_permitidos vacía = visible para todos los roles — aplica siempre (a diferencia de
+    # mesa, todo participante tiene un rol, sea el momento individual o de mesa).
+    if momento.roles_permitidos and participante.rol not in momento.roles_permitidos:
+        return False
     # mesas_permitidas vacía = visible para todas las mesas, igual que en Pregunta. Solo aplica
     # en momentos tipo mesa — un momento individual no tiene noción de "mesa" del participante.
     return (
@@ -235,11 +251,13 @@ class RespuestasMomentoView(APIView):
                               'asigne antes de responder.'}
                 )
 
-        def _aplica_a_mesa(pregunta):
-            # mesas_permitidas vacía = aplica a todas las mesas, igual que siempre. Esto se
-            # revalida acá (no solo se oculta en el listado, ver MomentoDetalleSerializer) para
-            # que un vocero no pueda colar una respuesta a una pregunta que no le corresponde
-            # pegándole directo a la API.
+        def _pregunta_visible_para(pregunta):
+            # mesas_permitidas/roles_permitidas vacías = aplica a todas las mesas/todos los
+            # roles, igual que siempre. Esto se revalida acá (no solo se oculta en el listado,
+            # ver MomentoDetalleSerializer) para que un vocero no pueda colar una respuesta a una
+            # pregunta que no le corresponde pegándole directo a la API.
+            if pregunta.roles_permitidos and participante.rol not in pregunta.roles_permitidos:
+                return False
             return momento.tipo != Momento.TIPO_MESA or not pregunta.mesas_permitidas or mesa in pregunta.mesas_permitidas
 
         # dict de listas (no un único item por pregunta): una pregunta tipo matriz manda una
@@ -249,12 +267,12 @@ class RespuestasMomentoView(APIView):
             pregunta = item['pregunta']
             if pregunta.momento_id != momento.id:
                 raise ValidationError(f'La pregunta {pregunta.id} no pertenece a este momento.')
-            if not _aplica_a_mesa(pregunta):
-                raise ValidationError(f'La pregunta {pregunta.id} no está habilitada para tu mesa.')
+            if not _pregunta_visible_para(pregunta):
+                raise ValidationError(f'La pregunta {pregunta.id} no está habilitada para ti.')
             entradas_por_pregunta.setdefault(pregunta.id, []).append(item)
 
         preguntas_obligatorias = [
-            p for p in momento.preguntas.filter(activa=True, obligatoria=True) if _aplica_a_mesa(p)
+            p for p in momento.preguntas.filter(activa=True, obligatoria=True) if _pregunta_visible_para(p)
         ]
         faltantes = _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregunta)
         if faltantes:
