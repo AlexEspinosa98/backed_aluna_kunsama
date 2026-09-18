@@ -167,15 +167,31 @@ Content-Type: application/json
 {"jornada": 14}
 ```
 
-Mismo patrón que ya usan para `analisis-jornada-ia` y `reportes`. Opcionalmente pueden mandar
-`{"jornada": 14, "reporte": 8}` para forzar que los datos salgan de un reporte concreto, pero es
-un caso de borde: sin `reporte`, el backend usa el reporte integral más reciente.
+Mismo patrón que ya usan para `analisis-jornada-ia` y `reportes`.
+
+> ### ⚠️ Usen esta vía, no la del reporte
+>
+> **El endpoint que eligen decide de qué datos sale la infografía**, y la diferencia de calidad es
+> grande:
+>
+> | Llamada | Fuente de los datos |
+> |---|---|
+> | `POST /api/admin/infografias/` con `{"jornada": id}` | **Reporte integral** (`AnalisisJornadaIA`) — el que ya generan en el panel |
+> | `POST /api/admin/reportes/{id}/generar-infografia/` | El `Reporte` de ese id (pipeline local) |
+>
+> Hoy el panel está usando la segunda, y por eso las láminas salen del pipeline local, que con
+> pocas respuestas produce un análisis muy pobre (en un caso real quedó sin ningún tema
+> detectado). **Cambien a la primera**: es solo cambiar la URL y el body, no hay nada más que
+> ajustar.
+>
+> El atajo desde un reporte sigue existiendo a propósito, para cuando se quiera una infografía de
+> un reporte puntual. Si mandan `{"jornada": 14, "reporte": 8}` fuerzan esa fuente de forma
+> explícita.
 
 Si la jornada **no tiene analítica**, responde `400` de inmediato con el mensaje explicándolo —
-no crea un registro que iba a fallar. Así pueden mostrar el error sin esperar al polling.
-
-> Existe también `POST /api/admin/reportes/{id}/generar-infografia/` como atajo desde un reporte
-> concreto. Sigue funcionando, pero la vía normal es la de arriba.
+no crea un registro que iba a fallar. Así pueden mostrar el error sin esperar al polling. Si no
+hay reporte integral pero sí un `Reporte` completo, el backend lo usa como respaldo en vez de
+fallar.
 
 Respuesta `201` — arranca en background, no trae las imágenes todavía:
 ```json
@@ -282,7 +298,10 @@ el frontend mande nada de esto en el `POST`: el backend los busca solo a partir 
 - [ ] Listar assets con `?jornada=<id>`; no hay edición, solo subir uno nuevo + borrar el viejo.
 - [ ] Deshabilitar (o avisar) el botón de generar infografía si la jornada no tiene ni `Reporte`
       completo ni `AnalisisJornadaIA` completo.
-- [ ] Pedir la infografía con `POST /api/admin/infografias/` y `{"jornada": id}` — **no** hace falta crear un `Reporte`.
+- [ ] **Migrar el disparo** de `POST /api/admin/reportes/{id}/generar-infografia/` a
+      `POST /api/admin/infografias/` con `{"jornada": id}`. No es cosmético: de eso depende que
+      las láminas salgan del reporte integral y no del pipeline local (ver el aviso de la
+      sección 2). Tampoco hace falta crear un `Reporte`.
 - [ ] Manejar `409` (ya hay una en curso) sin dejar mandar un segundo `POST` mientras tanto.
 - [ ] Polling de `estado` contra `/api/admin/infografias/?jornada=<id>` hasta `completo`/`error`.
 - [ ] Mostrar las `imagenes` en orden (`orden` 0/1/2): son portada, hallazgos y cierre — no variaciones. Contemplar que puedan venir menos de 3.
