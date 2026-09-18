@@ -44,18 +44,19 @@ MAX_ASSETS_REFERENCIA = 4
 # Lado máximo (px) de una imagen de referencia antes de mandarla a la API — evita payloads gigantes.
 MAX_LADO_IMAGEN_REFERENCIA = 2048
 
+# Solo lo imprescindible: el formato de salida, la regla de una-lámina-por-imagen (verificada
+# contra el modelo: sin ella apila las tres secciones en una) y la referencia de marca, que es
+# para lo que existen los assets. Todo lo demás —composición, tipografía, cuántos bloques, cuánto
+# texto— se dejó fuera a propósito: son decisiones de diseño que pertenecen al system design de
+# cada jornada y al campo `instrucciones`, y tenerlas acá las convertía en algo que había que
+# pelear desde la API en vez de simplemente definir.
 SYSTEM_PROMPT_PREFIJO = (
-    f"Diseña UNA SOLA lámina APAISADA en formato {PROPORCION_INFOGRAFIA} (pantalla ancha, tipo "
-    "diapositiva de presentación), lista para proyectar, que comunique los resultados reales de "
-    "una jornada participativa universitaria. La composición debe ocupar todo el ancho y leerse "
-    f"como una diapositiva {PROPORCION_INFOGRAFIA}: nunca la maquetes en vertical ni en cuadrado."
-    "\n\nMUY IMPORTANTE: esta imagen contiene ÚNICAMENTE el contenido de la lámina que se describe "
-    "abajo. NO es una infografía completa: no apiles varias secciones (portada + hallazgos + "
-    "conclusiones) una debajo de otra en la misma imagen, no agregues bandas ni franjas con otros "
-    "bloques temáticos. Una sola idea por lámina, ocupando todo el espacio disponible."
-    "\n\nSi se adjuntan imágenes de referencia (fotos/logos de la jornada y/o una guía de marca), "
-    "respeta su paleta de colores, tipografía y estilo visual real — no uses una paleta genérica "
-    "distinta a la de esas imágenes. Todo el texto debe estar en español."
+    f"Diseña UNA SOLA lámina apaisada en {PROPORCION_INFOGRAFIA}, para proyectar. Nunca la "
+    "maquetes en vertical ni en cuadrado."
+    "\n\nEsta imagen contiene ÚNICAMENTE el contenido de la lámina que se describe abajo: no "
+    "apiles varias secciones una debajo de otra ni agregues bandas con otros bloques temáticos."
+    "\n\nSi se adjuntan imágenes de referencia (fotos, logo o guía de marca), respeta su paleta, "
+    "su tipografía y su estilo. Todo el texto en español."
 )
 
 # Va SIEMPRE al final del prompt, después de las instrucciones personalizadas, y por eso está
@@ -77,38 +78,31 @@ SLIDES = (
     {
         'clave': 'portada',
         'instruccion': (
-            "LÁMINA 1 de 3 — PORTADA. Como título dominante, el nombre de lo que se está "
-            "analizando: el campo `momento` del JSON si viene (la infografía es de ese momento en "
-            "particular) o, si no, el de `jornada`. Debajo, "
-            "las cifras clave de participación (participantes, momentos, tasa de participación) "
-            "como 2 a 4 bloques grandes. Sin gráficos de datos ni listas de hallazgos: esta "
-            "lámina es la carátula, tiene que leerse de un vistazo desde lejos."
+            "LÁMINA 1 de 3 — PORTADA. Título: el campo `momento` del JSON si viene, o si no el de "
+            "`jornada`. Debajo, las cifras de participación. Nada más."
         ),
     },
     {
         'clave': 'hallazgos',
         'instruccion': (
-            "LÁMINA 2 de 3 — HALLAZGOS. El cuerpo del contenido: los temas y hallazgos "
-            "principales, cada uno con su dato real al lado, organizados en columnas o tarjetas. "
-            "Acá sí van las visualizaciones (barras o porciones) construidas con los números "
-            "exactos del JSON. NO repitas la portada ni el título grande de la lámina 1."
+            "LÁMINA 2 de 3 — HALLAZGOS. Los temas y hallazgos del JSON, cada uno con su dato, y "
+            "las visualizaciones de esos números. Sin el título ni las cifras de la lámina 1."
         ),
     },
     {
         'clave': 'cierre',
         'instruccion': (
-            "LÁMINA 3 de 3 — CIERRE. Las conclusiones y lo que sigue: entre 3 y 5 mensajes "
-            "accionables derivados únicamente de lo que ya dicen el resumen y los hallazgos del "
-            "JSON, en tipografía grande y con mucho aire. Sin cifras de participación (ya van en "
-            "la lámina 1) y sin repetir los gráficos de la lámina 2."
+            "LÁMINA 3 de 3 — CIERRE. Los mensajes accionables que se desprenden del resumen y los "
+            "hallazgos del JSON. Sin cifras de participación ni los gráficos de la lámina 2."
         ),
     },
 )
 
+# Se queda porque las 3 láminas son 3 llamadas independientes: sin esto no tienen forma de saber
+# que pertenecen al mismo material y salen con paletas distintas.
 INSTRUCCION_SERIE = (
-    "Esta lámina es parte de una serie de 3 que se presentan juntas: usa exactamente la misma "
-    "paleta, la misma tipografía y el mismo lenguaje visual que las otras dos, de modo que se "
-    "vean como un mismo material y no como tres piezas de autores distintos."
+    "Es parte de una serie de 3 que se presentan juntas: misma paleta, misma tipografía y mismo "
+    "lenguaje visual en las tres."
 )
 
 

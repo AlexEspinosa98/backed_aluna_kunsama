@@ -75,6 +75,12 @@ Algunas cosas que sí funcionan bien por esta vía: cambiar el tono o el públic
 se omita o se enfatice cierta información, cambiar la estructura de una lámina, pedir un idioma
 distinto, ajustar la densidad de texto.
 
+**El prompt base es deliberadamente mínimo**: solo fija el formato 16:9, que cada imagen sea una
+sola lámina, el papel de cada una y que se respete la marca de las imágenes de referencia. No
+opina sobre cuántos bloques, qué tipo de gráfico, cuánto texto ni qué tipografía — esas decisiones
+son suyas, vía el system design de la jornada o este campo. Si algo del resultado no les gusta,
+casi siempre se corrige acá y no hace falta tocar el backend.
+
 `instrucciones` se devuelve también en las lecturas, así que pueden mostrar con qué se generó cada
 corrida y ofrecerlo como punto de partida para la siguiente. El `prompt_usado` guarda el prompt ya
 compuesto, con las instrucciones integradas, para comparar.

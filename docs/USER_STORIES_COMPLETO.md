@@ -2000,3 +2000,16 @@ Como administrador quiero poder escribir instrucciones propias para cada generac
 - **Una sola regla queda fuera de su alcance**: `REGLA_DATOS` ("usa exclusivamente las cifras del JSON, nunca inventes") se movió del prefijo al **final del prompt**, después de las instrucciones. Una lámina institucional con cifras inventadas es desinformación publicada con el sello de la universidad, y ese riesgo no debería depender de lo que alguien escriba en un campo de texto. Es la única excepción y está documentada como tal.
 - **Por corrida, no por jornada.** Guardar las instrucciones en la `InfografiaJornada` permite probar varias redacciones seguidas y comparar cada resultado con el `prompt_usado` que quedó grabado. Un campo por jornada obligaría a pisar el anterior para probar algo distinto.
 - `instrucciones` se devuelve también en las lecturas, para que el panel pueda mostrar con qué se generó cada corrida y reusarlo como punto de partida de la siguiente.
+
+### HU-66 — Adelgazar el prompt base a lo imprescindible
+Como administrador quiero que el prompt por defecto imponga lo mínimo, para que el `system design` de cada jornada y el campo `instrucciones` (HU-65) tengan margen real de decidir el diseño en vez de tener que pelear contra criterios estéticos cableados en el backend.
+- El prompt base pasó de ~2.550 a ~1.270 caracteres, **la mitad**, sin perder ninguna regla que sostenga el resultado.
+- **Lo que se quitó** eran decisiones de diseño disfrazadas de instrucciones técnicas: "2 a 4 bloques grandes", "columnas o tarjetas", "barras o porciones", "entre 3 y 5 mensajes", "tipografía grande y con mucho aire", "tiene que leerse de un vistazo desde lejos". Nada de eso es necesario para que la lámina funcione, y cada una era una opinión que el usuario tenía que contradecir explícitamente si quería otra cosa.
+- **Lo que se conservó, y por qué cada una se ganó el lugar**:
+  - El formato 16:9 y la prohibición de vertical/cuadrado: define si la salida sirve o no.
+  - "UNA sola lámina, no apiles secciones": verificado contra el modelo — sin esa frase apila portada + hallazgos + cierre en cada imagen (ver HU-62).
+  - Respetar las imágenes de referencia: es la razón de existir de los assets y del system design.
+  - El papel de cada lámina y qué no repetir de las otras: es lo que las hace complementarias en vez de tres variaciones.
+  - `INSTRUCCION_SERIE`: las 3 son llamadas independientes, sin ella no saben que pertenecen al mismo material y salen con paletas distintas.
+  - `REGLA_DATOS`: innegociable, ver HU-65.
+- El criterio para futuras ediciones queda explícito en un comentario del módulo: si una instrucción no cambia si la salida **sirve o no**, y solo cambia cómo se ve, no va en el prompt base — va en el system design o en `instrucciones`.
