@@ -269,6 +269,25 @@ class JornadaAssetTests(APITestCase):
             ['dos.jpg', 'tres.webp', 'uno.png'],
         )
 
+    def test_campo_singular_archivo_explica_que_el_campo_es_plural(self):
+        """Mandar `archivo` en vez de `archivos` no es "falta el archivo" — es el nombre del campo.
+        Decirlo mal manda a buscar el error al lado equivocado (pasó integrando el FE)."""
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._imagen(),
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivos', str(resp.data['archivos']))
+        self.assertEqual(JornadaAsset.objects.count(), 0)
+
+    def test_acepta_gif(self):
+        self.client.force_authenticate(user=self.admin)
+        archivo = SimpleUploadedFile('anim.gif', b'GIF89a', content_type='image/gif')
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivos': [archivo],
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+
     def test_un_archivo_invalido_no_crea_ninguno(self):
         """Todo o nada: una tanda a medias deja al cliente sin saber cuáles entraron."""
         self.client.force_authenticate(user=self.admin)

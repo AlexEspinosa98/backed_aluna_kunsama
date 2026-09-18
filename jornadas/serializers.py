@@ -11,8 +11,8 @@ from .scoping import es_dependencia
 Usuario = get_user_model()
 
 EXTENSIONES_POR_TIPO_ASSET = {
-    JornadaAsset.TIPO_ASSET: ('png', 'jpg', 'jpeg', 'webp'),
-    JornadaAsset.TIPO_SYSTEM_DESIGN: ('png', 'jpg', 'jpeg', 'webp', 'pdf'),
+    JornadaAsset.TIPO_ASSET: ('png', 'jpg', 'jpeg', 'webp', 'gif'),
+    JornadaAsset.TIPO_SYSTEM_DESIGN: ('png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf'),
 }
 
 
@@ -164,6 +164,19 @@ class JornadaAssetCrearSerializer(serializers.Serializer):
     archivos = serializers.ListField(child=serializers.FileField(), required=False, default=list)
     texto = serializers.CharField(required=False, allow_blank=True, default='', trim_whitespace=True)
 
+    def _mensaje_sin_archivos(self, mensaje):
+        """Si mandaron `archivo` (singular) el problema no es que falte el archivo sino que el
+        campo se llama distinto — decir "manda al menos un archivo" cuando la persona SÍ mandó uno
+        manda a buscar el error al lado equivocado. Pasó de verdad al integrar el FE."""
+        entrada = self.initial_data
+        nombres = entrada.keys() if hasattr(entrada, 'keys') else []
+        if 'archivo' in nombres:
+            return (
+                'El campo se llama "archivos" (en plural, repetido una vez por archivo), no '
+                '"archivo": la carga es en bloque desde HU-59.'
+            )
+        return mensaje
+
     def validate(self, attrs):
         tipo = attrs['tipo']
         archivos = attrs['archivos']
@@ -176,9 +189,11 @@ class JornadaAssetCrearSerializer(serializers.Serializer):
                     'como referencia visual.'
                 )})
             if not archivos:
-                raise serializers.ValidationError({'archivos': 'Manda al menos un archivo.'})
+                raise serializers.ValidationError({'archivos': self._mensaje_sin_archivos(
+                    'Manda al menos un archivo.'
+                )})
         elif not archivos and not texto:
-            raise serializers.ValidationError({'archivos': (
+            raise serializers.ValidationError({'archivos': self._mensaje_sin_archivos(
                 'Un system_design necesita al menos un archivo o un texto con la guía de marca.'
             )})
 

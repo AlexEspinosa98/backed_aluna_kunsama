@@ -65,10 +65,19 @@ de cuáles entraron — si falla, se corrige y se reintenta la tanda completa.
 
 Formatos aceptados **según `tipo`**:
 
-| `tipo`          | Formatos                        |
-|------------------|----------------------------------|
-| `asset`          | `.png`, `.jpg`, `.jpeg`, `.webp` |
-| `system_design`  | `.png`, `.jpg`, `.jpeg`, `.webp`, `.pdf` |
+| `tipo`          | Formatos                                |
+|------------------|------------------------------------------|
+| `asset`          | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif` |
+| `system_design`  | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.pdf` |
+
+**No** se aceptan `.svg` ni `.heic`: el backend rasteriza las imágenes con Pillow antes de
+mandarlas al modelo, y ninguno de los dos se puede abrir así. Un logo en SVG hay que exportarlo a
+PNG; una foto de iPhone en HEIC, a JPG. Si les hace falta alguno de los dos, díganlo y se agrega
+la librería correspondiente — hoy se rechazan a propósito, en vez de aceptarlos y que fallen en
+silencio a la hora de generar.
+
+> **Ojo si vienen de la primera versión de este doc**: el campo se llamaba `archivo` (singular) y
+> ahora es **`archivos`**. Mandar `archivo` responde `400` con un mensaje que lo dice explícito.
 
 `system_design` **no acepta `.docx`** — si la guía de marca solo existe en Word, o la exportan a
 PDF/imagen, o la mandan como `texto` (ver abajo). Validen la extensión también en el cliente para
