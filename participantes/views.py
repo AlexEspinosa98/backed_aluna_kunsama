@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from jornadas.models import Jornada, Momento, Pregunta, RolJornada
 from jornadas.serializers import JornadaPublicaSerializer, RolJornadaSerializer
 
-from .models import Participante, Respuesta
+from .models import FilaListaRespuesta, Participante, Respuesta
 from .permissions import EsParticipanteDeLaJornada
 from .serializers import (
     MomentoDetalleSerializer,
@@ -143,11 +143,13 @@ class MomentoDetalleView(generics.RetrieveAPIView):
         return momento
 
 
-def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None):
+def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None, fila_temporal=None):
     if opciones and any(opcion.pregunta_id != pregunta.id for opcion in opciones):
         raise ValidationError(f'Una opción enviada no pertenece a la pregunta {pregunta.id}.')
 
     if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+        if fila_temporal is not None:
+            raise ValidationError(f'La pregunta {pregunta.id} es de tipo matriz, no usa fila_temporal (usa fila_id).')
         if fila is None or columna is None:
             raise ValidationError(
                 f'La pregunta {pregunta.id} es de tipo matriz: cada respuesta debe indicar fila y columna.'
@@ -158,8 +160,21 @@ def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None):
             raise ValidationError(f'La pregunta {pregunta.id} no acepta opciones.')
         return
 
-    if fila is not None or columna is not None:
-        raise ValidationError(f'La pregunta {pregunta.id} no es de tipo matriz, no acepta fila/columna.')
+    if pregunta.tipo == Pregunta.TIPO_LISTA:
+        if fila is not None:
+            raise ValidationError(f'La pregunta {pregunta.id} es de tipo lista, no usa fila_id (usa fila_temporal).')
+        if columna is None or fila_temporal is None:
+            raise ValidationError(
+                f'La pregunta {pregunta.id} es de tipo lista: cada celda debe indicar columna y fila_temporal.'
+            )
+        if columna.pregunta_id != pregunta.id:
+            raise ValidationError(f'La columna enviada no pertenece a la pregunta {pregunta.id}.')
+        if opciones:
+            raise ValidationError(f'La pregunta {pregunta.id} no acepta opciones.')
+        return
+
+    if fila is not None or columna is not None or fila_temporal is not None:
+        raise ValidationError(f'La pregunta {pregunta.id} no es de tipo matriz/lista, no acepta fila/columna.')
 
     if pregunta.tipo == Pregunta.TIPO_ABIERTA:
         if opciones:
@@ -191,9 +206,59 @@ def _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregu
             }
             if not requeridas.issubset(respondidas):
                 faltantes.append(pregunta.id)
+        elif pregunta.tipo == Pregunta.TIPO_LISTA:
+            # Obligatoria en una lista = al menos UNA fila con TODAS sus columnas respondidas —
+            # no exige que todas las filas estén completas, solo que exista al menos un registro
+            # real (ej. al menos un profesor con sus datos completos), igual de estricto que
+            # matriz pero sin conocer de antemano cuántas filas habrá.
+            columnas_ids = set(pregunta.columnas.values_list('id', flat=True))
+            columnas_por_fila = {}
+            for i in items:
+                if i.get('fila_temporal') is None or i.get('columna') is None:
+                    continue
+                if not i.get('texto_libre', '').strip():
+                    continue
+                columnas_por_fila.setdefault(i['fila_temporal'], set()).add(i['columna'].id)
+            if not any(cols >= columnas_ids for cols in columnas_por_fila.values()):
+                faltantes.append(pregunta.id)
         elif not items:
             faltantes.append(pregunta.id)
     return faltantes
+
+
+def _guardar_respuestas_lista(pregunta, items, participante, dueño):
+    """Guarda las celdas de una pregunta tipo lista. A diferencia de matriz/abierta/única (que
+    hacen update_or_create celda por celda), acá cada envío REEMPLAZA por completo las filas
+    existentes de esta pregunta para este dueño — más simple y predecible que tratar de
+    emparejar filas de un envío con filas de otro, dado que `fila_temporal` es un número que el
+    cliente inventa en cada envío (fila_temporal=1 hoy no es necesariamente la misma fila que
+    fila_temporal=1 en un envío anterior)."""
+    FilaListaRespuesta.objects.filter(pregunta=pregunta, **dueño).delete()
+
+    ordenes_temporales = sorted({item['fila_temporal'] for item in items})
+    filas_por_temporal = {
+        ft: FilaListaRespuesta.objects.create(pregunta=pregunta, orden=i, **dueño)
+        for i, ft in enumerate(ordenes_temporales, start=1)
+    }
+
+    guardadas = []
+    for item in items:
+        texto_libre = item.get('texto_libre', '')
+        opciones = item.get('opciones', [])
+        columna = item.get('columna')
+        fila_temporal = item.get('fila_temporal')
+        _validar_entrada(pregunta, texto_libre, opciones, columna=columna, fila_temporal=fila_temporal)
+
+        respuesta = Respuesta.objects.create(
+            pregunta=pregunta,
+            fila_lista=filas_por_temporal[fila_temporal],
+            columna=columna,
+            texto_libre=texto_libre,
+            registrado_por=participante,
+            **dueño,
+        )
+        guardadas.append(respuesta)
+    return guardadas
 
 
 class RespuestasMomentoView(APIView):
@@ -290,22 +355,22 @@ class RespuestasMomentoView(APIView):
         if faltantes:
             raise ValidationError({'faltantes': f'Preguntas obligatorias sin responder: {faltantes}'})
 
+        dueño = {'mesa': mesa} if momento.tipo == Momento.TIPO_MESA else {'participante': participante}
+
         respuestas_guardadas = []
         for items in entradas_por_pregunta.values():
+            pregunta = items[0]['pregunta']
+            if pregunta.tipo == Pregunta.TIPO_LISTA:
+                respuestas_guardadas.extend(_guardar_respuestas_lista(pregunta, items, participante, dueño))
+                continue
             for item in items:
-                pregunta = item['pregunta']
                 texto_libre = item.get('texto_libre', '')
                 opciones = item.get('opciones', [])
                 fila = item.get('fila')
                 columna = item.get('columna')
                 _validar_entrada(pregunta, texto_libre, opciones, fila, columna)
 
-                lookup = {'pregunta': pregunta, 'fila': fila, 'columna': columna}
-                if momento.tipo == Momento.TIPO_MESA:
-                    lookup['mesa'] = mesa
-                else:
-                    lookup['participante'] = participante
-
+                lookup = {'pregunta': pregunta, 'fila': fila, 'columna': columna, **dueño}
                 respuesta, _ = Respuesta.objects.update_or_create(
                     **lookup,
                     defaults={

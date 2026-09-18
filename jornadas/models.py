@@ -145,11 +145,13 @@ class Pregunta(models.Model):
     TIPO_UNICA = 'unica'
     TIPO_MULTIPLE = 'multiple'
     TIPO_MATRIZ = 'matriz'
+    TIPO_LISTA = 'lista'
     TIPO_CHOICES = [
         (TIPO_ABIERTA, 'Abierta'),
         (TIPO_UNICA, 'Selección única'),
         (TIPO_MULTIPLE, 'Selección múltiple'),
-        (TIPO_MATRIZ, 'Matriz comparativa (filas × columnas)'),
+        (TIPO_MATRIZ, 'Matriz comparativa (filas × columnas, cantidad fija)'),
+        (TIPO_LISTA, 'Lista de registros (columnas fijas, filas las agrega quien responde)'),
     ]
 
     momento = models.ForeignKey(Momento, on_delete=models.CASCADE, related_name='preguntas')

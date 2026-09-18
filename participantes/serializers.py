@@ -164,6 +164,12 @@ class RespuestaEntradaSerializer(serializers.Serializer):
     columna_id = serializers.PrimaryKeyRelatedField(
         source='columna', queryset=ColumnaMatrizPregunta.objects.all(), required=False, allow_null=True,
     )
+    # Solo se usa en preguntas tipo lista (ver Pregunta.TIPO_LISTA). NO es el id de una fila que
+    # ya existe en la base — es un número que el propio cliente inventa para decir "estas celdas
+    # van juntas, en la misma fila que agregué yo" (ej. fila_temporal=1 para el primer profesor
+    # que reporta, =2 para el segundo...). El backend usa esto solo para agrupar las celdas del
+    # envío antes de crear las FilaListaRespuesta reales — no se guarda tal cual en ningún lado.
+    fila_temporal = serializers.IntegerField(required=False, allow_null=True, default=None)
 
 
 class RespuestaEnvioSerializer(serializers.Serializer):
@@ -179,8 +185,8 @@ class RespuestaSalidaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Respuesta
         fields = [
-            'id', 'pregunta', 'participante', 'mesa', 'fila', 'columna', 'texto_libre', 'opciones',
-            'actualizado_en',
+            'id', 'pregunta', 'participante', 'mesa', 'fila', 'fila_lista', 'columna', 'texto_libre',
+            'opciones', 'actualizado_en',
         ]
 
 

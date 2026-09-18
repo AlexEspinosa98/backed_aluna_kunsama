@@ -1821,3 +1821,21 @@ Antes de responder la pregunta 10, `GET .../momentos/{id}/` no incluye la pregun
 ```
 ambas se guardan en el mismo `POST` — la 11 se acepta porque la opción 101 viene en el mismo envío, aunque la 10 todavía no estuviera guardada al momento de validar.
 </details>
+
+### HU-51 — Pregunta tipo "lista": columnas fijas, filas las agrega quien responde
+Como administrador quiero un tipo de pregunta para tablas donde no sé de antemano cuántas filas va a haber (ej. "Mapa de capacidades profesorales": columnas fijas — Profesor(a), Formación, Área de experticia... — pero cada departamento reporta el número de profesores que tenga), porque `matriz` (HU-46) exige que tanto filas como columnas estén fijadas por el admin de antemano y ese no es el caso acá.
+- `Pregunta.tipo` ahora acepta `lista` además de `abierta`/`unica`/`multiple`/`matriz`. Una pregunta tipo lista **reutiliza `ColumnaMatrizPregunta`** para sus columnas (mismos endpoints `POST/GET/PATCH/DELETE /api/admin/preguntas-columnas-matriz/` de HU-46, sin necesidad de un endpoint nuevo) — pero **no tiene `FilaMatrizPregunta`**, porque las filas no las define el admin.
+- Nuevo modelo `FilaListaRespuesta` (`participantes/models.py`) — una fila que el **participante** agregó al responder, no el admin. `Respuesta` gana un campo `fila_lista` (FK opcional, mutuamente excluyente con `fila` que sigue siendo solo para matriz).
+- **Envío de respuestas** (`POST .../momentos/{id}/respuestas/`, mismo endpoint de siempre): una celda de tipo lista se manda con `columna_id` + un **`fila_temporal`** — un número que el propio cliente inventa para decir "estas celdas van en la misma fila" (no es el id de nada que ya exista en la base):
+  ```json
+  {"respuestas": [
+    {"pregunta_id": 950, "fila_temporal": 1, "columna_id": 700, "texto_libre": "Juan Pérez"},
+    {"pregunta_id": 950, "fila_temporal": 1, "columna_id": 701, "texto_libre": "Magíster"},
+    {"pregunta_id": 950, "fila_temporal": 2, "columna_id": 700, "texto_libre": "Ana Gómez"},
+    {"pregunta_id": 950, "fila_temporal": 2, "columna_id": 701, "texto_libre": "Doctora"}
+  ]}
+  ```
+  El backend agrupa las celdas por `fila_temporal`, crea una `FilaListaRespuesta` por cada grupo, y guarda una `Respuesta` por celda apuntando a esa fila.
+- **Cada envío reemplaza por completo las filas existentes** de esa pregunta para ese dueño (participante o mesa) — a diferencia de matriz/abierta/única, que hacen `update_or_create` celda por celda, acá no se intenta emparejar filas de un envío con filas de un envío anterior (un `fila_temporal=1` de hoy no es necesariamente la misma fila que un `fila_temporal=1` de ayer). Reenviar con menos filas que antes borra las que sobran; con más, las agrega.
+- **Obligatoriedad** (HU-24): se exige que **al menos una fila** tenga **todas** sus columnas respondidas — no que todas las filas estén completas, solo que exista al menos un registro real.
+- **Límite conocido**: el extractor de documentos con IA (HU-44/45) todavía no sabe llenar preguntas tipo lista — las omite (`preguntas_omitidas`) en vez de fallar, así que no rompe nada, pero tampoco las completa automáticamente por ahora.

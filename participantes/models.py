@@ -61,6 +61,29 @@ class Participante(models.Model):
         return f'{self.nombre} {self.apellido} ({self.jornada.slug})'
 
 
+class FilaListaRespuesta(models.Model):
+    """Una fila que el PARTICIPANTE agregó al responder una pregunta tipo `lista` — a diferencia
+    de FilaMatrizPregunta (predefinida por el admin, cantidad fija conocida de antemano, ej. una
+    tabla de exactamente 12 filas), acá el número de filas lo decide quien responde (ej. "reporte
+    tantos profesores como tenga su departamento" — puede ser 1, puede ser 10). Las columnas SÍ
+    se reutilizan de ColumnaMatrizPregunta (mismo concepto: encabezados fijos definidos por el
+    admin), solo las filas cambian de "predefinidas" a "dinámicas"."""
+    pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='filas_lista')
+    participante = models.ForeignKey(
+        Participante, on_delete=models.CASCADE, null=True, blank=True, related_name='filas_lista_creadas',
+    )
+    mesa = models.PositiveIntegerField(null=True, blank=True)
+    orden = models.PositiveIntegerField()
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['orden']
+
+    def __str__(self):
+        dueno = self.participante_id and f'participante:{self.participante_id}' or f'mesa:{self.mesa}'
+        return f'fila {self.orden} · pregunta {self.pregunta_id} · {dueno}'
+
+
 class Respuesta(models.Model):
     pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='respuestas')
     participante = models.ForeignKey(
@@ -83,6 +106,10 @@ class Respuesta(models.Model):
     # el módulo instrumentos.
     fila = models.ForeignKey(FilaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
     columna = models.ForeignKey(ColumnaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
+    # Solo se usa cuando pregunta.tipo == lista — mutuamente excluyente con `fila` (que es para
+    # matriz): una Respuesta por celda (fila_lista × columna), igual que matriz pero apuntando a
+    # una fila creada por el participante en vez de una predefinida por el admin.
+    fila_lista = models.ForeignKey(FilaListaRespuesta, on_delete=models.CASCADE, null=True, blank=True)
     texto_libre = models.TextField(blank=True)
     opciones = models.ManyToManyField(OpcionPregunta, blank=True, related_name='respuestas')
     creado_en = models.DateTimeField(auto_now_add=True)
@@ -92,6 +119,8 @@ class Respuesta(models.Model):
         unique_together = [
             ('pregunta', 'participante', 'fila', 'columna'),
             ('pregunta', 'mesa', 'fila', 'columna'),
+            ('pregunta', 'participante', 'fila_lista', 'columna'),
+            ('pregunta', 'mesa', 'fila_lista', 'columna'),
         ]
 
     def __str__(self):
