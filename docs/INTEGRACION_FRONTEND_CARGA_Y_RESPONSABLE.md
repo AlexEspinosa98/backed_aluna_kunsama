@@ -64,6 +64,7 @@ Respuesta `201`:
   "nombre_archivo_original": "diagnostico-firmado.pdf",
   "estado": "pendiente",
   "resultado": {},
+  "respuestas_sugeridas": [],
   "preguntas_omitidas": [],
   "responsable_detectado": {},
   "responsable_estado": "no_buscado",
@@ -88,19 +89,48 @@ tardar minutos.
 |---------------|------------------------------------------------------------------------------|
 | `pendiente`   | "En cola"                                                                     |
 | `procesando`  | "Leyendo tu documento…"                                                       |
-| `completo`    | "Listo, quedó en revisión"                                                    |
-| `error`       | Mostrar `error_mensaje` y ofrecer volver a intentar                           |
+| `completo`    | Precargar la pantalla del momento con `respuestas_sugeridas` (ver abajo)     |
+| `error`       | Mostrar `error_mensaje` y ofrecer volver a intentar                          |
 
-### Importante para el copy de la pantalla
+### Precargar la pantalla — sin aprobación de un admin
 
-Subir el documento **no es enviarlo aprobado**. A diferencia del envío normal desde la web (que
-guarda de inmediato), el resultado queda en `resultado` esperando a que **un admin** lo revise y
-llame a `aprobar/` — recién ahí se escriben las respuestas del participante. Díganlo en la UI:
-"Tu documento se transcribió y quedó en revisión", no "Momento enviado".
+**No hay paso de revisión acá.** A diferencia de la carga que hace un admin a nombre de otra
+persona (que sí necesita `aprobar/`, porque nadie más puede corregir lo que la IA transcribió),
+cuando el propio participante sube su documento nadie más tiene que intervenir: es su respuesta,
+y puede corregirla él mismo antes de enviarla — igual que si la hubiera escrito directo en la
+pantalla.
 
-Tampoco reemplaza diligenciar en línea: si al aprobarse la extracción el participante ya tenía
-respuestas guardadas para ese momento, la aprobación las sobrescribe con lo que traiga el
-documento (mismo criterio que el envío normal, ver `RespuestasMomentoView`).
+Cuando `estado` llega a `completo`, `respuestas_sugeridas` trae el arreglo ya en el **mismo
+formato que espera `POST /api/jornadas/{jornada_slug}/momentos/{momento_id}/respuestas/`**:
+
+```json
+"respuestas_sugeridas": [
+  {"pregunta_id": 101, "texto_libre": "Buena, aunque con retos", "opcion_ids": [], "fila_id": null, "columna_id": null, "fila_temporal": null},
+  {"pregunta_id": 104, "texto_libre": "", "opcion_ids": [37], "fila_id": null, "columna_id": null, "fila_temporal": null}
+]
+```
+
+Úsenlo así:
+1. Tomen `respuestas_sugeridas` y precarguen con eso los mismos controles que ya usan para
+   renderizar el momento (`GET .../momentos/{id}/` da las preguntas) — el `pregunta_id` de cada
+   item les dice a cuál control corresponde.
+2. Dejen que el participante corrija lo que la IA transcribió mal, igual que corregiría una
+   respuesta escrita a mano.
+3. Al enviar, manden exactamente ese arreglo (con las correcciones) como
+   `{"respuestas": [...]}` a `POST .../momentos/{id}/respuestas/` — **el mismo endpoint que ya
+   usan para el envío normal**, sin ningún paso intermedio. Ahí es donde de verdad se guardan las
+   `Respuesta` del participante.
+4. Una pregunta que no aparezca en `respuestas_sugeridas` es una que la IA no pudo transcribir
+   (queda también en `preguntas_omitidas`) — muéstrenla vacía para que el participante la
+   complete a mano.
+
+Copy sugerido: "Revisa lo que encontramos en tu documento y corrige lo que haga falta antes de
+enviar" — nunca "Momento enviado" hasta que el participante de verdad confirme el envío en el
+paso 3.
+
+Tampoco reemplaza diligenciar en línea: es la misma pantalla, solo que precargada. Si el
+participante ya tenía respuestas guardadas de antes, al enviar se sobrescriben con lo que mande
+en ese `POST` (mismo criterio de siempre, ver `RespuestasMomentoView`).
 
 ---
 
@@ -228,7 +258,10 @@ POST /api/admin/momento-extracciones/{id}/asignar-responsable/
 - [ ] Leer `permite_carga_archivo` antes de pintar el botón de subir (no deducirlo).
 - [ ] Validar extensión en cliente (`.pdf` / `.docx`).
 - [ ] No mandar `participante_id` en el endpoint de participante: el dueño es quien sube.
-- [ ] Polling de `estado` con `mis-cargas/`, y copy que diga "quedó en revisión", no "enviado".
+- [ ] Polling de `estado` con `mis-cargas/`.
+- [ ] En la carga por el propio participante: al llegar a `completo`, precargar la pantalla del
+      momento con `respuestas_sugeridas` y dejar que corrija — **no hay `aprobar/` en esta vía**,
+      el envío final es el mismo `POST .../momentos/{id}/respuestas/` de siempre.
 - [ ] En admin, dejar de exigir la persona antes de subir.
 - [ ] Manejar los 5 valores de `responsable_estado`, no solo `emparejado`.
 - [ ] Mostrar `responsable_detectado` siempre que haya que elegir a mano.

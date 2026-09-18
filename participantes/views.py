@@ -152,14 +152,20 @@ class MomentoDetalleView(generics.RetrieveAPIView):
 
 class MomentoCargarArchivoView(APIView):
     """El propio participante sube su documento ya diligenciado para este momento y la IA lo
-    transcribe (HU-56). Mismo mecanismo que participantes.admin_views.ExtraccionMomentoViewSet,
-    pero acá el dueño es siempre quien sube (`participante=request.user`), no un dato del
-    request: no hay responsable que emparejar ni participantes que dar de alta.
+    transcribe (HU-56). Mismo mecanismo que participantes.admin_views.ExtraccionMomentoViewSet
+    para la transcripción, pero acá el dueño es siempre quien sube
+    (`participante=request.user`), no un dato del request: no hay responsable que emparejar ni
+    participantes que dar de alta.
+
+    A diferencia de la carga que hace un admin a nombre de otra persona (que sí necesita
+    `aprobar/`, porque nadie más puede corregir lo que la IA transcribió), acá NO hay paso de
+    aprobación: el resultado se expone ya formateado como `respuestas_sugeridas` (ver
+    ExtraccionMomentoSerializer) para que el FE precargue la pantalla del momento con lo que se
+    extrajo, el propio participante lo corrija, y lo envíe como cualquier respuesta normal a
+    `POST .../momentos/{id}/respuestas/` — esa es la única vía que de verdad escribe `Respuesta`.
 
     Se habilita momento por momento con `Momento.permite_carga_archivo` — apagado, un
-    participante igual recibe 403, porque cada carga cuesta una llamada a OpenAI. El resultado NO
-    se aprueba solo: como cualquier extracción de este módulo, queda en `resultado` hasta que un
-    admin la revise y llame `aprobar/`."""
+    participante igual recibe 403, porque cada carga cuesta una llamada a OpenAI."""
     permission_classes = [EsParticipanteDeLaJornada]
 
     @extend_schema(

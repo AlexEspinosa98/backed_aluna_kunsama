@@ -642,6 +642,63 @@ class CargaArchivoPorParticipanteTests(BaseJornadaTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual([e['participante'] for e in resp.data], [self.participante.id])
 
+    def test_respuestas_sugeridas_llega_en_formato_de_envio_y_no_requiere_aprobacion(self):
+        """No hay endpoint de aprobar para esta vía: el participante recibe la sugerencia lista
+        para corregir y reenviar tal cual a POST .../respuestas/ (HU-56 revisado)."""
+        extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.participante,
+            archivo=self._archivo('mia.pdf'), estado=ExtraccionMomento.ESTADO_COMPLETO,
+            resultado={'respuestas': [
+                {
+                    'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Del papel',
+                    'opcion_ids': [], 'fila_id': None, 'fila_temporal': None, 'columna_id': None,
+                },
+                {
+                    'pregunta': self.pregunta_unica.id, 'texto_libre': '',
+                    'opcion_ids': [self.opcion_a.id], 'fila_id': None, 'fila_temporal': None,
+                    'columna_id': None,
+                },
+            ]},
+        )
+        url_cargas = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/mis-cargas/'
+        )
+        resp = self.client.get(url_cargas, **self.auth_header(self.token))
+        self.assertEqual(resp.status_code, 200)
+        sugeridas = resp.data[0]['respuestas_sugeridas']
+        self.assertEqual(sugeridas, [
+            {
+                'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Del papel',
+                'opcion_ids': [], 'fila_id': None, 'columna_id': None, 'fila_temporal': None,
+            },
+            {
+                'pregunta_id': self.pregunta_unica.id, 'texto_libre': '',
+                'opcion_ids': [self.opcion_a.id], 'fila_id': None, 'columna_id': None,
+                'fila_temporal': None,
+            },
+        ])
+        self.assertIsNone(resp.data[0]['aprobado_en'])
+
+        # El mismo body, mandado tal cual a .../respuestas/, es una respuesta válida.
+        envio = {
+            'respuestas': [
+                {'pregunta_id': item['pregunta_id'], 'texto_libre': item['texto_libre'],
+                 'opcion_ids': item['opcion_ids']}
+                for item in sugeridas
+            ],
+        }
+        resp_envio = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            envio, format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp_envio.status_code, 200)
+        self.assertEqual(
+            Respuesta.objects.get(
+                pregunta=self.pregunta_abierta, participante=self.participante,
+            ).texto_libre,
+            'Del papel',
+        )
+
 
 class RespuestaMatrizTests(BaseJornadaTestCase):
     """Pregunta.tipo == matriz sobre el momento individual — una celda (fila×columna) por

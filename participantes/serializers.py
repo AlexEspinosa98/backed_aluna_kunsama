@@ -203,13 +203,14 @@ class RespuestaSalidaSerializer(serializers.ModelSerializer):
 class ExtraccionMomentoSerializer(serializers.ModelSerializer):
     momento_titulo = serializers.CharField(source='momento.titulo', read_only=True)
     participante_nombre = serializers.SerializerMethodField()
+    respuestas_sugeridas = serializers.SerializerMethodField()
 
     class Meta:
         model = ExtraccionMomento
         fields = [
             'id', 'momento', 'momento_titulo', 'participante', 'participante_nombre',
-            'nombre_archivo_original', 'estado', 'resultado', 'preguntas_omitidas',
-            'responsable_detectado', 'responsable_estado',
+            'nombre_archivo_original', 'estado', 'resultado', 'respuestas_sugeridas',
+            'preguntas_omitidas', 'responsable_detectado', 'responsable_estado',
             'error_mensaje', 'modelo_usado', 'aprobado_en', 'aprobado_por', 'solicitado_por',
             'creado_en', 'actualizado_en', 'completado_en',
         ]
@@ -222,6 +223,28 @@ class ExtraccionMomentoSerializer(serializers.ModelSerializer):
         if extraccion.participante_id is None:
             return None
         return f'{extraccion.participante.nombre} {extraccion.participante.apellido}'.strip()
+
+    def get_respuestas_sugeridas(self, extraccion):
+        """`resultado['respuestas']` tal cual queda guardado (ver `_limpiar_y_validar` en
+        extraccion_momento_ia_openai.py) ya usa casi el mismo formato que
+        `RespuestaEnvioSerializer` — el único cambio es la clave `pregunta` → `pregunta_id`. Se
+        expone así (en vez de `resultado` crudo) para que el FE pueda tomar este arreglo,
+        dejar que el participante lo corrija, y mandarlo TAL CUAL como body de
+        `POST .../momentos/{id}/respuestas/` — sin necesidad de que un admin apruebe nada antes
+        (a diferencia de la carga que hace un admin a nombre de otra persona, que sí requiere
+        `aprobar/` porque ahí nadie más puede corregir lo que la IA transcribió)."""
+        respuestas = (extraccion.resultado or {}).get('respuestas') or []
+        return [
+            {
+                'pregunta_id': item.get('pregunta'),
+                'texto_libre': item.get('texto_libre', ''),
+                'opcion_ids': item.get('opcion_ids') or [],
+                'fila_id': item.get('fila_id'),
+                'columna_id': item.get('columna_id'),
+                'fila_temporal': item.get('fila_temporal'),
+            }
+            for item in respuestas
+        ]
 
 
 class CargarArchivoMomentoSerializer(serializers.Serializer):
