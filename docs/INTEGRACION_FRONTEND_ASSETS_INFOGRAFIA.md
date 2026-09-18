@@ -254,10 +254,10 @@ Muéstrenlas siempre en ese orden (carrusel, galería o descarga como set). Cada
 (2048×1152)**, pensada para proyectar. `archivo` es la URL directa (sirve tal cual en un
 `<img src>` o para descarga).
 
-**Puede venir menos de 3.** Si el modelo devuelve menos láminas de las pedidas, las que llegaron
-se guardan igual: el `estado` queda en `completo` y `error_mensaje` dice cuántas salieron. Si
-reciben `error_mensaje` no vacío con `estado: "completo"`, muestren las imágenes que llegaron y un
-aviso — no lo traten como un fallo total.
+**Puede venir menos de 3.** Cada lámina es una llamada independiente al modelo; si una falla, las
+que sí salieron se conservan y el `estado` queda en `completo` con un `error_mensaje` que dice
+cuál faltó. Si reciben `error_mensaje` no vacío con `estado: "completo"`, muestren las imágenes
+que llegaron y un aviso — no lo traten como un fallo total.
 
 ### Qué usan de referencia visual (contexto, no requiere nada del frontend)
 

@@ -1,12 +1,12 @@
-"""Genera la infografía de una jornada como una SERIE de 3 láminas complementarias (portada,
-hallazgos y cierre — ver `SYSTEM_PROMPT_PREFIJO`), vía el modelo de imágenes de OpenAI. Usa como referencia visual DIRECTA los `JornadaAsset` de la
+"""Genera la infografía de una jornada como una SERIE de 3 láminas complementarias (ver `SLIDES`),
+vía el modelo de imágenes de OpenAI. Usa como referencia visual DIRECTA los `JornadaAsset` de la
 jornada (fotos/logos + el system design más reciente, ver jornadas/models.py::JornadaAsset) y como
 contenido la analítica ya calculada (el reporte integral `AnalisisJornadaIA` o un `Reporte`).
 
-UNA sola llamada con `n=3`. `n` no admite un prompt por imagen, pero gpt-image-2 razona sobre el
-conjunto cuando el prompt describe una SERIE (storyboard): por eso `SYSTEM_PROMPT_PREFIJO` enumera
-las tres láminas y dice qué no debe repetirse entre ellas. Sin esa forma de pedirlo, `n=3` sí
-devuelve tres variantes de lo mismo.
+Una llamada POR LÁMINA, no una sola con `n=3`: pedir tres imágenes en la misma llamada devuelve
+tres variaciones del mismo contenido, que es justo lo contrario de lo que sirve acá. Las tres
+corren en paralelo y comparten prefijo, datos y guía de marca para que se lean como un mismo
+material.
 
 Mismo patrón de threading+timeout que el resto de módulos de IA del proyecto (ver
 analitica/presentacion.py, instrumentos/extraccion_ia_openai.py): nunca lanza excepción hacia
@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.files.base import ContentFile
 from django.utils import timezone
@@ -34,46 +35,69 @@ GENERATION_TIMEOUT_SECONDS = 300
 # 16:9 real en píxeles. gpt-image-2 acepta resoluciones arbitrarias (no solo el enum que declara
 # el SDK), pero con reglas: ambos lados múltiplos de 16, proporción entre 1:3 y 3:1, ningún lado
 # sobre 3840 y entre 655.360 y 8.294.400 píxeles en total. Por eso NO se usa 1920x1080: 1080 no es
-# múltiplo de 16 y la API lo rechaza. 2048x1152 es 16:9 exacto y cumple todas las reglas.
+# múltiplo de 16 y la API responde 400 `Invalid size`. 2048x1152 es 16:9 exacto y cumple todo.
 TAMANO_INFOGRAFIA = os.environ.get('OPENAI_IMAGE_SIZE', '2048x1152')
 PROPORCION_INFOGRAFIA = '16:9'
-NUM_LAMINAS = 3
 # Tope de assets tipo 'asset' que se mandan como referencia (+ 1 system_design aparte) — controla
 # costo/tiempo de la llamada, igual espíritu que MAX_PAGINAS_IMAGEN en extraccion_ia_openai.py.
 MAX_ASSETS_REFERENCIA = 4
 # Lado máximo (px) de una imagen de referencia antes de mandarla a la API — evita payloads gigantes.
 MAX_LADO_IMAGEN_REFERENCIA = 2048
 
-# UNA sola llamada con n=3 y un prompt de SECUENCIA. `n` no admite un prompt por imagen, pero
-# gpt-image-2 razona sobre el conjunto cuando el prompt lo describe como una serie/storyboard: es
-# el mecanismo documentado para obtener un set coherente y diferenciado. Por eso el prompt enumera
-# las tres láminas y dice explícitamente qué NO debe repetirse entre ellas — sin esa instrucción
-# el modelo devuelve tres variantes de lo mismo.
 SYSTEM_PROMPT_PREFIJO = (
-    f"Diseña una SERIE de {NUM_LAMINAS} láminas DISTINTAS y COMPLEMENTARIAS —como las "
-    "diapositivas consecutivas de una misma presentación— que comuniquen los resultados reales de "
-    "una jornada participativa universitaria. No son variantes de una misma lámina: cada una "
-    "tiene un contenido propio y juntas cuentan la historia completa.\n\n"
-    f"FORMATO: cada lámina es APAISADA en {PROPORCION_INFOGRAFIA} (pantalla ancha, tipo "
-    "diapositiva para proyectar). La composición ocupa todo el ancho; nunca la maquetes en "
-    "vertical ni en cuadrado.\n\n"
-    f"LAS {NUM_LAMINAS} LÁMINAS, EN ESTE ORDEN:\n"
-    "1. PORTADA — el nombre de la jornada como título dominante y, debajo, las cifras clave de "
-    "participación (participantes, momentos, tasa de participación) en 2 a 4 bloques grandes. Sin "
-    "gráficos ni listas de hallazgos: es la carátula, se lee de un vistazo desde lejos.\n"
-    "2. HALLAZGOS — el cuerpo: los temas y hallazgos principales, cada uno con su dato real al "
-    "lado, en columnas o tarjetas, con las visualizaciones (barras o porciones) construidas con "
-    "los números exactos del JSON. Sin el título grande ni las cifras de la lámina 1.\n"
-    "3. CIERRE — entre 3 y 5 mensajes accionables derivados únicamente del resumen y los "
-    "hallazgos del JSON, en tipografía grande y con mucho aire. Sin cifras de participación y sin "
-    "repetir los gráficos de la lámina 2.\n\n"
-    "COHERENCIA: las tres comparten exactamente la misma paleta, tipografía y lenguaje visual, "
-    "para que se vean como un mismo material y no como piezas de autores distintos.\n\n"
-    "Usa EXCLUSIVAMENTE las cifras y hallazgos que se entregan abajo en JSON — nunca inventes "
+    f"Diseña UNA SOLA lámina APAISADA en formato {PROPORCION_INFOGRAFIA} (pantalla ancha, tipo "
+    "diapositiva de presentación), lista para proyectar, que comunique los resultados reales de "
+    "una jornada participativa universitaria. La composición debe ocupar todo el ancho y leerse "
+    f"como una diapositiva {PROPORCION_INFOGRAFIA}: nunca la maquetes en vertical ni en cuadrado."
+    "\n\nMUY IMPORTANTE: esta imagen contiene ÚNICAMENTE el contenido de la lámina que se describe "
+    "abajo. NO es una infografía completa: no apiles varias secciones (portada + hallazgos + "
+    "conclusiones) una debajo de otra en la misma imagen, no agregues bandas ni franjas con otros "
+    "bloques temáticos. Una sola idea por lámina, ocupando todo el espacio disponible."
+    "\n\nUsa EXCLUSIVAMENTE las cifras y hallazgos que se entregan abajo en JSON — nunca inventes "
     "números, porcentajes ni temas que no estén ahí. Si se adjuntan imágenes de referencia "
     "(fotos/logos de la jornada y/o una guía de marca), respeta su paleta de colores, tipografía "
     "y estilo visual real — no uses una paleta genérica distinta a la de esas imágenes. Todo el "
     "texto debe estar en español."
+)
+
+# Tres llamadas, una por lámina, en vez de pedir n=3 en una sola: con n=3 la API devuelve tres
+# VARIACIONES del mismo contenido, no tres láminas que se complementen. Cada una tiene su papel y
+# su recorte de los datos, y todas comparten la instrucción de estilo para que se lean como una
+# serie y no como tres piezas sueltas.
+SLIDES = (
+    {
+        'clave': 'portada',
+        'instruccion': (
+            "LÁMINA 1 de 3 — PORTADA. El nombre de la jornada como título dominante, y debajo "
+            "las cifras clave de participación (participantes, momentos, tasa de participación) "
+            "como 2 a 4 bloques grandes. Sin gráficos de datos ni listas de hallazgos: esta "
+            "lámina es la carátula, tiene que leerse de un vistazo desde lejos."
+        ),
+    },
+    {
+        'clave': 'hallazgos',
+        'instruccion': (
+            "LÁMINA 2 de 3 — HALLAZGOS. El cuerpo del contenido: los temas y hallazgos "
+            "principales, cada uno con su dato real al lado, organizados en columnas o tarjetas. "
+            "Acá sí van las visualizaciones (barras o porciones) construidas con los números "
+            "exactos del JSON. NO repitas la portada ni el título grande de la lámina 1."
+        ),
+    },
+    {
+        'clave': 'cierre',
+        'instruccion': (
+            "LÁMINA 3 de 3 — CIERRE. Las conclusiones y lo que sigue: entre 3 y 5 mensajes "
+            "accionables derivados únicamente de lo que ya dicen el resumen y los hallazgos del "
+            "JSON, en tipografía grande y con mucho aire. Sin cifras de participación (ya van en "
+            "la lámina 1) y sin repetir los gráficos de la lámina 2."
+        ),
+    },
+)
+
+INSTRUCCION_SERIE = (
+    "Esta lámina es parte de una serie de 3 que se presentan juntas: usa exactamente la misma "
+    "paleta, la misma tipografía y el mismo lenguaje visual que las otras dos, de modo que se "
+    "vean como un mismo material y no como tres piezas de autores distintos."
 )
 
 
@@ -196,8 +220,11 @@ def _obtener_datos_analitica(jornada, reporte=None):
     )
 
 
-def _construir_prompt(datos_analitica, texto_system_design=''):
+def _construir_prompt(datos_analitica, texto_system_design='', slide=None):
     partes = [SYSTEM_PROMPT_PREFIJO]
+    if slide is not None:
+        partes.append(slide['instruccion'])
+        partes.append(INSTRUCCION_SERIE)
     if texto_system_design:
         partes.append(
             'GUÍA DE MARCA (respétala por encima de cualquier criterio estético propio):\n'
@@ -209,11 +236,11 @@ def _construir_prompt(datos_analitica, texto_system_design=''):
 
 
 
-def _llamar_openai_imagenes(prompt, imagenes_referencia_png):
-    """Genera las NUM_LAMINAS láminas en UNA llamada — imagen-a-imagen (`images.edit`) si hay
-    imágenes de referencia, texto-a-imagen (`images.generate`) si la jornada no tiene ningún
-    asset/system design todavía. Devuelve (lista_de_bytes_png_o_None, error) — nunca lanza
-    excepción, mismo contrato que el resto de módulos de IA del proyecto."""
+def _llamar_openai_imagen(prompt, imagenes_referencia_png):
+    """Genera UNA imagen vía OpenAI — imagen-a-imagen (`images.edit`) si hay imágenes de
+    referencia, texto-a-imagen (`images.generate`) si la jornada no tiene ningún asset/system
+    design todavía. Devuelve (bytes_png_o_None, error) — nunca lanza excepción, mismo contrato
+    que el resto de módulos de IA del proyecto."""
     api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
         return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).'
@@ -231,12 +258,12 @@ def _llamar_openai_imagenes(prompt, imagenes_referencia_png):
                 ]
                 respuesta = client.images.edit(
                     model=DEFAULT_IMAGE_MODEL, image=archivos, prompt=prompt,
-                    n=NUM_LAMINAS, size=TAMANO_INFOGRAFIA,
+                    n=1, size=TAMANO_INFOGRAFIA,
                 )
             else:
                 respuesta = client.images.generate(
                     model=DEFAULT_IMAGE_MODEL, prompt=prompt,
-                    n=NUM_LAMINAS, size=TAMANO_INFOGRAFIA,
+                    n=1, size=TAMANO_INFOGRAFIA,
                 )
             imagenes = []
             for dato in respuesta.data:
@@ -261,7 +288,31 @@ def _llamar_openai_imagenes(prompt, imagenes_referencia_png):
         return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s) esperando a OpenAI.'
     if not resultado.get('imagenes'):
         return None, resultado.get('error', 'OpenAI no devolvió imágenes.')
-    return resultado['imagenes'], None
+    return resultado['imagenes'][0], None
+
+
+def _generar_slides(datos, texto_system_design, imagenes_referencia):
+    """Una llamada por lámina, en paralelo. Devuelve (lista alineada con SLIDES —None donde falló—,
+    lista de errores). En paralelo y no en serie porque tres llamadas encadenadas de ~80s se
+    acercan demasiado al timeout; es el mismo patrón de ThreadPoolExecutor que ya usa
+    analitica/analysis.py para analizar preguntas."""
+    resultados = [None] * len(SLIDES)
+    errores = []
+
+    def _una(indice):
+        slide = SLIDES[indice]
+        prompt = _construir_prompt(datos, texto_system_design, slide)
+        png, error = _llamar_openai_imagen(prompt, imagenes_referencia)
+        return indice, png, error
+
+    with ThreadPoolExecutor(max_workers=len(SLIDES)) as pool:
+        for futuro in as_completed([pool.submit(_una, i) for i in range(len(SLIDES))]):
+            indice, png, error = futuro.result()
+            if png:
+                resultados[indice] = png
+            else:
+                errores.append(f"lámina '{SLIDES[indice]['clave']}': {error}")
+    return resultados, errores
 
 
 def generar_infografias(infografia_id):
@@ -288,30 +339,39 @@ def generar_infografias(infografia_id):
             infografia.save(update_fields=['estado', 'error_mensaje'])
             return
 
-        prompt = _construir_prompt(datos, _texto_system_design(jornada))
-        infografia.prompt_usado = prompt
+        texto_system_design = _texto_system_design(jornada)
         imagenes_referencia = _reunir_imagenes_referencia(jornada)
+        # Se guarda el prompt de la primera lámina: las tres comparten prefijo, datos y guía de
+        # marca, y solo cambia el bloque de la lámina — con una alcanza para entender qué se pidió.
+        infografia.prompt_usado = _construir_prompt(datos, texto_system_design, SLIDES[0])
 
-        imagenes_png, error = _llamar_openai_imagenes(prompt, imagenes_referencia)
+        imagenes_png, errores = _generar_slides(datos, texto_system_design, imagenes_referencia)
 
-        if imagenes_png:
-            for orden, png in enumerate(imagenes_png):
-                InfografiaImagen.objects.create(
-                    infografia=infografia, orden=orden,
-                    archivo=ContentFile(png, name=f'infografia-{infografia.id}-{orden}.png'),
-                )
+        generadas = 0
+        for orden, png in enumerate(imagenes_png):
+            if png is None:
+                continue
+            InfografiaImagen.objects.create(
+                infografia=infografia, orden=orden,
+                archivo=ContentFile(png, name=f'infografia-{infografia.id}-{orden}.png'),
+            )
+            generadas += 1
+
+        if generadas:
+            # Una lámina que falla no tira a la basura las que sí salieron (cada una es una
+            # llamada pagada aparte); queda constancia en error_mensaje de cuál faltó.
             infografia.estado = InfografiaJornada.ESTADO_COMPLETO
-            # Si el modelo devuelve menos láminas de las pedidas queda constancia, en vez de que
-            # el FE tenga que deducirlo contando el arreglo.
             infografia.error_mensaje = (
-                '' if len(imagenes_png) == NUM_LAMINAS else
-                f'Se generaron {len(imagenes_png)} de {NUM_LAMINAS} láminas.'
+                '' if not errores else
+                f'Se generaron {generadas} de {len(SLIDES)} láminas. Falló: ' + ' | '.join(errores)
             )
             infografia.modelo_usado = DEFAULT_IMAGE_MODEL
             infografia.completado_en = timezone.now()
         else:
             infografia.estado = InfografiaJornada.ESTADO_ERROR
-            infografia.error_mensaje = error or 'Error desconocido generando la infografía.'
+            infografia.error_mensaje = (
+                ' | '.join(errores) or 'Error desconocido generando la infografía.'
+            )
         infografia.save(update_fields=[
             'prompt_usado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
         ])
