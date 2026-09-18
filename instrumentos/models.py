@@ -10,15 +10,6 @@ class Instrumento(models.Model):
     nombre = models.CharField(max_length=255)
     descripcion = models.TextField(blank=True)
     activo = models.BooleanField(default=True)
-    # Habilita que el propio usuario preregistrado suba su documento ya diligenciado, en vez de
-    # que solo un admin pueda hacerlo (ver instrumentos/views_participante.py). Apagado por
-    # defecto a propósito: la carga dispara una llamada a OpenAI y crea una AplicacionInstrumento
-    # en estado pendiente, así que se abre instrumento por instrumento cuando el equipo lo decide,
-    # no en todos de golpe. Es también lo que el FE lee para saber si mostrar el botón de subir.
-    permite_carga_archivo = models.BooleanField(default=False, help_text=(
-        'Si los usuarios preregistrados pueden subir ellos mismos un documento diligenciado para '
-        'que la IA lo transcriba. Apagado = solo un administrador puede hacerlo.'
-    ))
     # Opcional: vincula este instrumento a una jornada (ej. el diagnóstico de un departamento se
     # aplica como parte de una jornada concreta, junto a sus momentos). Cuando está vinculado,
     # `encargados` deja de usarse para scoping — pasa a ser Jornada.propietarios, un solo lugar

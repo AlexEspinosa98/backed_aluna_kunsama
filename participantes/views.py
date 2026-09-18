@@ -1,3 +1,5 @@
+import threading
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
@@ -7,12 +9,16 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from jornadas import emparejamiento
 from jornadas.models import Jornada, Momento, Pregunta, RolJornada
 from jornadas.serializers import JornadaPublicaSerializer, RolJornadaSerializer
 
-from .models import FilaListaRespuesta, Participante, Respuesta
+from .extraccion_momento_ia_openai import procesar_extraccion_momento
+from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
 from .permissions import EsParticipanteDeLaJornada
 from .serializers import (
+    CargarArchivoMomentoSerializer,
+    ExtraccionMomentoSerializer,
     MomentoDetalleSerializer,
     MomentoIndiceSerializer,
     ParticipanteLoginSerializer,
@@ -142,6 +148,69 @@ class MomentoDetalleView(generics.RetrieveAPIView):
         if not _momento_visible_para(momento, self.request.user):
             raise NotFound('Este momento no está disponible para tu mesa.')
         return momento
+
+
+class MomentoCargarArchivoView(APIView):
+    """El propio participante sube su documento ya diligenciado para este momento y la IA lo
+    transcribe (HU-56). Mismo mecanismo que participantes.admin_views.ExtraccionMomentoViewSet,
+    pero acá el dueño es siempre quien sube (`participante=request.user`), no un dato del
+    request: no hay responsable que emparejar ni participantes que dar de alta.
+
+    Se habilita momento por momento con `Momento.permite_carga_archivo` — apagado, un
+    participante igual recibe 403, porque cada carga cuesta una llamada a OpenAI. El resultado NO
+    se aprueba solo: como cualquier extracción de este módulo, queda en `resultado` hasta que un
+    admin la revise y llame `aprobar/`."""
+    permission_classes = [EsParticipanteDeLaJornada]
+
+    @extend_schema(
+        request=CargarArchivoMomentoSerializer,
+        responses=ExtraccionMomentoSerializer,
+    )
+    def post(self, request, jornada_slug, momento_id):
+        momento = get_object_or_404(
+            Momento, pk=momento_id, jornada__slug=jornada_slug, activo=True
+        )
+        if not _momento_visible_para(momento, request.user):
+            raise NotFound('Este momento no está disponible para tu mesa.')
+        if not momento.permite_carga_archivo:
+            raise PermissionDenied(
+                'Este momento no tiene habilitada la carga de documentos. Diligéncialo en línea '
+                'o pídele a un administrador que la habilite.'
+            )
+
+        entrada = CargarArchivoMomentoSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        archivo = entrada.validated_data['archivo']
+
+        extraccion = ExtraccionMomento.objects.create(
+            momento=momento,
+            participante=request.user,
+            archivo=archivo,
+            nombre_archivo_original=archivo.name,
+            responsable_estado=emparejamiento.ESTADO_NO_BUSCADO,
+        )
+        threading.Thread(
+            target=procesar_extraccion_momento, args=(extraccion.id,), daemon=True,
+        ).start()
+
+        return Response(
+            ExtraccionMomentoSerializer(extraccion).data, status=status.HTTP_201_CREATED,
+        )
+
+
+class MisExtraccionesMomentoView(generics.ListAPIView):
+    """Las cargas que hizo el propio participante en este momento — para que el FE pueda mostrar
+    "tu documento se está procesando / ya quedó / falló" después de subirlo, sin tener que
+    pegarle al endpoint de admin (al que no tiene acceso)."""
+    serializer_class = ExtraccionMomentoSerializer
+    permission_classes = [EsParticipanteDeLaJornada]
+
+    def get_queryset(self):
+        return ExtraccionMomento.objects.filter(
+            momento_id=self.kwargs['momento_id'],
+            momento__jornada__slug=self.kwargs['jornada_slug'],
+            participante=self.request.user,
+        )
 
 
 def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None, fila_temporal=None):

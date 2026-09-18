@@ -103,7 +103,7 @@ class MomentoAdminSerializer(serializers.ModelSerializer):
         model = Momento
         fields = [
             'id', 'jornada', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'categorias_semilla',
-            'mesas_permitidas', 'roles_permitidos', 'activo', 'preguntas',
+            'mesas_permitidas', 'roles_permitidos', 'permite_carga_archivo', 'activo', 'preguntas',
         ]
         read_only_fields = ['slug']
 

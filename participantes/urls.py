@@ -5,6 +5,8 @@ from .views import (
     JornadaListaView,
     LoginParticipanteView,
     MeParticipanteView,
+    MisExtraccionesMomentoView,
+    MomentoCargarArchivoView,
     MomentoDetalleView,
     MomentosIndiceView,
     RegistroParticipanteView,
@@ -29,5 +31,17 @@ urlpatterns = [
         'jornadas/<slug:jornada_slug>/momentos/<int:momento_id>/respuestas/',
         RespuestasMomentoView.as_view(),
         name='momento-respuestas',
+    ),
+    # Carga de un documento ya diligenciado por el propio participante (HU-56) — solo si el
+    # momento tiene permite_carga_archivo encendido.
+    path(
+        'jornadas/<slug:jornada_slug>/momentos/<int:momento_id>/cargar-archivo/',
+        MomentoCargarArchivoView.as_view(),
+        name='momento-cargar-archivo',
+    ),
+    path(
+        'jornadas/<slug:jornada_slug>/momentos/<int:momento_id>/mis-cargas/',
+        MisExtraccionesMomentoView.as_view(),
+        name='momento-mis-cargas',
     ),
 ]

@@ -1894,10 +1894,15 @@ Como administrador quiero no tener que decir **de quién es** cada documento ant
 - **Asignación manual**: `POST /api/admin/instrumento-extracciones/{id}/asignar-responsable/` y `POST /api/admin/momento-extracciones/{id}/asignar-responsable/` terminan el trabajo con lo ya transcrito, **sin volver a llamar a OpenAI**. `responsable_estado` no se toca al asignar: deja constancia de *por qué* hubo que hacerlo a mano.
 - `usuario_id`/`participante_id` siguen aceptándose al subir, y cuando se mandan **no se pisan** con lo que haya leído la IA — una decisión humana explícita gana. Mandar media ficha de alta sigue siendo `400`: omitir todo es delegar, mandar la mitad es un bug del cliente.
 
-### HU-56 — Los usuarios pueden subir ellos mismos su documento diligenciado
-Como responsable de un instrumento quiero poder subir yo mismo el documento que ya llené en papel o en Word, en vez de tener que mandárselo a un administrador para que lo cargue por mí.
-- `Instrumento.permite_carga_archivo` (booleano, **apagado por defecto**) habilita la carga instrumento por instrumento. Apagado, un usuario preregistrado igual recibe `403`. Está apagado por defecto a propósito: cada carga cuesta una llamada a OpenAI y deja una `AplicacionInstrumento` en revisión, así que se abre cuando el equipo lo decide, no en todos de golpe.
-- El campo viaja en el detalle y en el listado que ve el usuario — **es lo único que le dice al FE si mostrar el botón de subir**.
-- `POST /api/instrumentos/{slug}/cargar-archivo/` (auth de usuario preregistrado, `multipart` con `archivo`). La diferencia de fondo con el endpoint de admin no es el permiso sino **de quién es el documento**: acá el dueño es siempre quien sube (`usuario = request.user`, no un dato del request), así que no se puede subir a nombre de otro, no hay responsable que emparejar y no se dan de alta usuarios.
-- `GET /api/instrumentos/{slug}/mis-cargas/` lista las cargas propias, para que el FE pueda mostrar "procesando / listo / falló" sin pegarle al endpoint de admin, al que el usuario no tiene acceso.
-- **No cambia quién revisa**: el resultado sigue cayendo en `AplicacionInstrumento` en estado pendiente con `generado_por_ia=True`. Subir el documento no es aprobarlo.
+### HU-56 — Los participantes pueden subir ellos mismos su documento diligenciado
+Como participante de una jornada quiero poder subir yo mismo el documento de un momento que ya llené en papel o en Word, en vez de tener que mandárselo a un administrador para que lo cargue por mí.
+- `Momento.permite_carga_archivo` (booleano, **apagado por defecto**) habilita la carga momento por momento. Apagado, un participante igual recibe `403`. Está apagado por defecto a propósito: cada carga cuesta una llamada a OpenAI y deja una `ExtraccionMomento` a la espera de revisión, así que se abre cuando el equipo lo decide, no en todos de golpe.
+- El campo viaja en el detalle y en el índice de momentos que ve el participante — **es lo único que le dice al FE si mostrar el botón de subir**.
+- `POST /api/jornadas/{jornada_slug}/momentos/{momento_id}/cargar-archivo/` (auth de participante, `multipart` con `archivo`). La diferencia de fondo con el endpoint de admin (`ExtraccionMomentoViewSet`) no es el permiso sino **de quién es el documento**: acá el dueño es siempre quien sube (`participante = request.user`, no un dato del request), así que no se puede subir a nombre de otro, no hay responsable que emparejar y no se dan de alta participantes.
+- `GET /api/jornadas/{jornada_slug}/momentos/{momento_id}/mis-cargas/` lista las cargas propias, para que el FE pueda mostrar "procesando / listo / falló" sin pegarle al endpoint de admin, al que el participante no tiene acceso.
+- **No cambia quién revisa**: el resultado sigue cayendo en `ExtraccionMomento` en estado `completo`, sin escribir ninguna `Respuesta` todavía — como con cualquier extracción de este módulo (ver HU-51), un admin tiene que llamar `POST /api/admin/momento-extracciones/{id}/aprobar/` para que se guarden. Subir el documento no es aprobarlo.
+
+> Nota de implementación: esta historia se construyó originalmente sobre `Instrumento` (el otro
+> módulo de formularios de la app, independiente de `Momento`) y se movió acá porque la necesidad
+> real era la carga por momento de jornada, no por instrumento. `Instrumento` no tiene (ni tuvo
+> nunca en producción) esta capacidad de autoservicio.

@@ -58,7 +58,7 @@ class InstrumentoAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = Instrumento
         fields = [
-            'id', 'slug', 'nombre', 'descripcion', 'activo', 'permite_carga_archivo', 'jornada',
+            'id', 'slug', 'nombre', 'descripcion', 'activo', 'jornada',
             'jornada_nombre', 'encargados', 'creado_por', 'creado_en', 'actualizado_en', 'secciones',
         ]
         read_only_fields = ['slug', 'creado_por', 'creado_en', 'actualizado_en']

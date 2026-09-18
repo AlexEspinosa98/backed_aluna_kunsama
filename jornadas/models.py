@@ -117,6 +117,15 @@ class Momento(models.Model):
         'Lista opcional de nombres de rol que pueden ver/participar en este momento. Vacía = '
         'visible para todos los roles.'
     ))
+    # Habilita que el propio participante suba su documento ya diligenciado para este momento, en
+    # vez de que solo un admin pueda hacerlo (ver participantes/views.py). Apagado por defecto a
+    # propósito: la carga dispara una llamada a OpenAI y deja una ExtraccionMomento a la espera de
+    # aprobación, así que se abre momento por momento cuando el equipo lo decide, no en todos de
+    # golpe. Es también lo que el FE lee para saber si mostrar el botón de subir.
+    permite_carga_archivo = models.BooleanField(default=False, help_text=(
+        'Si los participantes pueden subir ellos mismos un documento diligenciado para este '
+        'momento, para que la IA lo transcriba. Apagado = solo un administrador puede hacerlo.'
+    ))
     activo = models.BooleanField(default=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)

@@ -1,4 +1,3 @@
-import threading
 from collections import defaultdict
 
 from django.shortcuts import get_object_or_404
@@ -9,20 +8,15 @@ from rest_framework.exceptions import NotFound, PermissionDenied, ValidationErro
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from jornadas import emparejamiento
-
 from .docx_aplicacion import respuesta_docx_http
-from .extraccion_ia_openai import procesar_extraccion_instrumento
 from .models import (
-    AplicacionInstrumento, ExtraccionInstrumento, Instrumento, PreguntaInstrumento,
-    PreregistroInstrumento, RespuestaInstrumento,
+    AplicacionInstrumento, Instrumento, PreguntaInstrumento, PreregistroInstrumento,
+    RespuestaInstrumento,
 )
-from .serializers import ExtraccionInstrumentoSerializer
 from .permissions import EsPreregistradoDeInstrumento, EsUsuarioDelSistema
 from .serializers_participante import (
-    CargarArchivoInstrumentoSerializer, InstrumentoAsignadoSerializer,
-    InstrumentoDetalleParticipanteSerializer, RespuestaInstrumentoEnvioSerializer,
-    RespuestaInstrumentoPublicaSerializer,
+    InstrumentoAsignadoSerializer, InstrumentoDetalleParticipanteSerializer,
+    RespuestaInstrumentoEnvioSerializer, RespuestaInstrumentoPublicaSerializer,
 )
 
 
@@ -197,65 +191,3 @@ class InstrumentoDescargarPropioView(APIView):
         if aplicacion is None or aplicacion.enviado_en is None:
             raise NotFound('Todavía no has enviado tus respuestas para este instrumento.')
         return respuesta_docx_http(aplicacion)
-
-
-class InstrumentoCargarArchivoView(APIView):
-    """El propio usuario sube su documento ya diligenciado y la IA lo transcribe (HU-56).
-
-    Hasta ahora esto era solo de admin (ExtraccionInstrumentoViewSet). La diferencia de fondo con
-    esa vista no es el permiso sino **de quién es el documento**: acá el dueño es siempre quien
-    sube (`usuario=request.user`), no un dato del request. Alguien no puede subir a nombre de
-    otro, así que tampoco hay responsable que emparejar ni usuarios que dar de alta.
-
-    Se habilita instrumento por instrumento con `Instrumento.permite_carga_archivo` — apagado, un
-    usuario preregistrado igual recibe 403, porque cada carga cuesta una llamada a OpenAI y deja
-    una AplicacionInstrumento en revisión.
-
-    El resultado NO se acepta solo: como cualquier extracción, la aplicación queda en estado
-    pendiente con generado_por_ia=True, para que un encargado la revise."""
-    permission_classes = [EsPreregistradoDeInstrumento]
-
-    @extend_schema(
-        request=CargarArchivoInstrumentoSerializer,
-        responses=ExtraccionInstrumentoSerializer,
-    )
-    def post(self, request, instrumento_slug):
-        instrumento = get_object_or_404(Instrumento, slug=instrumento_slug, activo=True)
-        if not instrumento.permite_carga_archivo:
-            raise PermissionDenied(
-                'Este instrumento no tiene habilitada la carga de documentos. Diligéncialo en '
-                'línea o pídele a un administrador que la habilite.'
-            )
-
-        entrada = CargarArchivoInstrumentoSerializer(data=request.data)
-        entrada.is_valid(raise_exception=True)
-        archivo = entrada.validated_data['archivo']
-
-        extraccion = ExtraccionInstrumento.objects.create(
-            instrumento=instrumento,
-            usuario=request.user,
-            archivo=archivo,
-            nombre_archivo_original=archivo.name,
-            solicitado_por=request.user,
-            responsable_estado=emparejamiento.ESTADO_NO_BUSCADO,
-        )
-        threading.Thread(
-            target=procesar_extraccion_instrumento, args=(extraccion.id,), daemon=True,
-        ).start()
-
-        return Response(
-            ExtraccionInstrumentoSerializer(extraccion).data, status=status.HTTP_201_CREATED,
-        )
-
-
-class MisExtraccionesInstrumentoView(generics.ListAPIView):
-    """Las cargas que hizo el propio usuario en este instrumento — para que el FE pueda mostrar
-    "tu documento se está procesando / ya quedó / falló" después de subirlo, sin tener que pegarle
-    al endpoint de admin (al que no tiene acceso)."""
-    serializer_class = ExtraccionInstrumentoSerializer
-    permission_classes = [EsPreregistradoDeInstrumento]
-
-    def get_queryset(self):
-        return ExtraccionInstrumento.objects.filter(
-            instrumento__slug=self.kwargs['instrumento_slug'], usuario=self.request.user,
-        )

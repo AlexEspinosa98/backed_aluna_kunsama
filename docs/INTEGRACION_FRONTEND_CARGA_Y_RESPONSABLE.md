@@ -2,43 +2,45 @@
 
 Guía para el equipo de frontend sobre dos cambios que van juntos en la misma pantalla:
 
-- **HU-56**: el usuario preregistrado puede subir **él mismo** su documento diligenciado.
+- **HU-56**: el participante puede subir **él mismo** el documento diligenciado de un momento de
+  su jornada.
 - **HU-55**: al subir ya no hace falta decir **de quién es** el documento — la IA lo lee y lo
   empareja sola.
 
 ---
 
-## 1. HU-56 — El botón de subir en la pantalla del usuario
+## 1. HU-56 — El botón de subir en la pantalla del momento
 
 ### Cuándo mostrarlo
 
-El detalle del instrumento y el listado de asignados traen un campo nuevo:
+El índice de momentos y el detalle de un momento traen un campo nuevo:
 
 ```
-GET /api/instrumentos/                      (listado)
-GET /api/instrumentos/{slug}/               (detalle)
-Authorization: Token <token del usuario>
+GET /api/jornadas/{jornada_slug}/momentos/                  (índice)
+GET /api/jornadas/{jornada_slug}/momentos/{momento_id}/     (detalle)
+Authorization: Participant <token del participante>
 ```
 ```json
 {
-  "id": 3,
+  "id": 61,
+  "orden": 1,
+  "titulo": "Diagnóstico de Articulación Académica",
   "slug": "diagnostico-articulacion",
-  "nombre": "Diagnóstico de Articulación Académica",
+  "tipo": "individual",
   "permite_carga_archivo": true,
-  "secciones": [ ... ],
-  "mi_aplicacion": null
+  "preguntas": [ ... ]
 }
 ```
 
 **Mostrar el botón solo si `permite_carga_archivo` es `true`.** Viene apagado por defecto y se
-habilita instrumento por instrumento: si está en `false` y se intenta subir igual, el backend
-responde `403`. No lo deduzcan de ninguna otra cosa — es el único dato que lo dice.
+habilita momento por momento: si está en `false` y se intenta subir igual, el backend responde
+`403`. No lo deduzcan de ninguna otra cosa — es el único dato que lo dice.
 
 ### Subir
 
 ```
-POST /api/instrumentos/{slug}/cargar-archivo/
-Authorization: Token <token del usuario>
+POST /api/jornadas/{jornada_slug}/momentos/{momento_id}/cargar-archivo/
+Authorization: Participant <token del participante>
 Content-Type: multipart/form-data
 
 archivo: <el .pdf o .docx>
@@ -47,20 +49,25 @@ archivo: <el .pdf o .docx>
 Solo `.pdf` y `.docx` (`400` con la clave `archivo` si es otra cosa — validen también del lado
 del cliente para no gastar la subida).
 
-El documento queda **siempre a nombre de quien sube**. No manden `usuario_id` ni nada parecido:
-el backend lo ignora y usa la sesión. No hay forma de subir a nombre de otra persona por esta vía.
+El documento queda **siempre a nombre de quien sube**. No manden `participante_id` ni nada
+parecido: el backend lo ignora y usa la sesión. No hay forma de subir a nombre de otra persona
+por esta vía.
 
 Respuesta `201`:
 ```json
 {
   "id": 42,
-  "instrumento": 3,
-  "usuario": 17,
+  "momento": 61,
+  "momento_titulo": "Diagnóstico de Articulación Académica",
+  "participante": 17,
+  "participante_nombre": "Juan Pérez",
   "nombre_archivo_original": "diagnostico-firmado.pdf",
   "estado": "pendiente",
-  "aplicacion": null,
+  "resultado": {},
+  "preguntas_omitidas": [],
+  "responsable_detectado": {},
   "responsable_estado": "no_buscado",
-  "preguntas_omitidas": []
+  "aprobado_en": null
 }
 ```
 
@@ -70,27 +77,30 @@ La transcripción corre en background. `estado` avanza
 `pendiente` → `procesando` → `completo` (o `error`). Hagan **polling** contra:
 
 ```
-GET /api/instrumentos/{slug}/mis-cargas/
+GET /api/jornadas/{jornada_slug}/momentos/{momento_id}/mis-cargas/
 ```
 
-que devuelve solo las cargas del propio usuario (el endpoint de admin no les va a responder).
-Un intervalo de 3–5 s está bien; un documento largo con páginas escaneadas puede tardar minutos.
+que devuelve solo las cargas del propio participante (el endpoint de admin no les va a
+responder). Un intervalo de 3–5 s está bien; un documento largo con páginas escaneadas puede
+tardar minutos.
 
 | `estado`      | Qué mostrar                                                                 |
 |---------------|------------------------------------------------------------------------------|
 | `pendiente`   | "En cola"                                                                     |
 | `procesando`  | "Leyendo tu documento…"                                                       |
-| `completo`    | "Listo, quedó en revisión" + refrescar el detalle para ver `mi_aplicacion`     |
+| `completo`    | "Listo, quedó en revisión"                                                    |
 | `error`       | Mostrar `error_mensaje` y ofrecer volver a intentar                           |
 
 ### Importante para el copy de la pantalla
 
-Subir el documento **no es enviarlo aprobado**. El resultado queda como una aplicación en estado
-**pendiente de revisión**, marcada como generada por IA, y un encargado la revisa. Díganlo en la
-UI: "Tu documento se transcribió y quedó en revisión", no "Instrumento enviado".
+Subir el documento **no es enviarlo aprobado**. A diferencia del envío normal desde la web (que
+guarda de inmediato), el resultado queda en `resultado` esperando a que **un admin** lo revise y
+llame a `aprobar/` — recién ahí se escriben las respuestas del participante. Díganlo en la UI:
+"Tu documento se transcribió y quedó en revisión", no "Momento enviado".
 
-Tampoco reemplaza diligenciar en línea: si el usuario ya tiene respuestas, la transcripción las
-sobrescribe con lo que traiga el documento.
+Tampoco reemplaza diligenciar en línea: si al aprobarse la extracción el participante ya tenía
+respuestas guardadas para ese momento, la aprobación las sobrescribe con lo que traiga el
+documento (mismo criterio que el envío normal, ver `RespuestasMomentoView`).
 
 ---
 
@@ -217,7 +227,7 @@ POST /api/admin/momento-extracciones/{id}/asignar-responsable/
 
 - [ ] Leer `permite_carga_archivo` antes de pintar el botón de subir (no deducirlo).
 - [ ] Validar extensión en cliente (`.pdf` / `.docx`).
-- [ ] No mandar `usuario_id` en el endpoint de usuario: el dueño es quien sube.
+- [ ] No mandar `participante_id` en el endpoint de participante: el dueño es quien sube.
 - [ ] Polling de `estado` con `mis-cargas/`, y copy que diga "quedó en revisión", no "enviado".
 - [ ] En admin, dejar de exigir la persona antes de subir.
 - [ ] Manejar los 5 valores de `responsable_estado`, no solo `emparejado`.

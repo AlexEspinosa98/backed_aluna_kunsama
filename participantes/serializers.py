@@ -119,7 +119,7 @@ class PreguntaSerializer(serializers.ModelSerializer):
 class MomentoIndiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Momento
-        fields = ['id', 'orden', 'titulo', 'slug', 'tipo']
+        fields = ['id', 'orden', 'titulo', 'slug', 'tipo', 'permite_carga_archivo']
 
 
 class MomentoDetalleSerializer(serializers.ModelSerializer):
@@ -127,7 +127,12 @@ class MomentoDetalleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Momento
-        fields = ['id', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'preguntas']
+        # `permite_carga_archivo` es lo único que le dice al FE si mostrar el botón de subir un
+        # documento diligenciado para este momento (ver MomentoCargarArchivoView).
+        fields = [
+            'id', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'permite_carga_archivo',
+            'preguntas',
+        ]
 
     @extend_schema_field(PreguntaSerializer(many=True))
     def get_preguntas(self, momento):
@@ -217,6 +222,20 @@ class ExtraccionMomentoSerializer(serializers.ModelSerializer):
         if extraccion.participante_id is None:
             return None
         return f'{extraccion.participante.nombre} {extraccion.participante.apellido}'.strip()
+
+
+class CargarArchivoMomentoSerializer(serializers.Serializer):
+    """Subida de un documento diligenciado por el PROPIO participante (HU-56). A diferencia del
+    serializer de admin (ExtraccionMomentoCrearSerializer), acá no se puede indicar a quién
+    pertenece el documento: el dueño es siempre quien sube, se fuerza en la vista. Tampoco se dan
+    de alta participantes — quien sube ya está registrado, por el permiso de la vista."""
+    archivo = serializers.FileField()
+
+    def validate_archivo(self, archivo):
+        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+        if extension not in ('pdf', 'docx'):
+            raise serializers.ValidationError('Solo se aceptan archivos .pdf o .docx.')
+        return archivo
 
 
 class AsignarResponsableMomentoSerializer(serializers.Serializer):

@@ -571,6 +571,78 @@ class ExtraccionMomentoScopingTests(BaseJornadaTestCase):
         self.assertIn('archivo', resp.data)
 
 
+class CargaArchivoPorParticipanteTests(BaseJornadaTestCase):
+    """HU-56: el propio participante sube su documento, si el momento lo permite."""
+    def setUp(self):
+        super().setUp()
+        self.token = self.registrar_participante(correo='sube@uni.edu.co').data['token']
+        self.participante = Participante.objects.get(correo_institucional='sube@uni.edu.co')
+        self.otro_token = self.registrar_participante(correo='ajeno@uni.edu.co').data['token']
+        self.momento_individual.permite_carga_archivo = True
+        self.momento_individual.save(update_fields=['permite_carga_archivo'])
+        self.url = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/cargar-archivo/'
+        )
+
+    def _archivo(self, nombre='diligenciado.pdf'):
+        return SimpleUploadedFile(nombre, b'contenido', content_type='application/pdf')
+
+    def test_participante_puede_subir(self):
+        with patch('participantes.views.threading.Thread'):
+            resp = self.client.post(
+                self.url, {'archivo': self._archivo()}, format='multipart', **self.auth_header(self.token),
+            )
+        self.assertEqual(resp.status_code, 201)
+        extraccion = ExtraccionMomento.objects.get(id=resp.data['id'])
+        self.assertEqual(extraccion.participante, self.participante)
+
+    def test_403_si_el_momento_no_permite_carga(self):
+        self.momento_individual.permite_carga_archivo = False
+        self.momento_individual.save(update_fields=['permite_carga_archivo'])
+        resp = self.client.post(
+            self.url, {'archivo': self._archivo()}, format='multipart', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(ExtraccionMomento.objects.count(), 0)
+
+    def test_401_sin_token(self):
+        resp = self.client.post(self.url, {'archivo': self._archivo()}, format='multipart')
+        self.assertEqual(resp.status_code, 401)
+
+    def test_rechaza_extension_no_soportada(self):
+        resp = self.client.post(
+            self.url, {'archivo': SimpleUploadedFile('x.txt', b'x', content_type='text/plain')},
+            format='multipart', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)
+
+    def test_el_detalle_del_momento_expone_el_flag(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/',
+            **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['permite_carga_archivo'])
+
+    def test_mis_cargas_solo_muestra_las_propias(self):
+        otro_participante = Participante.objects.get(correo_institucional='ajeno@uni.edu.co')
+        ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.participante,
+            archivo=self._archivo('mia.pdf'),
+        )
+        ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=otro_participante,
+            archivo=self._archivo('ajena.pdf'),
+        )
+        url_cargas = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/mis-cargas/'
+        )
+        resp = self.client.get(url_cargas, **self.auth_header(self.token))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([e['participante'] for e in resp.data], [self.participante.id])
+
+
 class RespuestaMatrizTests(BaseJornadaTestCase):
     """Pregunta.tipo == matriz sobre el momento individual — una celda (fila×columna) por
     entrada, todas con el mismo pregunta_id. Mismo endpoint que las demás respuestas
