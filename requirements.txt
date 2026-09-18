@@ -15,3 +15,4 @@ openpyxl
 python-docx
 pdfplumber
 PyMuPDF
+Pillow

@@ -239,3 +239,56 @@ class AnalisisJornadaIA(models.Model):
 
     def __str__(self):
         return f'Análisis IA {self.id} · {self.jornada} · {self.estado}'
+
+
+class InfografiaJornada(models.Model):
+    """Una corrida de generación de infografía (3 imágenes) para un `Reporte` ya completo, vía el
+    modelo de imágenes de OpenAI (ver analitica/infografia_ia_openai.py). Usa como referencia
+    visual directa los `JornadaAsset` de `reporte.jornada` (fotos/logos + el system design más
+    reciente) y como contenido `reporte.analisis` (o, si aún no está calculado, el
+    `AnalisisJornadaIA` más reciente de esa jornada) — mismo espíritu que
+    `Reporte.presentacion_*`, pero produciendo imágenes en vez de HTML."""
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    reporte = models.ForeignKey(Reporte, on_delete=models.CASCADE, related_name='infografias')
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    prompt_usado = models.TextField(blank=True)
+    error_mensaje = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='infografias_solicitadas',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Infografía de jornada (IA)'
+        verbose_name_plural = 'Infografías de jornada (IA)'
+
+    def __str__(self):
+        return f'Infografía {self.id} · {self.reporte} · {self.estado}'
+
+
+class InfografiaImagen(models.Model):
+    """Cada una de las 3 imágenes que produce una `InfografiaJornada` completa."""
+    infografia = models.ForeignKey(InfografiaJornada, on_delete=models.CASCADE, related_name='imagenes')
+    archivo = models.ImageField(upload_to='analitica/infografias/%Y/%m/')
+    orden = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ['orden']
+
+    def __str__(self):
+        return f'Imagen {self.orden} · infografía {self.infografia_id}'

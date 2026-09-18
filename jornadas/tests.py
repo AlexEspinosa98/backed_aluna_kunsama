@@ -1,9 +1,10 @@
 import datetime
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
-from .models import Jornada, Momento, PerfilUsuario, Pregunta
+from .models import Jornada, JornadaAsset, Momento, PerfilUsuario, Pregunta
 
 Usuario = get_user_model()
 
@@ -224,3 +225,82 @@ class LoginCaseInsensitiveTests(APITestCase):
     def test_login_admin_si_distingue_mayusculas_en_password(self):
         resp = self.client.post('/api/admin/login/', {'username': 'john', 'password': 'clavesegura123'})
         self.assertEqual(resp.status_code, 400)
+
+
+class JornadaAssetTests(APITestCase):
+    """Assets (imágenes) y system design de una jornada, usados como referencia visual al generar
+    infografías (ver analitica/infografia_ia_openai.py)."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia_a = crear_dependencia('dependencia_a')
+        self.dependencia_b = crear_dependencia('dependencia_b')
+        self.jornada_a = crear_jornada('jornada-a', propietario=self.dependencia_a)
+        self.jornada_b = crear_jornada('jornada-b', propietario=self.dependencia_b)
+
+    def _imagen(self, nombre='logo.png'):
+        return SimpleUploadedFile(nombre, b'contenido-imagen', content_type='image/png')
+
+    def _pdf(self, nombre='marca.pdf'):
+        return SimpleUploadedFile(nombre, b'contenido-pdf', content_type='application/pdf')
+
+    def test_admin_sube_asset_imagen(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._imagen(),
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        asset = JornadaAsset.objects.get(id=resp.data['id'])
+        self.assertEqual(asset.jornada, self.jornada_a)
+        self.assertEqual(asset.nombre_archivo_original, 'logo.png')
+        self.assertEqual(asset.subido_por, self.admin)
+
+    def test_admin_sube_system_design_como_pdf(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN, 'archivo': self._pdf(),
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+
+    def test_rechaza_pdf_para_tipo_asset(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._pdf(),
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)
+
+    def test_rechaza_docx_para_system_design(self):
+        self.client.force_authenticate(user=self.admin)
+        archivo = SimpleUploadedFile(
+            'marca.docx', b'contenido',
+            content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        )
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN, 'archivo': archivo,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)
+
+    def test_dependencia_no_puede_subir_asset_a_jornada_ajena(self):
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_b.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._imagen(),
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(JornadaAsset.objects.count(), 0)
+
+    def test_dependencia_solo_ve_assets_de_su_jornada(self):
+        JornadaAsset.objects.create(jornada=self.jornada_a, archivo=self._imagen('a.png'))
+        JornadaAsset.objects.create(jornada=self.jornada_b, archivo=self._imagen('b.png'))
+        self.client.force_authenticate(user=self.dependencia_a)
+        resp = self.client.get('/api/admin/jornada-assets/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(resp.data[0]['jornada'], self.jornada_a.id)
+
+    def test_admin_borra_asset(self):
+        asset = JornadaAsset.objects.create(jornada=self.jornada_a, archivo=self._imagen())
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.delete(f'/api/admin/jornada-assets/{asset.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertEqual(JornadaAsset.objects.count(), 0)
