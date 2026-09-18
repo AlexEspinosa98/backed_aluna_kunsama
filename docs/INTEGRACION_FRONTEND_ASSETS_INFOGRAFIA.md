@@ -5,7 +5,7 @@ administración de una jornada):
 
 - **Assets y system design**: subir imágenes de la jornada y una guía de marca (system design,
   imagen o PDF) desde la creación/actualización de la Jornada.
-- **Infografía con IA**: generar 3 imágenes de infografía a partir de esos assets + la analítica
+- **Infografía con IA**: generar 3 láminas complementarias (16:9) a partir de esos assets + la analítica
   ya calculada de la jornada.
 
 Ambos endpoints son de **administración** (`/api/admin/...`, `Authorization: Token <hex>`), igual
@@ -143,7 +143,7 @@ assets de sus propias jornadas (`403` si intenta contra una ajena).
 
 ---
 
-## 2. Generar la infografía (3 imágenes con IA)
+## 2. Generar la infografía (3 láminas 16:9 con IA)
 
 ### Requisito previo
 
@@ -217,7 +217,7 @@ bien — llamar al modelo de imágenes puede tardar bastante más que un anális
 |----------------|---------------------------------------------------------------------|
 | `pendiente`    | "En cola"                                                            |
 | `procesando`   | "Generando infografía…" (puede tardar varios minutos)              |
-| `completo`     | Mostrar las 3 imágenes de `imagenes`                                |
+| `completo`     | Mostrar las láminas de `imagenes` en orden (ver abajo)             |
 | `error`        | Mostrar `error_mensaje` y ofrecer reintentar (nuevo `POST`)         |
 
 Respuesta cuando `estado: "completo"`:
@@ -226,7 +226,7 @@ Respuesta cuando `estado: "completo"`:
   "id": 7,
   "reporte": null,
   "estado": "completo",
-  "prompt_usado": "Diseña una infografía vertical...",
+  "prompt_usado": "Diseña una lámina APAISADA en formato 16:9...",
   "error_mensaje": "",
   "modelo_usado": "gpt-image-2",
   "imagenes": [
@@ -241,9 +241,23 @@ Respuesta cuando `estado: "completo"`:
 }
 ```
 
-`imagenes` viene ordenado por `orden` (0/1/2) — muéstrenlas en ese orden, son 3 variaciones de la
-misma infografía, no partes de una sola pieza. `archivo` es la URL directa a la imagen (sirve tal
-cual en un `<img src>` o para descarga).
+`imagenes` viene ordenado por `orden` (0/1/2) y **el orden importa**: no son variaciones de lo
+mismo, son **3 láminas complementarias**, como las diapositivas de una presentación:
+
+| `orden` | Lámina | Contenido |
+|---|---|---|
+| 0 | Portada | Nombre de la jornada + cifras clave de participación |
+| 1 | Hallazgos | Temas principales con sus datos y las visualizaciones |
+| 2 | Cierre | Conclusiones y mensajes accionables |
+
+Muéstrenlas siempre en ese orden (carrusel, galería o descarga como set). Cada una es **16:9
+(1920×1080)**, pensada para proyectar. `archivo` es la URL directa (sirve tal cual en un
+`<img src>` o para descarga).
+
+**Puede venir menos de 3.** Cada lámina es una llamada independiente al modelo; si una falla, las
+que sí salieron se conservan y el `estado` queda en `completo` con un `error_mensaje` que dice
+cuál faltó. Si reciben `error_mensaje` no vacío con `estado: "completo"`, muestren las imágenes
+que llegaron y un aviso — no lo traten como un fallo total.
 
 ### Qué usan de referencia visual (contexto, no requiere nada del frontend)
 
@@ -271,7 +285,7 @@ el frontend mande nada de esto en el `POST`: el backend los busca solo a partir 
 - [ ] Pedir la infografía con `POST /api/admin/infografias/` y `{"jornada": id}` — **no** hace falta crear un `Reporte`.
 - [ ] Manejar `409` (ya hay una en curso) sin dejar mandar un segundo `POST` mientras tanto.
 - [ ] Polling de `estado` contra `/api/admin/infografias/?jornada=<id>` hasta `completo`/`error`.
-- [ ] Mostrar las 3 `imagenes` en orden (`orden` 0/1/2), no asumir que viene una sola.
+- [ ] Mostrar las `imagenes` en orden (`orden` 0/1/2): son portada, hallazgos y cierre — no variaciones. Contemplar que puedan venir menos de 3.
 - [ ] En `error`, mostrar `error_mensaje` y permitir reintentar con un `POST` nuevo.
 
 ---
