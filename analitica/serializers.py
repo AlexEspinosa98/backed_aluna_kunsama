@@ -126,30 +126,51 @@ class InfografiaImagenSerializer(serializers.ModelSerializer):
 class InfografiaJornadaSerializer(serializers.ModelSerializer):
     imagenes = InfografiaImagenSerializer(many=True, read_only=True)
     jornada_slug = serializers.CharField(source='jornada.slug', read_only=True)
+    momento_titulo = serializers.CharField(source='momento.titulo', read_only=True, default=None)
 
     class Meta:
         model = InfografiaJornada
         fields = [
-            'id', 'jornada', 'jornada_slug', 'reporte', 'estado', 'prompt_usado', 'error_mensaje',
-            'modelo_usado', 'imagenes', 'solicitado_por', 'creado_en', 'actualizado_en',
-            'completado_en',
+            'id', 'jornada', 'jornada_slug', 'momento', 'momento_titulo', 'reporte', 'estado',
+            'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes', 'solicitado_por',
+            'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
 
 
 class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
-    """`reporte` es opcional: la infografía se pide a nivel de jornada y se alimenta de la
-    analítica que exista (el reporte integral vía AnalisisJornadaIA, o un Reporte del pipeline
-    local). Solo se manda cuando se quiere forzar uno concreto."""
+    """Se pide sobre UN alcance: la jornada completa (`jornada`) o un momento (`momento`), nunca
+    ambos. Con `momento`, la jornada se deriva sola de `momento.jornada` — pedirla también sería
+    darle al cliente la oportunidad de mandar una combinación incoherente.
+
+    `reporte` es opcional y solo aplica al alcance de jornada: fuerza que los datos salgan de ese
+    reporte concreto en vez del reporte integral."""
 
     class Meta:
         model = InfografiaJornada
-        fields = ['id', 'jornada', 'reporte', 'estado', 'creado_en']
+        fields = ['id', 'jornada', 'momento', 'reporte', 'estado', 'creado_en']
         read_only_fields = ['id', 'estado', 'creado_en']
+        extra_kwargs = {'jornada': {'required': False}}
 
     def validate(self, attrs):
+        jornada = attrs.get('jornada')
+        momento = attrs.get('momento')
         reporte = attrs.get('reporte')
-        if reporte is not None and reporte.jornada_id != attrs['jornada'].id:
+
+        if bool(jornada) == bool(momento):
+            raise serializers.ValidationError(
+                'Manda exactamente uno: "jornada" (para la jornada completa) o "momento" (para '
+                'un momento). No ambos, y no ninguno.'
+            )
+
+        if momento is not None:
+            if reporte is not None:
+                raise serializers.ValidationError({'reporte': (
+                    'Un reporte es de jornada completa, así que no se combina con "momento".'
+                )})
+            # Derivada, no pedida: así no hay forma de mandar un momento de otra jornada.
+            attrs['jornada'] = momento.jornada
+        elif reporte is not None and reporte.jornada_id != jornada.id:
             raise serializers.ValidationError(
                 {'reporte': 'Ese reporte no pertenece a la jornada seleccionada.'}
             )

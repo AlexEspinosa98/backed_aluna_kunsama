@@ -198,6 +198,13 @@ assets de sus propias jornadas (`403` si intenta contra una ajena).
 
 ## 2. Generar la infografía (3 láminas 16:9 con IA)
 
+> **Este apartado quedó corto desde HU-64.** La infografía ahora se puede pedir también sobre
+> **un momento** (`{"momento": <id>}`), no solo sobre la jornada, y el contrato completo —los dos
+> alcances, los códigos de error, el sondeo y cómo auditar la fuente— está en
+> **[INTEGRACION_FRONTEND_INFOGRAFIA.md](INTEGRACION_FRONTEND_INFOGRAFIA.md)**. Lo que sigue acá
+> cubre solo el alcance de jornada; úsenlo como referencia rápida y el otro documento como la
+> fuente de verdad.
+
 ### Requisito previo
 
 La infografía se genera a partir de la analítica **ya calculada** de la jornada. Basta con que

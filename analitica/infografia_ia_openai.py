@@ -68,7 +68,9 @@ SLIDES = (
     {
         'clave': 'portada',
         'instruccion': (
-            "LÁMINA 1 de 3 — PORTADA. El nombre de la jornada como título dominante, y debajo "
+            "LÁMINA 1 de 3 — PORTADA. Como título dominante, el nombre de lo que se está "
+            "analizando: el campo `momento` del JSON si viene (la infografía es de ese momento en "
+            "particular) o, si no, el de `jornada`. Debajo, "
             "las cifras clave de participación (participantes, momentos, tasa de participación) "
             "como 2 a 4 bloques grandes. Sin gráficos de datos ni listas de hallazgos: esta "
             "lámina es la carátula, tiene que leerse de un vistazo desde lejos."
@@ -173,10 +175,32 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
-def _obtener_datos_analitica(jornada, reporte=None):
-    """(datos, error) — nunca lanza excepción. Si se disparó desde un `Reporte` con `analisis`, esa
-    es la fuente (la más detallada). Si no, se usa el reporte integral más reciente de la jornada
-    (`AnalisisJornadaIA`), que es la vía que usa el panel. Si no hay ninguno, error controlado."""
+def _obtener_datos_analitica(jornada, reporte=None, momento=None):
+    """(datos, error) — nunca lanza excepción. El alcance manda: con `momento` se usa el análisis
+    integral de ESE momento y no se mira nada de la jornada, porque mezclar los dos produciría una
+    infografía que dice ser de un momento mientras muestra cifras de toda la jornada. Sin momento:
+    el `Reporte` explícito si trae análisis, si no el reporte integral de jornada, y como último
+    recurso cualquier `Reporte` completo."""
+    if momento is not None:
+        from .models import AnalisisMomentoIA
+
+        analisis_momento = AnalisisMomentoIA.objects.filter(
+            momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+        ).order_by('-creado_en').first()
+        if analisis_momento and analisis_momento.resultado:
+            return {
+                'fuente': 'analisis_momento',
+                'jornada': jornada.nombre,
+                'momento': momento.titulo,
+                'tipo_momento': momento.tipo,
+                'resumen_ejecutivo': analisis_momento.resultado.get('resumen_ejecutivo'),
+                'hallazgos': analisis_momento.resultado.get('hallazgos'),
+            }, None
+        return None, (
+            f'El momento "{momento.titulo}" no tiene un análisis integral completo. Genéralo '
+            'primero (POST /api/admin/analisis-momento-ia/) y vuelve a pedir la infografía.'
+        )
+
     if reporte is not None and reporte.analisis:
         return {
             'fuente': 'reporte',
@@ -327,12 +351,14 @@ def generar_infografias(infografia_id):
 
     infografia = None
     try:
-        infografia = InfografiaJornada.objects.select_related('jornada', 'reporte').get(pk=infografia_id)
+        infografia = InfografiaJornada.objects.select_related(
+            'jornada', 'momento', 'reporte',
+        ).get(pk=infografia_id)
         infografia.estado = InfografiaJornada.ESTADO_PROCESANDO
         infografia.save(update_fields=['estado'])
 
         jornada = infografia.jornada
-        datos, error = _obtener_datos_analitica(jornada, infografia.reporte)
+        datos, error = _obtener_datos_analitica(jornada, infografia.reporte, infografia.momento)
         if error:
             infografia.estado = InfografiaJornada.ESTADO_ERROR
             infografia.error_mensaje = error

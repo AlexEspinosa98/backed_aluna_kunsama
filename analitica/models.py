@@ -247,11 +247,15 @@ class InfografiaJornada(models.Model):
     los `JornadaAsset` de la jornada (fotos/logos + el system design más reciente) y como contenido
     la analítica ya calculada.
 
-    Cuelga de la JORNADA, no de un `Reporte`. La analítica puede venir de cualquiera de las dos
-    vías del módulo —el pipeline local (`Reporte`) o el reporte integral de una sola llamada
-    (`AnalisisJornadaIA`)— y exigir un `Reporte` dejaba sin salida a quien usara la segunda: tenía
-    que crear y esperar un reporte que no necesitaba solo para desbloquear el botón. `reporte`
-    queda como referencia opcional de cuál se usó, para cuando se dispara desde uno."""
+    Cuelga de la JORNADA, no de un `Reporte`. La analítica puede venir de cualquiera de las vías
+    del módulo —el pipeline local (`Reporte`), el reporte integral de jornada (`AnalisisJornadaIA`)
+    o el de un momento (`AnalisisMomentoIA`)— y exigir un `Reporte` dejaba sin salida a quien usara
+    las otras: tenía que crear y esperar un reporte que no necesitaba solo para desbloquear el
+    botón. `reporte` y `momento` quedan como referencia opcional de sobre qué se disparó.
+
+    `jornada` sigue siendo obligatoria incluso cuando la infografía es de un momento (se deriva de
+    `momento.jornada`): es lo que sostiene el scoping por propietario sin duplicar reglas, y evita
+    que consultar "las infografías de esta jornada" tenga que mirar dos campos."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -264,6 +268,10 @@ class InfografiaJornada(models.Model):
     ]
 
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='infografias')
+    momento = models.ForeignKey(
+        Momento, on_delete=models.CASCADE, null=True, blank=True, related_name='infografias',
+        help_text='Solo si la infografía es de UN momento. Null = es de la jornada completa.',
+    )
     reporte = models.ForeignKey(
         Reporte, on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
         help_text='Solo si se disparó desde un reporte concreto. Borrarlo no borra la infografía.',
@@ -286,7 +294,8 @@ class InfografiaJornada(models.Model):
         verbose_name_plural = 'Infografías de jornada (IA)'
 
     def __str__(self):
-        return f'Infografía {self.id} · {self.jornada} · {self.estado}'
+        alcance = self.momento or self.jornada
+        return f'Infografía {self.id} · {alcance} · {self.estado}'
 
 
 class InfografiaImagen(models.Model):
