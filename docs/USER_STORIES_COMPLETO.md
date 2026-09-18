@@ -1906,3 +1906,28 @@ Como participante de una jornada quiero poder subir yo mismo el documento de un 
 > módulo de formularios de la app, independiente de `Momento`) y se movió acá porque la necesidad
 > real era la carga por momento de jornada, no por instrumento. `Instrumento` no tiene (ni tuvo
 > nunca en producción) esta capacidad de autoservicio.
+
+### HU-57 — Assets y system design (guía de marca) por jornada
+Como administrador quiero poder subir, desde la creación/actualización de una jornada, las imágenes propias de esa jornada (fotos, logo) y su guía de marca, para que lo que el sistema genere después se vea como la jornada y no como una plantilla genérica.
+- `jornadas.JornadaAsset`: FK a `Jornada`, `tipo` (`asset` | `system_design`), `archivo`, `nombre_archivo_original`, `subido_por`. Modelo aparte y no campos sueltos en `Jornada` porque una jornada tiene **varios** assets y porque así la subida no obliga a reenviar el resto de la jornada en cada `PATCH`.
+- CRUD en `/api/admin/jornada-assets/` (`?jornada=<id>` para filtrar), mismo patrón de "recurso hijo con FK explícita" que ya usan `momentos`, `preguntas` y `jornadas-roles` — no un endpoint anidado bajo la jornada. **Sin `PUT`/`PATCH`**: un asset se reemplaza subiendo el nuevo y borrando el viejo; editar un archivo in place no significa nada.
+- **Formatos según el tipo, no uno solo para ambos**: `asset` acepta solo imágenes (`.png`/`.jpg`/`.jpeg`/`.webp`) porque van directo como referencia visual; `system_design` acepta además `.pdf`, que es como suele venir una guía de marca real.
+- **`.docx` no se acepta como system design**, aunque el resto del sistema sí lee Word (HU-44/55): un Word no se puede rasterizar a imagen sin LibreOffice, que el servidor no tiene, y una guía de marca sirve por cómo se ve, no por su texto. Exportar a PDF o imagen es el paso que se le pide a quien sube.
+- Se permite **historial** (varias filas del mismo tipo por jornada). La generación siempre usa el `system_design` más reciente y los `asset` más recientes: no hace falta borrar el anterior para corregir, y queda el registro de qué había antes.
+- Mismo scoping por dependencia que el resto del panel (`jornadas.scoping`): una dependencia solo ve y crea assets de sus propias jornadas.
+
+### HU-58 — Infografía de la jornada generada con IA a partir de los assets y la analítica
+Como administrador quiero generar, con un clic, una infografía lista para publicar con los resultados reales de la jornada, para no tener que pasarle los números a un diseñador cada vez que hay que comunicar lo que salió de una jornada.
+- **3 imágenes por corrida**, vía el modelo de imágenes de OpenAI (`OPENAI_IMAGE_MODEL`, por defecto `gpt-image-2`). Tres y no una porque el valor está en poder elegir: una sola salida obliga a regenerar hasta que guste, y regenerar cuesta una llamada completa.
+- **Imagen a imagen, no descripción en texto.** Los `JornadaAsset` (hasta 4 `asset` + el `system_design` más reciente) se mandan como **imágenes de entrada** a `images.edit`, no como una descripción textual de la paleta. Describir una guía de marca en palabras pierde justo lo que la hace guía; mandarla como pixeles deja que el modelo la copie. Si la jornada todavía no tiene ningún asset, cae a `images.generate` (solo texto) en vez de fallar.
+- **Los números nunca los pone el modelo**, mismo principio que el resto de `analitica/`: el prompt lleva la analítica **ya calculada** y pide explícitamente no inventar cifras. Fuente: `Reporte.analisis` si existe (la más completa) y, si está vacío, el `AnalisisJornadaIA` completo más reciente de esa jornada — así la infografía se puede pedir tanto desde la vía del pipeline local como desde la vía de una sola llamada a OpenAI, sin duplicar lógica.
+- **Cuelga de un `Reporte`, no de la jornada**: `POST /api/admin/reportes/{id}/generar-infografia/`, igual patrón que `generar-presentacion`. El reporte ya trae resuelto el alcance (jornada / un momento / varios) y el estado "esto ya está calculado", que es exactamente la precondición de la infografía.
+- **Una corrida es un objeto, no un campo**: `InfografiaJornada` (estado, `prompt_usado`, `modelo_usado`, error) + `InfografiaImagen` (las 3 imágenes, con `orden`). A diferencia de `Reporte.presentacion_*`, que sobrescribe, acá cada `POST` crea una corrida nueva — pedir otra versión no debería borrar la anterior, que puede ser la que ya se usó.
+- Asíncrono con polling, como todo lo de IA en el proyecto (`threading.Thread` + estados `pendiente`/`procesando`/`completo`/`error`), consultable en `/api/admin/infografias/?reporte=<id>`. Guard de `409` si ya hay una en curso para ese reporte y auto-sanación de huérfanas a los 10 minutos, igual que presentación y análisis IA.
+- `prompt_usado` se guarda: cuando una infografía sale mal, lo primero que hay que poder ver es qué se le pidió exactamente.
+- **Pendiente de infraestructura**: las imágenes generadas son los primeros archivos del proyecto que el frontend necesita **ver** por URL (hasta ahora `media/` solo lo leía el backend para mandarlo a OpenAI). Se sirve `MEDIA_URL` en desarrollo (`DEBUG=True`); en producción falta decidir cómo se expone (nginx, whitenoise o un bucket con `django-storages`).
+
+> Nota de implementación: el nombre del modelo de imágenes (`gpt-image-2`) y la forma exacta de su
+> respuesta quedan aislados detrás de la variable `OPENAI_IMAGE_MODEL` y de una sola función
+> (`_llamar_openai_imagenes`), para que ajustarlos si cambia el contrato real de la API sea un
+> cambio de una función y no de arquitectura.
