@@ -204,8 +204,10 @@ class ReporteViewSet(
     @action(detail=True, methods=['post'], url_path='generar-infografia')
     def generar_infografia(self, request, pk=None):
         """Atajo para pedir la infografía a partir de ESTE reporte. La vía general es
-        `POST /api/admin/infografias/` con la jornada, que no exige reporte alguno — esta se
-        mantiene para cuando se quiere forzar que los datos salgan de un reporte concreto."""
+        `POST /api/admin/infografias/` con la jornada o el momento, que no exige reporte alguno —
+        esta se mantiene para cuando se quiere forzar que los datos salgan de un reporte concreto.
+
+        Acepta `{"instrucciones": "..."}` en el cuerpo, igual que la vía general."""
         reporte = self.get_object()
         if reporte.estado != Reporte.ESTADO_COMPLETO:
             return Response(
@@ -222,6 +224,7 @@ class ReporteViewSet(
 
         infografia = InfografiaJornada.objects.create(
             jornada=reporte.jornada, reporte=reporte, solicitado_por=request.user,
+            instrucciones=(request.data.get('instrucciones') or '').strip(),
         )
         threading.Thread(target=generar_infografias, args=(infografia.id,), daemon=True).start()
 

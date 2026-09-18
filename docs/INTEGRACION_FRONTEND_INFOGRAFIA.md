@@ -47,6 +47,38 @@ sería un error que ustedes no podrían detectar desde el cliente.
 
 Con `momento` **no hay que mandar `jornada`**: el backend la deriva del propio momento.
 
+### Instrucciones personalizadas (`instrucciones`)
+
+Cualquiera de los dos alcances acepta un campo opcional `instrucciones`: texto libre que se integra
+al prompt para **cambiar el comportamiento y qué información aparece** en las láminas, sin
+necesidad de un despliegue.
+
+```json
+{
+  "momento": 61,
+  "instrucciones": "Tono informal y cercano, dirigido a estudiantes. No muestres la tasa de participación. Destaca las citas textuales por encima de los porcentajes."
+}
+```
+
+**Se anexan al prompt con precedencia, no lo reemplazan.** Van al final, con una indicación
+explícita de que mandan sobre todo lo anterior, así que pueden contradecir el estilo, la
+composición y el contenido por defecto. Lo que se conserva sin que haya que repetirlo son las
+reglas de formato (16:9, una idea por lámina, las 3 como serie coherente).
+
+> **La única regla que no pueden sobreescribir** es la de datos: el modelo usa exclusivamente las
+> cifras del análisis y nunca inventa ni estima. Está colocada después de sus instrucciones a
+> propósito — una lámina institucional con números inventados es desinformación publicada. Si
+> necesitan algo que choque con eso, háblenlo con el backend en vez de intentar rodearlo por el
+> prompt.
+
+Algunas cosas que sí funcionan bien por esta vía: cambiar el tono o el público objetivo, pedir que
+se omita o se enfatice cierta información, cambiar la estructura de una lámina, pedir un idioma
+distinto, ajustar la densidad de texto.
+
+`instrucciones` se devuelve también en las lecturas, así que pueden mostrar con qué se generó cada
+corrida y ofrecerlo como punto de partida para la siguiente. El `prompt_usado` guarda el prompt ya
+compuesto, con las instrucciones integradas, para comparar.
+
 ### Variante avanzada: forzar un reporte
 
 Solo para el alcance de jornada, `{"jornada": <id>, "reporte": <id>}` fuerza que los datos salgan
@@ -76,6 +108,7 @@ Respuesta `201` — arranca en background, todavía sin imágenes:
   "momento_titulo": "Diagnóstico de Articulación Académica",
   "reporte": null,
   "estado": "pendiente",
+  "instrucciones": "",
   "prompt_usado": "",
   "error_mensaje": "",
   "modelo_usado": "",
@@ -177,6 +210,8 @@ sobrescribe la anterior, así que regenerar no pierde la versión previa.
 - [ ] Manejar el `409` sin permitir un segundo `POST` del mismo alcance mientras tanto.
 - [ ] Mostrar las `imagenes` en orden (portada, hallazgos, cierre) y contemplar que vengan menos de 3.
 - [ ] Usar `archivo` tal cual, sin anteponerle la base URL.
+- [ ] Si exponen un campo de instrucciones en la UI, mandarlo como `instrucciones` y mostrar
+      el valor de la corrida anterior como punto de partida.
 
 ---
 

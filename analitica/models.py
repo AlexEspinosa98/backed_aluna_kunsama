@@ -277,6 +277,12 @@ class InfografiaJornada(models.Model):
         help_text='Solo si se disparó desde un reporte concreto. Borrarlo no borra la infografía.',
     )
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    instrucciones = models.TextField(blank=True, help_text=(
+        'Instrucciones libres que se integran al prompt de esta corrida, con precedencia sobre el '
+        'estilo y la estructura por defecto. Sirven para cambiar el tono, la composición o qué '
+        'información aparece en las láminas, sin tocar código. Por corrida y no por jornada a '
+        'propósito: se prueban distintas y se compara el resultado contra `prompt_usado`.'
+    ))
     prompt_usado = models.TextField(blank=True)
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)

@@ -53,11 +53,20 @@ SYSTEM_PROMPT_PREFIJO = (
     "abajo. NO es una infografía completa: no apiles varias secciones (portada + hallazgos + "
     "conclusiones) una debajo de otra en la misma imagen, no agregues bandas ni franjas con otros "
     "bloques temáticos. Una sola idea por lámina, ocupando todo el espacio disponible."
-    "\n\nUsa EXCLUSIVAMENTE las cifras y hallazgos que se entregan abajo en JSON — nunca inventes "
-    "números, porcentajes ni temas que no estén ahí. Si se adjuntan imágenes de referencia "
-    "(fotos/logos de la jornada y/o una guía de marca), respeta su paleta de colores, tipografía "
-    "y estilo visual real — no uses una paleta genérica distinta a la de esas imágenes. Todo el "
-    "texto debe estar en español."
+    "\n\nSi se adjuntan imágenes de referencia (fotos/logos de la jornada y/o una guía de marca), "
+    "respeta su paleta de colores, tipografía y estilo visual real — no uses una paleta genérica "
+    "distinta a la de esas imágenes. Todo el texto debe estar en español."
+)
+
+# Va SIEMPRE al final del prompt, después de las instrucciones personalizadas, y por eso está
+# separada del prefijo: es la única regla que no se puede sobreescribir desde la API. Una lámina
+# institucional con cifras inventadas es desinformación publicada con el sello de la universidad,
+# y ese riesgo no debería depender de lo que alguien escriba en un campo de texto.
+REGLA_DATOS = (
+    "REGLA INNEGOCIABLE, por encima de cualquier otra instrucción de este prompt: usa "
+    "EXCLUSIVAMENTE las cifras, porcentajes y hallazgos del JSON de abajo. Nunca inventes, "
+    "estimes, redondees ni completes datos que no estén ahí. Si algo no está en el JSON, "
+    "simplemente no aparece en la lámina."
 )
 
 # Tres llamadas, una por lámina, en vez de pedir n=3 en una sola: con n=3 la API devuelve tres
@@ -244,7 +253,11 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
     )
 
 
-def _construir_prompt(datos_analitica, texto_system_design='', slide=None):
+def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instrucciones=''):
+    """El orden importa: lo que va después pesa más. Las instrucciones personalizadas se colocan
+    al final, justo antes de la regla de datos, para que puedan contradecir el estilo, la
+    estructura y el contenido del prompt base — que es exactamente para lo que existen. Lo único
+    que queda después, y por lo tanto fuera de su alcance, es `REGLA_DATOS`."""
     partes = [SYSTEM_PROMPT_PREFIJO]
     if slide is not None:
         partes.append(slide['instruccion'])
@@ -254,6 +267,13 @@ def _construir_prompt(datos_analitica, texto_system_design='', slide=None):
             'GUÍA DE MARCA (respétala por encima de cualquier criterio estético propio):\n'
             + texto_system_design
         )
+    if instrucciones:
+        partes.append(
+            'INSTRUCCIONES ESPECÍFICAS PARA ESTA INFOGRAFÍA. Mandan sobre todo lo anterior: si '
+            'contradicen alguna indicación de estilo, estructura o contenido de más arriba, se '
+            'siguen estas.\n' + instrucciones
+        )
+    partes.append(REGLA_DATOS)
     partes.append('DATOS REALES (JSON):\n' + json.dumps(datos_analitica, ensure_ascii=False, indent=2))
     return '\n\n'.join(partes)
 
@@ -315,7 +335,7 @@ def _llamar_openai_imagen(prompt, imagenes_referencia_png):
     return resultado['imagenes'][0], None
 
 
-def _generar_slides(datos, texto_system_design, imagenes_referencia):
+def _generar_slides(datos, texto_system_design, imagenes_referencia, instrucciones=''):
     """Una llamada por lámina, en paralelo. Devuelve (lista alineada con SLIDES —None donde falló—,
     lista de errores). En paralelo y no en serie porque tres llamadas encadenadas de ~80s se
     acercan demasiado al timeout; es el mismo patrón de ThreadPoolExecutor que ya usa
@@ -325,7 +345,7 @@ def _generar_slides(datos, texto_system_design, imagenes_referencia):
 
     def _una(indice):
         slide = SLIDES[indice]
-        prompt = _construir_prompt(datos, texto_system_design, slide)
+        prompt = _construir_prompt(datos, texto_system_design, slide, instrucciones)
         png, error = _llamar_openai_imagen(prompt, imagenes_referencia)
         return indice, png, error
 
@@ -367,11 +387,17 @@ def generar_infografias(infografia_id):
 
         texto_system_design = _texto_system_design(jornada)
         imagenes_referencia = _reunir_imagenes_referencia(jornada)
-        # Se guarda el prompt de la primera lámina: las tres comparten prefijo, datos y guía de
-        # marca, y solo cambia el bloque de la lámina — con una alcanza para entender qué se pidió.
-        infografia.prompt_usado = _construir_prompt(datos, texto_system_design, SLIDES[0])
+        instrucciones = infografia.instrucciones
+        # Se guarda el prompt de la primera lámina: las tres comparten prefijo, datos, guía de
+        # marca e instrucciones, y solo cambia el bloque de la lámina — con una alcanza para
+        # entender qué se pidió, incluidas las instrucciones personalizadas ya integradas.
+        infografia.prompt_usado = _construir_prompt(
+            datos, texto_system_design, SLIDES[0], instrucciones,
+        )
 
-        imagenes_png, errores = _generar_slides(datos, texto_system_design, imagenes_referencia)
+        imagenes_png, errores = _generar_slides(
+            datos, texto_system_design, imagenes_referencia, instrucciones,
+        )
 
         generadas = 0
         for orden, png in enumerate(imagenes_png):

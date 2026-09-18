@@ -132,8 +132,8 @@ class InfografiaJornadaSerializer(serializers.ModelSerializer):
         model = InfografiaJornada
         fields = [
             'id', 'jornada', 'jornada_slug', 'momento', 'momento_titulo', 'reporte', 'estado',
-            'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes', 'solicitado_por',
-            'creado_en', 'actualizado_en', 'completado_en',
+            'instrucciones', 'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes',
+            'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
 
@@ -144,11 +144,14 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
     darle al cliente la oportunidad de mandar una combinación incoherente.
 
     `reporte` es opcional y solo aplica al alcance de jornada: fuerza que los datos salgan de ese
-    reporte concreto en vez del reporte integral."""
+    reporte concreto en vez del reporte integral.
+
+    `instrucciones` es texto libre que se integra al prompt con precedencia sobre el estilo y la
+    estructura por defecto — ver `_construir_prompt` en infografia_ia_openai.py."""
 
     class Meta:
         model = InfografiaJornada
-        fields = ['id', 'jornada', 'momento', 'reporte', 'estado', 'creado_en']
+        fields = ['id', 'jornada', 'momento', 'reporte', 'instrucciones', 'estado', 'creado_en']
         read_only_fields = ['id', 'estado', 'creado_en']
         extra_kwargs = {'jornada': {'required': False}}
 
