@@ -18,6 +18,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+from jornadas.models import Pregunta
+
 from .analysis import _estadisticas_pregunta
 
 FONT_NAME = 'Arial'
@@ -355,6 +357,9 @@ def _escribir_bloque_pregunta(wsp, row, m, p, datos):
     is_mesa = m.tipo == 'mesa'
     universo = datos['total_mesas'] if is_mesa else datos['total_participantes']
     opciones = list(p.opciones.all()) if p.tipo in ('unica', 'multiple') else []
+    # `audio` se exporta como texto, igual que `abierta`: lo que se guardó es la transcripción que
+    # mandó el cliente, no una opción marcada (ver Pregunta.TIPOS_TEXTO_LIBRE).
+    es_texto_libre = p.tipo in Pregunta.TIPOS_TEXTO_LIBRE
     stats = _estadisticas_pregunta(p)
     total_resp = stats.get('total_respuestas', 0)
     ncols = BLOQUE_NCOLS
@@ -429,7 +434,7 @@ def _escribir_bloque_pregunta(wsp, row, m, p, datos):
             voc = mm['vocero']
             voc_name = f'{voc.nombre} {voc.apellido}' if voc else 'Sin vocero'
             if r:
-                valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
+                valor = r.texto_libre if es_texto_libre else ('; '.join(o.texto for o in r.opciones.all()) or '—')
                 fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
             else:
                 valor, fecha = '', ''
@@ -461,7 +466,7 @@ def _escribir_bloque_pregunta(wsp, row, m, p, datos):
         for part in datos['participantes']:
             r = resp_por_participante.get(part.id)
             if r:
-                valor = r.texto_libre if p.tipo == 'abierta' else ('; '.join(o.texto for o in r.opciones.all()) or '—')
+                valor = r.texto_libre if es_texto_libre else ('; '.join(o.texto for o in r.opciones.all()) or '—')
                 fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
             else:
                 valor, fecha = '', ''

@@ -1,4 +1,4 @@
-# Estructura de preguntas — los 5 tipos completos
+# Estructura de preguntas — los 6 tipos completos
 
 Referencia rápida: para cada tipo de `Pregunta`, cómo se **crea** (admin), qué **trae** al leerla
 (`GET .../momentos/{id}/` o `GET /api/admin/preguntas/?momento=<id>`), cómo se **responde**
@@ -239,6 +239,68 @@ respondidas (no exige que todas las filas estén completas).
   { "id": 6003, "pregunta": 1300, "fila": null, "fila_lista": 56, "columna": 30, "texto_libre": "Ana Gómez", "opciones": [], "actualizado_en": "..." }
 ]
 ```
+
+---
+
+## 6. `audio` — el cliente graba y transcribe; el backend guarda solo el texto (HU-52, nuevo)
+
+El participante contesta hablando. **La transcripción la hace el front**, y lo único que llega
+acá es el texto resultante. El backend **no recibe, no guarda y no sirve ningún archivo de
+audio** — no hay campo de archivo, no hay upload, no hay URL de audio en ninguna respuesta.
+
+Para el backend, `audio` es idéntica a `abierta`: se responde con `texto_libre` y se guarda en
+`Respuesta.texto_libre`. Existe como tipo aparte para que el front sepa qué renderizar (un
+grabador en vez de un textarea) y para que la analítica pueda distinguir de dónde salió el texto.
+
+### Crear
+```bash
+POST /api/admin/preguntas/
+{
+  "momento": 61,
+  "tipo": "audio",
+  "texto": "Cuéntanos en voz alta qué te llevas de la jornada",
+  "orden": 6,
+  "obligatoria": true
+}
+```
+No lleva opciones, ni filas, ni columnas — no hay nada más que crear.
+
+### Cómo se lee (dentro de `GET .../momentos/{id}/`)
+```json
+{
+  "id": 1400,
+  "tipo": "audio",
+  "texto": "Cuéntanos en voz alta qué te llevas de la jornada",
+  "orden": 6,
+  "obligatoria": true,
+  "opciones": [],
+  "filas": [],
+  "columnas": []
+}
+```
+
+### Responder — exactamente igual que una `abierta`
+```json
+{ "respuestas": [
+  { "pregunta_id": 1400, "texto_libre": "Me llevo la idea de que el diálogo de saberes no es un paso previo, es el método." }
+] }
+```
+`texto_libre` es la transcripción ya hecha por el cliente. `400` si se mandan `opcion_ids`,
+`fila_id`, `columna_id` o `fila_temporal`. Si `obligatoria: true`, un `texto_libre` vacío o solo
+con espacios también es `400`.
+
+### Leer respuesta guardada
+```json
+[{ "id": 7001, "pregunta": 1400, "participante": 343, "mesa": null, "fila": null, "fila_lista": null,
+   "columna": null, "texto_libre": "Me llevo la idea de que el diálogo de saberes no es un paso previo, es el método.",
+   "opciones": [], "actualizado_en": "2026-09-18T12:00:00Z" }]
+```
+
+### En analítica y exportes
+Cuenta como texto libre, igual que `abierta`: entra al pipeline de tópicos/BERTopic, al análisis
+por IA y sale como texto (no como conteo de opciones) en el Excel. Si algún día se quisiera
+guardar el audio en sí, sería otro modelo y otro ticket — hoy no se almacena nada más que la
+transcripción.
 
 ---
 

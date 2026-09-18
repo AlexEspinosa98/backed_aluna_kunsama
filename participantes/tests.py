@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
 from .extraccion_momento_ia_openai import _limpiar_y_validar, aprobar_extraccion_momento
-from .models import ExtraccionMomento, Participante, Respuesta
+from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
 
 
 class BaseJornadaTestCase(APITestCase):
@@ -587,3 +587,268 @@ class RespuestaMatrizTests(BaseJornadaTestCase):
             format='json', **self.auth_header(self.token),
         )
         self.assertEqual(resp.status_code, 400)
+
+
+class RespuestaAudioTests(BaseJornadaTestCase):
+    """Pregunta.tipo == audio (HU-52). El front graba, transcribe de su lado y nos manda SOLO el
+    texto — para el backend es idéntica a una `abierta` (se guarda en Respuesta.texto_libre, no
+    entra ni se guarda ningún archivo), y lo que estos tests fijan es justamente eso: que el tipo
+    nuevo no abra una puerta distinta (nada de opciones ni de celdas) y que no se quede fuera de
+    la validación de obligatoriedad."""
+    def setUp(self):
+        super().setUp()
+        self.pregunta_audio = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_AUDIO,
+            texto='Cuéntanos en voz alta tu experiencia', orden=4, obligatoria=True,
+        )
+        self.token = self.registrar_participante().data['token']
+        self.url = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/'
+        )
+
+    def _respuestas_base(self, extra=None):
+        base = [
+            {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Mi reflexión.'},
+            {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_a.id]},
+        ]
+        return {'respuestas': base + (extra or [])}
+
+    def test_guarda_la_transcripcion_como_texto_libre(self):
+        resp = self.client.post(
+            self.url,
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_audio.id, 'texto_libre': 'Me pareció muy enriquecedor el taller.'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        guardada = Respuesta.objects.get(pregunta=self.pregunta_audio)
+        self.assertEqual(guardada.texto_libre, 'Me pareció muy enriquecedor el taller.')
+        self.assertEqual(guardada.opciones.count(), 0)
+        self.assertIsNone(guardada.fila)
+        self.assertIsNone(guardada.fila_lista)
+        self.assertIsNone(guardada.columna)
+
+    def test_la_transcripcion_se_lee_de_vuelta(self):
+        self.client.post(
+            self.url,
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_audio.id, 'texto_libre': 'Transcripción de prueba.'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        resp = self.client.get(self.url, **self.auth_header(self.token))
+        self.assertEqual(resp.status_code, 200)
+        fila = next(r for r in resp.data if r['pregunta'] == self.pregunta_audio.id)
+        self.assertEqual(fila['texto_libre'], 'Transcripción de prueba.')
+        self.assertEqual(fila['opciones'], [])
+
+    def test_reenviar_actualiza_la_misma_respuesta(self):
+        for texto in ('Primera versión.', 'Segunda versión corregida.'):
+            resp = self.client.post(
+                self.url,
+                self._respuestas_base([{'pregunta_id': self.pregunta_audio.id, 'texto_libre': texto}]),
+                format='json', **self.auth_header(self.token),
+            )
+            self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_audio).count(), 1)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.pregunta_audio).texto_libre, 'Segunda versión corregida.',
+        )
+
+    def test_rechaza_opciones_en_pregunta_audio(self):
+        # La opción se crea colgada de la PROPIA pregunta audio a propósito: si se usara una de
+        # otra pregunta, el 400 vendría del chequeo genérico de "esa opción no es de esta
+        # pregunta" y este test pasaría sin probar nada del tipo nuevo.
+        opcion_colada = OpcionPregunta.objects.create(pregunta=self.pregunta_audio, texto='No debería', orden=1)
+        resp = self.client.post(
+            self.url,
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_audio.id, 'texto_libre': 'x', 'opcion_ids': [opcion_colada.id]},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_rechaza_fila_columna_o_fila_temporal_en_pregunta_audio(self):
+        fila = FilaMatrizPregunta.objects.create(pregunta=self.pregunta_abierta, texto='f', orden=1)
+        columna = ColumnaMatrizPregunta.objects.create(pregunta=self.pregunta_abierta, texto='c', orden=1)
+        for extra in (
+            {'fila_id': fila.id},
+            {'columna_id': columna.id},
+            {'fila_temporal': 1},
+        ):
+            with self.subTest(extra=extra):
+                entrada = {'pregunta_id': self.pregunta_audio.id, 'texto_libre': 'x', **extra}
+                resp = self.client.post(
+                    self.url, self._respuestas_base([entrada]),
+                    format='json', **self.auth_header(self.token),
+                )
+                self.assertEqual(resp.status_code, 400)
+
+    def test_audio_obligatoria_sin_entrada_es_faltante(self):
+        resp = self.client.post(
+            self.url, self._respuestas_base(), format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('faltantes', resp.data)
+
+    def test_audio_obligatoria_con_texto_en_blanco_se_rechaza(self):
+        resp = self.client.post(
+            self.url,
+            self._respuestas_base([{'pregunta_id': self.pregunta_audio.id, 'texto_libre': '   '}]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_audio_no_obligatoria_acepta_no_venir(self):
+        self.pregunta_audio.obligatoria = False
+        self.pregunta_audio.save()
+        resp = self.client.post(
+            self.url, self._respuestas_base(), format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_audio).count(), 0)
+
+    def test_el_momento_expone_la_pregunta_audio_sin_opciones_ni_celdas(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/',
+            **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        pregunta = next(p for p in resp.data['preguntas'] if p['id'] == self.pregunta_audio.id)
+        self.assertEqual(pregunta['tipo'], 'audio')
+        self.assertEqual(pregunta['opciones'], [])
+        self.assertEqual(pregunta['filas'], [])
+        self.assertEqual(pregunta['columnas'], [])
+
+    def test_estadisticas_tratan_audio_como_texto_libre(self):
+        """Sin esto una pregunta audio caería en la rama de opción cerrada y el Excel/el informe
+        IA reportarían 0 respuestas aunque las transcripciones estén guardadas."""
+        from analitica.analysis import _estadisticas_pregunta
+
+        self.client.post(
+            self.url,
+            self._respuestas_base([{'pregunta_id': self.pregunta_audio.id, 'texto_libre': 'Algo dicho.'}]),
+            format='json', **self.auth_header(self.token),
+        )
+        estad = _estadisticas_pregunta(self.pregunta_audio)
+        self.assertEqual(estad['total_respuestas'], 1)
+        self.assertEqual(estad['respuestas_no_vacias'], 1)
+        self.assertNotIn('conteo_opciones', estad)
+
+
+class PreguntaAudioAdminTests(APITestCase):
+    """El tipo nuevo tiene que poder crearse desde el panel de administración como cualquier
+    otro — si `audio` no está en Pregunta.TIPO_CHOICES, DRF lo rechaza con 400 en el ChoiceField
+    que arma el ModelSerializer."""
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            username='admin_audio', password='pass12345', is_staff=True,
+        )
+        self.jornada = Jornada.objects.create(
+            slug='jornada-audio', nombre='Jornada audio',
+            fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
+        )
+        self.momento = Momento.objects.create(
+            jornada=self.jornada, orden=1, titulo='Voces', tipo=Momento.TIPO_INDIVIDUAL,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def test_crea_pregunta_tipo_audio(self):
+        resp = self.client.post('/api/admin/preguntas/', {
+            'momento': self.momento.id, 'tipo': 'audio', 'texto': '¿Qué te llevas de hoy?',
+            'orden': 1, 'obligatoria': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.data['tipo'], 'audio')
+        self.assertEqual(Pregunta.objects.get(id=resp.data['id']).tipo, Pregunta.TIPO_AUDIO)
+
+    def test_rechaza_un_tipo_inexistente(self):
+        resp = self.client.post('/api/admin/preguntas/', {
+            'momento': self.momento.id, 'tipo': 'audio_archivo', 'texto': 'x',
+            'orden': 2, 'obligatoria': False,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('tipo', resp.data)
+
+
+class RespuestaListaRegresionTests(BaseJornadaTestCase):
+    """Red de seguridad mínima para el tipo `lista` (HU-51), que se agregó sin tests: el tipo
+    `audio` tocó la validación compartida (`_validar_entrada`, que ahora sí recibe
+    `fila_temporal` en el camino normal de guardado), así que acá se fija que una lista siga
+    guardándose por filas dinámicas y siga rechazando `fila_id`."""
+    def setUp(self):
+        super().setUp()
+        self.pregunta_lista = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_LISTA,
+            texto='Mapa de capacidades', orden=5, obligatoria=True,
+        )
+        self.col_nombre = ColumnaMatrizPregunta.objects.create(
+            pregunta=self.pregunta_lista, texto='Profesor(a)', orden=1,
+        )
+        self.col_formacion = ColumnaMatrizPregunta.objects.create(
+            pregunta=self.pregunta_lista, texto='Formación', orden=2,
+        )
+        self.token = self.registrar_participante().data['token']
+        self.url = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/'
+        )
+
+    def _respuestas_base(self, extra=None):
+        base = [
+            {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Mi reflexión.'},
+            {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_a.id]},
+        ]
+        return {'respuestas': base + (extra or [])}
+
+    def _dos_filas(self):
+        return [
+            {'pregunta_id': self.pregunta_lista.id, 'fila_temporal': 1, 'columna_id': self.col_nombre.id, 'texto_libre': 'Juan Pérez'},
+            {'pregunta_id': self.pregunta_lista.id, 'fila_temporal': 1, 'columna_id': self.col_formacion.id, 'texto_libre': 'Magíster'},
+            {'pregunta_id': self.pregunta_lista.id, 'fila_temporal': 2, 'columna_id': self.col_nombre.id, 'texto_libre': 'Ana Gómez'},
+            {'pregunta_id': self.pregunta_lista.id, 'fila_temporal': 2, 'columna_id': self.col_formacion.id, 'texto_libre': 'Doctora'},
+        ]
+
+    def test_guarda_una_fila_por_fila_temporal(self):
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._dos_filas()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.pregunta_lista).count(), 2)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_lista).count(), 4)
+
+    def test_reenviar_reemplaza_las_filas_anteriores(self):
+        self.client.post(
+            self.url, self._respuestas_base(self._dos_filas()),
+            format='json', **self.auth_header(self.token),
+        )
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._dos_filas()[:2]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.pregunta_lista).count(), 1)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_lista).count(), 2)
+
+    def test_rechaza_fila_id_en_pregunta_lista(self):
+        fila_ajena = FilaMatrizPregunta.objects.create(pregunta=self.pregunta_lista, texto='f', orden=1)
+        entradas = self._dos_filas()
+        entradas[0] = {**entradas[0], 'fila_id': fila_ajena.id}
+        resp = self.client.post(
+            self.url, self._respuestas_base(entradas),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_lista_obligatoria_exige_al_menos_una_fila_completa(self):
+        resp = self.client.post(
+            self.url,
+            self._respuestas_base([
+                {'pregunta_id': self.pregunta_lista.id, 'fila_temporal': 1, 'columna_id': self.col_nombre.id, 'texto_libre': 'Juan Pérez'},
+            ]),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('faltantes', resp.data)

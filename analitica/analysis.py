@@ -571,10 +571,14 @@ def _extraer_valores_llm(textos):
 # ---------------------------------------------------------------------------
 
 def _estadisticas_pregunta(pregunta):
+    from jornadas.models import Pregunta
     from participantes.models import Respuesta
 
     respuestas_qs = Respuesta.objects.filter(pregunta=pregunta)
-    if pregunta.tipo == 'abierta':
+    # `audio` cuenta igual que `abierta`: su respuesta es la transcripción en texto_libre, no
+    # opciones (ver Pregunta.TIPOS_TEXTO_LIBRE) — sin esto caería en la rama de conteo_opciones
+    # y reportaría 0 en el Excel y en los informes, con las transcripciones ahí en la base.
+    if pregunta.tipo in Pregunta.TIPOS_TEXTO_LIBRE:
         return {
             'total_respuestas': respuestas_qs.count(),
             'respuestas_no_vacias': respuestas_qs.exclude(texto_libre='').count(),
@@ -868,9 +872,11 @@ def analizar_pregunta(pregunta, plantilla=None):
     `PlantillaAnalisis` editable vía /api/admin/plantillas-analisis/) se reenvía a los agentes de
     redacción para que sus instrucciones de tono/profundidad apliquen también a nivel de
     pregunta, no solo en la síntesis final de la jornada."""
+    from jornadas.models import Pregunta
+
     estad = _estadisticas_pregunta(pregunta)
 
-    if pregunta.tipo == 'abierta':
+    if pregunta.tipo in Pregunta.TIPOS_TEXTO_LIBRE:
         from participantes.models import Respuesta
         textos = list(
             Respuesta.objects.filter(pregunta=pregunta)

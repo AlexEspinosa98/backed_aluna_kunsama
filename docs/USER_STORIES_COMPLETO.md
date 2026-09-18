@@ -1839,3 +1839,19 @@ Como administrador quiero un tipo de pregunta para tablas donde no sé de antema
 - **Cada envío reemplaza por completo las filas existentes** de esa pregunta para ese dueño (participante o mesa) — a diferencia de matriz/abierta/única, que hacen `update_or_create` celda por celda, acá no se intenta emparejar filas de un envío con filas de un envío anterior (un `fila_temporal=1` de hoy no es necesariamente la misma fila que un `fila_temporal=1` de ayer). Reenviar con menos filas que antes borra las que sobran; con más, las agrega.
 - **Obligatoriedad** (HU-24): se exige que **al menos una fila** tenga **todas** sus columnas respondidas — no que todas las filas estén completas, solo que exista al menos un registro real.
 - **Límite conocido**: el extractor de documentos con IA (HU-44/45) todavía no sabe llenar preguntas tipo lista — las omite (`preguntas_omitidas`) en vez de fallar, así que no rompe nada, pero tampoco las completa automáticamente por ahora.
+
+### HU-52 — Pregunta tipo "audio": el cliente graba y transcribe, el backend guarda solo el texto
+Como administrador quiero poder pedir una respuesta hablada (ej. "cuéntanos en voz alta qué te llevas de la jornada"), porque hay participantes a quienes se les da mucho mejor hablar que escribir, sin que eso obligue al backend a recibir, almacenar ni servir archivos de audio.
+- `Pregunta.tipo` ahora acepta `audio` además de `abierta`/`unica`/`multiple`/`matriz`/`lista`.
+- **El backend nunca ve un audio**: el front graba, hace la transcripción **de su lado** y manda únicamente el texto. No hay endpoint de subida, no hay campo de archivo, no hay URL de audio en ninguna respuesta. Lo que se guarda es `Respuesta.texto_libre`, exactamente igual que en una pregunta `abierta`.
+- **Se responde igual que una `abierta`** (mismo endpoint `POST .../momentos/{id}/respuestas/`):
+  ```json
+  {"respuestas": [
+    {"pregunta_id": 1400, "texto_libre": "Me llevo la idea de que el diálogo de saberes no es un paso previo, es el método."}
+  ]}
+  ```
+  `400` si se mandan `opcion_ids`, `fila_id`, `columna_id` o `fila_temporal`. **Obligatoriedad** (HU-24): igual que `abierta` — un `texto_libre` vacío o solo con espacios no cuenta como respondida.
+- **Por qué es un tipo propio y no un `abierta` con una bandera**: el backend guarda lo mismo, pero el front necesita saber qué renderizar (grabador + transcriptor vs. textarea), y la analítica poder distinguir de dónde salió el texto. Un booleano sobre `abierta` dejaría a `tipo` mintiendo sobre lo que la pregunta es y obligaría a mirar dos campos en cada rama.
+- **Analítica y exportes**: `audio` cuenta como texto libre en todas partes (tópicos/BERTopic, análisis por IA, Excel), vía `Pregunta.TIPOS_TEXTO_LIBRE` — la tupla que agrupa `abierta` + `audio` y que toda rama que pregunte "¿es de texto libre?" debe usar. Sin eso una pregunta `audio` caía en la rama de opción cerrada y se reportaba con 0 respuestas aunque las transcripciones estuvieran guardadas.
+- **Alcance**: solo `jornadas.Pregunta`. `instrumentos.PreguntaInstrumento` es otro modelo, con su propio flujo, y no se tocó.
+- **Límite conocido**: el backend no valida idioma, longitud ni calidad de la transcripción — confía en lo que mande el cliente, igual que con cualquier texto libre. Si algún día se quisiera conservar el audio original, sería otro modelo y otro ticket (con sus propias decisiones de almacenamiento y retención).

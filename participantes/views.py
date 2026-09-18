@@ -176,9 +176,13 @@ def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None, f
     if fila is not None or columna is not None or fila_temporal is not None:
         raise ValidationError(f'La pregunta {pregunta.id} no es de tipo matriz/lista, no acepta fila/columna.')
 
-    if pregunta.tipo == Pregunta.TIPO_ABIERTA:
+    # `abierta` y `audio` se validan y se guardan idéntico: la respuesta es texto_libre y nada
+    # más. En `audio` ese texto es la transcripción que el propio cliente generó a partir de la
+    # grabación — acá nunca llega el archivo de audio, así que no hay nada extra que validar
+    # (ver Pregunta.TIPOS_TEXTO_LIBRE).
+    if pregunta.tipo in Pregunta.TIPOS_TEXTO_LIBRE:
         if opciones:
-            raise ValidationError(f'La pregunta {pregunta.id} es abierta, no acepta opciones.')
+            raise ValidationError(f'La pregunta {pregunta.id} es de texto libre, no acepta opciones.')
         if pregunta.obligatoria and not texto_libre.strip():
             raise ValidationError(f'La pregunta {pregunta.id} es obligatoria.')
     else:
@@ -247,7 +251,14 @@ def _guardar_respuestas_lista(pregunta, items, participante, dueño):
         opciones = item.get('opciones', [])
         columna = item.get('columna')
         fila_temporal = item.get('fila_temporal')
-        _validar_entrada(pregunta, texto_libre, opciones, columna=columna, fila_temporal=fila_temporal)
+        # `fila` se pasa aunque una lista nunca la use, por el mismo motivo que en el camino
+        # normal de guardado: sin esto la validación "una lista no usa fila_id (usa
+        # fila_temporal)" nunca se ejecuta y un fila_id mandado a una pregunta lista se acepta
+        # en silencio.
+        _validar_entrada(
+            pregunta, texto_libre, opciones, fila=item.get('fila'), columna=columna,
+            fila_temporal=fila_temporal,
+        )
 
         respuesta = Respuesta.objects.create(
             pregunta=pregunta,
@@ -368,7 +379,12 @@ class RespuestasMomentoView(APIView):
                 opciones = item.get('opciones', [])
                 fila = item.get('fila')
                 columna = item.get('columna')
-                _validar_entrada(pregunta, texto_libre, opciones, fila, columna)
+                # fila_temporal también se pasa acá, aunque solo las preguntas tipo lista lo
+                # usen: es lo que hace que las validaciones de "esta pregunta NO usa
+                # fila_temporal" (matriz y el resto de tipos) se apliquen de verdad — antes se
+                # omitía en esta llamada y un fila_temporal mandado a una pregunta que no es
+                # lista se aceptaba en silencio.
+                _validar_entrada(pregunta, texto_libre, opciones, fila, columna, item.get('fila_temporal'))
 
                 lookup = {'pregunta': pregunta, 'fila': fila, 'columna': columna, **dueño}
                 respuesta, _ = Respuesta.objects.update_or_create(

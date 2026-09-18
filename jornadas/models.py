@@ -146,13 +146,25 @@ class Pregunta(models.Model):
     TIPO_MULTIPLE = 'multiple'
     TIPO_MATRIZ = 'matriz'
     TIPO_LISTA = 'lista'
+    TIPO_AUDIO = 'audio'
     TIPO_CHOICES = [
         (TIPO_ABIERTA, 'Abierta'),
         (TIPO_UNICA, 'Selección única'),
         (TIPO_MULTIPLE, 'Selección múltiple'),
         (TIPO_MATRIZ, 'Matriz comparativa (filas × columnas, cantidad fija)'),
         (TIPO_LISTA, 'Lista de registros (columnas fijas, filas las agrega quien responde)'),
+        (TIPO_AUDIO, 'Audio (el cliente transcribe; se guarda solo el texto)'),
     ]
+    # Tipos cuya respuesta ES texto libre (Respuesta.texto_libre), sin opciones ni celdas. El
+    # backend guarda `audio` exactamente igual que `abierta` — la diferencia es de CLIENTE: una
+    # `audio` se contesta grabando y el propio front hace la transcripción, y nos manda solo el
+    # texto resultante (acá nunca entra, ni se guarda, ni se sirve un archivo de audio). Existe
+    # como tipo propio, y no como un flag sobre `abierta`, porque el front necesita saber qué
+    # renderizar (grabador vs. textarea) y la analítica poder distinguir de dónde salió el texto.
+    # Toda rama que hoy pregunte "¿es de texto libre?" debe usar esta tupla, no comparar contra
+    # TIPO_ABIERTA suelto — si no, una pregunta `audio` cae en la rama de opciones y se reporta
+    # con 0 respuestas aunque la base tenga las transcripciones (ver analitica/).
+    TIPOS_TEXTO_LIBRE = (TIPO_ABIERTA, TIPO_AUDIO)
 
     momento = models.ForeignKey(Momento, on_delete=models.CASCADE, related_name='preguntas')
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES)

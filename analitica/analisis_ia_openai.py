@@ -263,6 +263,8 @@ def _preguntas_payload(momento):
     """Compartido entre `_construir_payload_momento` (un solo momento) y
     `_construir_payload_jornada` (todos los momentos de la jornada) — mismo detalle de pregunta
     en ambos casos, solo cambia cuántos momentos se empaquetan alrededor."""
+    from jornadas.models import Pregunta
+
     from participantes.models import Respuesta
 
     from .analysis import _estadisticas_pregunta
@@ -276,7 +278,9 @@ def _preguntas_payload(momento):
             'tipo': pregunta.tipo,
             'total_respuestas': estad['total_respuestas'],
         }
-        if pregunta.tipo == 'abierta':
+        # `audio` va por acá también: lo que hay para analizar es la transcripción en
+        # texto_libre, no opciones (ver Pregunta.TIPOS_TEXTO_LIBRE).
+        if pregunta.tipo in Pregunta.TIPOS_TEXTO_LIBRE:
             item['respuestas_texto'] = list(
                 Respuesta.objects.filter(pregunta=pregunta)
                 .exclude(texto_libre='')
