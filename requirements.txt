@@ -13,3 +13,5 @@ reportlab
 openai
 openpyxl
 python-docx
+pdfplumber
+PyMuPDF
