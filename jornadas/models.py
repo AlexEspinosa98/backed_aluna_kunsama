@@ -172,6 +172,17 @@ class Pregunta(models.Model):
     orden = models.PositiveIntegerField()
     obligatoria = models.BooleanField(default=True)
     activa = models.BooleanField(default=True)
+    # Solo significa algo en matriz y lista: ¿quien responde puede AGREGAR filas, además de las
+    # que definió el admin? El default depende del tipo (apagado en matriz, encendido en lista)
+    # y por eso lo resuelve PreguntaAdminSerializer, no este `default`: un BooleanField solo
+    # admite un default fijo, y acá hace falta distinguir "no lo mandaron" de "lo mandaron en
+    # False", cosa que a nivel de modelo no se puede. En una lista siempre es True (sus filas SON
+    # las que agrega quien responde, apagarlo la dejaría sin forma de responderse) y en los demás
+    # tipos siempre False — las dos reglas se validan en ese serializer.
+    filas_adicionales = models.BooleanField(default=False, help_text=(
+        'Si quien responde puede agregar filas además de las definidas por el admin. Solo aplica '
+        'a preguntas matriz (por defecto no) y lista (siempre sí).'
+    ))
     mesas_permitidas = models.JSONField(default=list, blank=True, help_text=(
         'Lista opcional de números de mesa que pueden ver/responder esta pregunta (solo aplica '
         'en momentos tipo mesa). Vacía = visible para todas las mesas, igual que hoy.'
@@ -199,6 +210,16 @@ class Pregunta(models.Model):
     class Meta:
         ordering = ['orden']
         unique_together = [('momento', 'orden')]
+
+    @property
+    def acepta_filas_dinamicas(self):
+        """Si esta pregunta admite celdas con `fila_temporal` — es decir, filas creadas por quien
+        responde (FilaListaRespuesta) en vez de predefinidas por el admin (FilaMatrizPregunta).
+        Siempre en una lista; en una matriz solo con `filas_adicionales` encendido, y ahí conviven
+        los dos tipos de fila en la misma pregunta."""
+        return self.tipo == self.TIPO_LISTA or (
+            self.tipo == self.TIPO_MATRIZ and self.filas_adicionales
+        )
 
     def __str__(self):
         return self.texto

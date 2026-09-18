@@ -176,11 +176,45 @@ y es `400` con `{"faltantes": [1200]}` (el id de la pregunta, no celda por celda
 ]
 ```
 
+### `filas_adicionales` — dejar que además agreguen filas (HU-53)
+Por defecto una matriz es de filas fijas (`filas_adicionales: false`). Encendiéndolo, quien
+responde puede **anexar filas extra** a las que definió el admin:
+```bash
+POST /api/admin/preguntas/
+{ "momento": 68, "tipo": "matriz", "texto": "...", "orden": 1, "filas_adicionales": true }
+# o sobre una que ya existe:
+PATCH /api/admin/preguntas/1200/
+{ "filas_adicionales": true }
+```
+Las filas extra se mandan con `fila_temporal`, igual que en una `lista`, y conviven con las fijas
+**en el mismo envío**:
+```json
+{ "respuestas": [
+  { "pregunta_id": 1200, "fila_id": 10, "columna_id": 20, "texto_libre": "Magíster" },
+  { "pregunta_id": 1200, "fila_id": 10, "columna_id": 21, "texto_libre": "Biotecnología marina" },
+  { "pregunta_id": 1200, "fila_temporal": 1, "columna_id": 20, "texto_libre": "Doctora" },
+  { "pregunta_id": 1200, "fila_temporal": 1, "columna_id": 21, "texto_libre": "Economía circular" }
+] }
+```
+- `400` si una celda trae `fila_id` y `fila_temporal` a la vez, y `400` si se manda
+  `fila_temporal` con el flag apagado.
+- Al leer, las celdas fijas vienen con `fila` y las extra con `fila_lista` — el front agrupa por
+  el que no sea `null`.
+- **Las filas extra nunca son obligatorias**: `obligatoria: true` sigue exigiendo solo todas las
+  celdas fijas (fila×columna del admin).
+- **Cada envío reemplaza por completo las filas extra** (misma regla que `lista`): reenviar el
+  momento sin ninguna celda `fila_temporal` las borra todas. Las fijas no se tocan.
+
 ---
 
 ## 5. `lista` — columnas fijas, filas las agrega quien responde (HU-51, nuevo)
 
 Igual que `matriz` pero **sin** `POST /preguntas-filas-matriz/` — las filas no las define el admin.
+
+Una `lista` siempre trae `filas_adicionales: true` y no se puede apagar (`400` si se intenta):
+sus filas *son* las que agrega quien responde, así que con el flag apagado quedaría sin ninguna
+forma de responderse. Si lo que se quiere es una tabla con filas fijas más algunas extra, eso es
+una `matriz` con `filas_adicionales: true` (ver sección 4), no una lista.
 
 ### Crear pregunta + solo columnas
 ```bash

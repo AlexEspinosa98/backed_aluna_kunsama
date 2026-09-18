@@ -6,7 +6,9 @@ from rest_framework.test import APITestCase
 
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
-from .extraccion_momento_ia_openai import _limpiar_y_validar, aprobar_extraccion_momento
+from .extraccion_momento_ia_openai import (
+    _construir_payload_esquema, _limpiar_y_validar, aprobar_extraccion_momento,
+)
 from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
 
 
@@ -415,7 +417,7 @@ class LimpiarYValidarExtraccionTests(BaseJornadaTestCase):
         limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
         self.assertEqual(limpio['respuestas'], [{
             'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Bien.', 'opcion_ids': [],
-            'fila_id': None, 'columna_id': None,
+            'fila_id': None, 'fila_temporal': None, 'columna_id': None,
         }])
         self.assertEqual(omitidas, [])
 
@@ -431,7 +433,7 @@ class LimpiarYValidarExtraccionTests(BaseJornadaTestCase):
         limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
         self.assertEqual(limpio['respuestas'], [{
             'pregunta': self.pregunta_unica.id, 'texto_libre': '', 'opcion_ids': [self.opcion_a.id],
-            'fila_id': None, 'columna_id': None,
+            'fila_id': None, 'fila_temporal': None, 'columna_id': None,
         }])
         self.assertEqual(omitidas, [])
 
@@ -907,3 +909,390 @@ class RespuestaListaRegresionTests(BaseJornadaTestCase):
         )
         self.assertEqual(resp.status_code, 400)
         self.assertIn('faltantes', resp.data)
+
+
+class FilasAdicionalesAdminTests(APITestCase):
+    """El campo `filas_adicionales` (HU-53) no puede tener un único default de modelo porque el
+    suyo depende del tipo: apagado en matriz, encendido en lista. Estas pruebas fijan esa
+    resolución y las dos combinaciones que no tienen sentido y se rechazan."""
+    def setUp(self):
+        self.admin = get_user_model().objects.create_user(
+            username='admin_filas', password='pass12345', is_staff=True,
+        )
+        self.jornada = Jornada.objects.create(
+            slug='jornada-filas', nombre='Jornada filas',
+            fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 2),
+        )
+        self.momento = Momento.objects.create(
+            jornada=self.jornada, orden=1, titulo='Tablas', tipo=Momento.TIPO_INDIVIDUAL,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _crear(self, tipo, orden, **extra):
+        return self.client.post('/api/admin/preguntas/', {
+            'momento': self.momento.id, 'tipo': tipo, 'texto': f'Pregunta {tipo}',
+            'orden': orden, 'obligatoria': False, **extra,
+        }, format='json')
+
+    def test_matriz_nace_con_filas_adicionales_apagado(self):
+        resp = self._crear('matriz', 1)
+        self.assertEqual(resp.status_code, 201)
+        self.assertFalse(resp.data['filas_adicionales'])
+
+    def test_lista_nace_con_filas_adicionales_encendido(self):
+        resp = self._crear('lista', 2)
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(resp.data['filas_adicionales'])
+
+    def test_matriz_puede_nacer_con_filas_adicionales_encendido(self):
+        resp = self._crear('matriz', 3, filas_adicionales=True)
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(Pregunta.objects.get(id=resp.data['id']).filas_adicionales)
+
+    def test_lista_no_puede_apagar_filas_adicionales(self):
+        resp = self._crear('lista', 4, filas_adicionales=False)
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('filas_adicionales', resp.data)
+
+    def test_tipo_sin_filas_no_puede_encender_filas_adicionales(self):
+        for tipo in ('abierta', 'unica', 'multiple', 'audio'):
+            with self.subTest(tipo=tipo):
+                resp = self._crear(tipo, 10, filas_adicionales=True)
+                self.assertEqual(resp.status_code, 400)
+                self.assertIn('filas_adicionales', resp.data)
+
+    def test_patch_enciende_filas_adicionales_en_matriz_existente(self):
+        pregunta_id = self._crear('matriz', 5).data['id']
+        resp = self.client.patch(
+            f'/api/admin/preguntas/{pregunta_id}/', {'filas_adicionales': True}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Pregunta.objects.get(id=pregunta_id).filas_adicionales)
+
+    def test_patch_a_lista_fuerza_filas_adicionales(self):
+        # Cambiar el tipo sin mandar el campo no puede dejar la fila en una combinación inválida.
+        pregunta_id = self._crear('matriz', 6).data['id']
+        resp = self.client.patch(
+            f'/api/admin/preguntas/{pregunta_id}/', {'tipo': 'lista'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Pregunta.objects.get(id=pregunta_id).filas_adicionales)
+
+    def test_patch_de_matriz_con_flag_a_tipo_abierta_apaga_el_flag(self):
+        pregunta_id = self._crear('matriz', 7, filas_adicionales=True).data['id']
+        resp = self.client.patch(
+            f'/api/admin/preguntas/{pregunta_id}/', {'tipo': 'abierta'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(Pregunta.objects.get(id=pregunta_id).filas_adicionales)
+
+
+class MatrizConFilasAdicionalesTests(BaseJornadaTestCase):
+    """Matriz con `filas_adicionales` encendido (HU-53): conviven las filas FIJAS del admin
+    (`fila_id` → Respuesta.fila) con las filas EXTRA que agrega quien responde (`fila_temporal`
+    → Respuesta.fila_lista), en la misma pregunta y en el mismo envío."""
+    def setUp(self):
+        super().setUp()
+        self.matriz = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_MATRIZ,
+            texto='Capacidades por área', orden=6, obligatoria=True, filas_adicionales=True,
+        )
+        self.fila_fija = FilaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Área A', orden=1)
+        self.col_1 = ColumnaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Responsable', orden=1)
+        self.col_2 = ColumnaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Meta', orden=2)
+        self.token = self.registrar_participante().data['token']
+        self.url = (
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/'
+        )
+
+    def _respuestas_base(self, extra=None):
+        base = [
+            {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Mi reflexión.'},
+            {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_a.id]},
+        ]
+        return {'respuestas': base + (extra or [])}
+
+    def _celdas_fijas(self):
+        return [
+            {'pregunta_id': self.matriz.id, 'fila_id': self.fila_fija.id, 'columna_id': self.col_1.id, 'texto_libre': 'Ana'},
+            {'pregunta_id': self.matriz.id, 'fila_id': self.fila_fija.id, 'columna_id': self.col_2.id, 'texto_libre': 'Meta A'},
+        ]
+
+    def _celdas_extra(self):
+        return [
+            {'pregunta_id': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+            {'pregunta_id': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.col_2.id, 'texto_libre': 'Meta extra'},
+        ]
+
+    def test_envio_mixto_guarda_filas_fijas_y_agregadas(self):
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._celdas_fijas() + self._celdas_extra()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.matriz, fila__isnull=False).count(), 2)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.matriz, fila_lista__isnull=False).count(), 2)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
+        extra = Respuesta.objects.get(pregunta=self.matriz, fila_lista__isnull=False, columna=self.col_1)
+        self.assertEqual(extra.texto_libre, 'Juan')
+        self.assertIsNone(extra.fila)
+
+    def test_reenviar_sin_filas_extra_las_borra_y_conserva_las_fijas(self):
+        self.client.post(
+            self.url, self._respuestas_base(self._celdas_fijas() + self._celdas_extra()),
+            format='json', **self.auth_header(self.token),
+        )
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._celdas_fijas()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 0)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.matriz, fila_lista__isnull=False).count(), 0)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.matriz, fila__isnull=False).count(), 2)
+
+    def test_las_filas_extra_no_cuentan_para_la_obligatoriedad(self):
+        # Obligatoria en una matriz sigue siendo "todas las celdas fijas": mandar filas extra no
+        # puede sustituir una celda fija que falta.
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._celdas_extra()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('faltantes', resp.data)
+
+    def test_rechaza_celda_con_fila_id_y_fila_temporal_a_la_vez(self):
+        entradas = self._celdas_fijas() + [
+            {'pregunta_id': self.matriz.id, 'fila_id': self.fila_fija.id, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'x'},
+        ]
+        resp = self.client.post(
+            self.url, self._respuestas_base(entradas), format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_matriz_sin_el_flag_sigue_rechazando_fila_temporal(self):
+        self.matriz.filas_adicionales = False
+        self.matriz.save(update_fields=['filas_adicionales'])
+        resp = self.client.post(
+            self.url, self._respuestas_base(self._celdas_fijas() + self._celdas_extra()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 0)
+
+    def test_un_envio_invalido_no_deja_las_filas_extra_a_medias(self):
+        """El guardado es atómico: las filas dinámicas se borran y se recrean, así que si una
+        celda posterior no valida, lo ya escrito tiene que revertirse entero."""
+        self.client.post(
+            self.url, self._respuestas_base(self._celdas_fijas() + self._celdas_extra()),
+            format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
+
+        entradas = self._celdas_fijas() + [
+            {'pregunta_id': self.matriz.id, 'fila_temporal': 9, 'columna_id': self.col_1.id, 'texto_libre': 'Nuevo'},
+            # Celda inválida: una matriz no acepta opciones.
+            {'pregunta_id': self.matriz.id, 'fila_id': self.fila_fija.id, 'columna_id': self.col_1.id,
+             'texto_libre': 'x', 'opcion_ids': [self.opcion_a.id]},
+        ]
+        resp = self.client.post(
+            self.url, self._respuestas_base(entradas), format='json', **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
+
+    def test_el_momento_expone_filas_adicionales(self):
+        resp = self.client.get(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/',
+            **self.auth_header(self.token),
+        )
+        self.assertEqual(resp.status_code, 200)
+        preguntas = {p['id']: p for p in resp.data['preguntas']}
+        self.assertTrue(preguntas[self.matriz.id]['filas_adicionales'])
+        self.assertFalse(preguntas[self.pregunta_abierta.id]['filas_adicionales'])
+
+
+class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
+    """El extractor por IA transcribiendo FILAS AGREGADAS (HU-53): filas que estaban en el
+    documento pero no en el esquema de la pregunta. Nada de esto llama a OpenAI — se prueban
+    `_construir_payload_esquema` (lo que la IA ve), `_limpiar_y_validar` (el filtro de lo que la
+    IA respondió) y `aprobar_extraccion_momento` (la escritura real)."""
+    def setUp(self):
+        super().setUp()
+        self.matriz = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_MATRIZ,
+            texto='Capacidades por área', orden=7, obligatoria=False, filas_adicionales=True,
+        )
+        self.fila_fija = FilaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Área A', orden=1)
+        self.col_1 = ColumnaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Responsable', orden=1)
+        self.col_2 = ColumnaMatrizPregunta.objects.create(pregunta=self.matriz, texto='Meta', orden=2)
+
+        self.matriz_fija = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_MATRIZ,
+            texto='Solo filas fijas', orden=8, obligatoria=False,
+        )
+        self.fija_fila = FilaMatrizPregunta.objects.create(pregunta=self.matriz_fija, texto='F1', orden=1)
+        self.fija_col = ColumnaMatrizPregunta.objects.create(pregunta=self.matriz_fija, texto='C1', orden=1)
+
+        self.participante = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='extra@uni.edu.co',
+            nombre='Depto', apellido='Extra', rol='jefe',
+        )
+        self.admin = get_user_model().objects.create_user(
+            username='admin_extra', password='pass12345', is_staff=True,
+        )
+
+    # --- lo que la IA ve -------------------------------------------------------------------
+    def test_el_esquema_le_dice_a_la_ia_si_puede_agregar_filas(self):
+        esquema = _construir_payload_esquema(self.momento_individual)
+        por_id = {p['id']: p for p in esquema['preguntas']}
+        self.assertTrue(por_id[self.matriz.id]['filas_adicionales'])
+        self.assertFalse(por_id[self.matriz_fija.id]['filas_adicionales'])
+        self.assertFalse(por_id[self.pregunta_abierta.id]['filas_adicionales'])
+
+    def test_el_esquema_manda_las_columnas_de_una_lista(self):
+        # Antes solo se mandaban las de matriz, así que la IA no tenía a qué columna apuntar en
+        # una lista y toda la pregunta terminaba omitida.
+        lista = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_LISTA,
+            texto='Profesores', orden=9, obligatoria=False, filas_adicionales=True,
+        )
+        columna = ColumnaMatrizPregunta.objects.create(pregunta=lista, texto='Nombre', orden=1)
+        esquema = _construir_payload_esquema(self.momento_individual)
+        por_id = {p['id']: p for p in esquema['preguntas']}
+        self.assertEqual([c['id'] for c in por_id[lista.id]['columnas']], [columna.id])
+        self.assertEqual(por_id[lista.id]['filas'], [])
+        self.assertTrue(por_id[lista.id]['filas_adicionales'])
+
+    # --- filtro de lo que la IA respondió --------------------------------------------------
+    def test_conserva_celdas_de_fila_agregada(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+            {'pregunta': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.col_2.id, 'texto_libre': 'Meta X'},
+        ]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [])
+        self.assertEqual(len(limpio['respuestas']), 2)
+        self.assertEqual(limpio['respuestas'][0]['fila_temporal'], 1)
+        self.assertIsNone(limpio['respuestas'][0]['fila_id'])
+
+    def test_conserva_celdas_fijas_y_agregadas_en_la_misma_pregunta(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz.id, 'fila_id': self.fila_fija.id, 'columna_id': self.col_1.id, 'texto_libre': 'Ana'},
+            {'pregunta': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.col_1.id, 'texto_libre': 'Juan'},
+        ]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [])
+        self.assertEqual(
+            [(r['fila_id'], r['fila_temporal']) for r in limpio['respuestas']],
+            [(self.fila_fija.id, None), (None, 1)],
+        )
+
+    def test_omite_fila_agregada_si_la_pregunta_no_la_permite(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz_fija.id, 'fila_temporal': 1, 'columna_id': self.fija_col.id, 'texto_libre': 'x'},
+        ]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [self.matriz_fija.id])
+        self.assertEqual(limpio['respuestas'], [])
+
+    def test_omite_celda_con_fila_id_y_fila_temporal_a_la_vez(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz.id, 'fila_id': self.fila_fija.id, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'x'},
+        ]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [self.matriz.id])
+        self.assertEqual(limpio['respuestas'], [])
+
+    def test_omite_fila_temporal_que_no_es_un_numero(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz.id, 'fila_temporal': 'fila nueva', 'columna_id': self.col_1.id,
+             'texto_libre': 'x'},
+        ]}
+        limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [self.matriz.id])
+        self.assertEqual(limpio['respuestas'], [])
+
+    def test_omite_columna_que_no_es_de_la_pregunta(self):
+        crudo = {'respuestas': [
+            {'pregunta': self.matriz.id, 'fila_temporal': 1, 'columna_id': self.fija_col.id, 'texto_libre': 'x'},
+        ]}
+        _limpio, omitidas = _limpiar_y_validar(crudo, self.momento_individual)
+        self.assertEqual(omitidas, [self.matriz.id])
+
+    # --- escritura real --------------------------------------------------------------------
+    def _extraccion(self, respuestas):
+        return ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.participante,
+            archivo=SimpleUploadedFile('b.pdf', b'contenido', content_type='application/pdf'),
+            estado=ExtraccionMomento.ESTADO_COMPLETO,
+            resultado={'respuestas': respuestas},
+        )
+
+    def test_aprobar_escribe_las_filas_agregadas(self):
+        extraccion = self._extraccion([
+            {'pregunta': self.matriz.id, 'fila_id': self.fila_fija.id, 'fila_temporal': None,
+             'columna_id': self.col_1.id, 'texto_libre': 'Ana', 'opcion_ids': []},
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'Juan', 'opcion_ids': []},
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
+             'columna_id': self.col_2.id, 'texto_libre': 'Meta X', 'opcion_ids': []},
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 2,
+             'columna_id': self.col_1.id, 'texto_libre': 'Sofía', 'opcion_ids': []},
+        ])
+        guardadas = aprobar_extraccion_momento(extraccion, self.admin)
+        self.assertEqual(len(guardadas), 4)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 2)
+        self.assertEqual(
+            Respuesta.objects.filter(pregunta=self.matriz, fila__isnull=False).count(), 1,
+        )
+        self.assertEqual(
+            Respuesta.objects.filter(pregunta=self.matriz, fila_lista__isnull=False).count(), 3,
+        )
+        # Las celdas de un mismo fila_temporal comparten fila, y dos distintos no.
+        fila_1 = set(
+            Respuesta.objects.filter(pregunta=self.matriz, texto_libre__in=['Juan', 'Meta X'])
+            .values_list('fila_lista_id', flat=True)
+        )
+        self.assertEqual(len(fila_1), 1)
+        fila_2 = Respuesta.objects.get(pregunta=self.matriz, texto_libre='Sofía').fila_lista_id
+        self.assertNotIn(fila_2, fila_1)
+
+    def test_aprobar_reemplaza_las_filas_agregadas_previas_de_esa_pregunta(self):
+        aprobar_extraccion_momento(self._extraccion([
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'Viejo', 'opcion_ids': []},
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 2,
+             'columna_id': self.col_1.id, 'texto_libre': 'Viejo 2', 'opcion_ids': []},
+        ]), self.admin)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 2)
+
+        aprobar_extraccion_momento(self._extraccion([
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'Nuevo', 'opcion_ids': []},
+        ]), self.admin)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
+        self.assertEqual(
+            list(Respuesta.objects.filter(
+                pregunta=self.matriz, fila_lista__isnull=False,
+            ).values_list('texto_libre', flat=True)),
+            ['Nuevo'],
+        )
+
+    def test_aprobar_no_borra_filas_de_una_pregunta_que_el_documento_no_menciona(self):
+        """Aprobar escribe lo que el documento traía. Un documento que no habla de una pregunta
+        no es una instrucción de borrar lo que esa pregunta ya tenía."""
+        aprobar_extraccion_momento(self._extraccion([
+            {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
+             'columna_id': self.col_1.id, 'texto_libre': 'Se queda', 'opcion_ids': []},
+        ]), self.admin)
+
+        aprobar_extraccion_momento(self._extraccion([
+            {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Otra cosa', 'opcion_ids': []},
+        ]), self.admin)
+        self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.matriz, fila_lista__isnull=False).texto_libre, 'Se queda',
+        )

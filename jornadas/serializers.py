@@ -37,11 +37,46 @@ class PreguntaAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = Pregunta
         fields = [
-            'id', 'momento', 'tipo', 'texto', 'orden', 'obligatoria', 'activa',
+            'id', 'momento', 'tipo', 'texto', 'orden', 'obligatoria', 'activa', 'filas_adicionales',
             'mesas_permitidas', 'roles_permitidos', 'depende_de_opcion', 'opciones', 'filas', 'columnas',
         ]
 
+    def _validar_filas_adicionales(self, attrs):
+        """`filas_adicionales` (ver Pregunta) no puede tener un único default a nivel de modelo
+        porque el suyo depende del tipo: apagado en matriz, encendido en lista. Acá sí se puede,
+        porque este es el único punto que distingue "no mandaron el campo" de "lo mandaron en
+        False" — con el campo ausente se aplica el default del tipo, y con el campo presente se
+        validan las dos combinaciones que no tienen sentido."""
+        tipo = attrs.get('tipo') or getattr(self.instance, 'tipo', None)
+        if tipo is None:
+            return
+
+        if 'filas_adicionales' not in attrs:
+            if self.instance is None:
+                attrs['filas_adicionales'] = tipo == Pregunta.TIPO_LISTA
+                return
+            # PATCH que no toca el campo: si cambió el tipo, el valor viejo puede haber quedado
+            # en una combinación inválida, así que se re-encuadra en vez de dejarlo inconsistente.
+            if tipo == Pregunta.TIPO_LISTA:
+                attrs['filas_adicionales'] = True
+            elif tipo != Pregunta.TIPO_MATRIZ and self.instance.filas_adicionales:
+                attrs['filas_adicionales'] = False
+            return
+
+        filas_adicionales = attrs['filas_adicionales']
+        if tipo == Pregunta.TIPO_LISTA and not filas_adicionales:
+            raise serializers.ValidationError({'filas_adicionales': (
+                'Una pregunta tipo lista no puede deshabilitar filas adicionales: sus filas son '
+                'justamente las que agrega quien responde.'
+            )})
+        if filas_adicionales and tipo not in (Pregunta.TIPO_MATRIZ, Pregunta.TIPO_LISTA):
+            raise serializers.ValidationError({'filas_adicionales': (
+                f'Solo las preguntas tipo matriz o lista pueden permitir filas adicionales '
+                f'(esta es tipo {tipo}).'
+            )})
+
     def validate(self, attrs):
+        self._validar_filas_adicionales(attrs)
         depende_de_opcion = attrs.get('depende_de_opcion')
         if depende_de_opcion is not None:
             momento = attrs.get('momento') or getattr(self.instance, 'momento', None)

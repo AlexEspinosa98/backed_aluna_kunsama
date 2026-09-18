@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
@@ -149,7 +150,28 @@ def _validar_entrada(pregunta, texto_libre, opciones, fila=None, columna=None, f
 
     if pregunta.tipo == Pregunta.TIPO_MATRIZ:
         if fila_temporal is not None:
-            raise ValidationError(f'La pregunta {pregunta.id} es de tipo matriz, no usa fila_temporal (usa fila_id).')
+            # Celda de una fila EXTRA, agregada por quien responde. Solo existe si el admin
+            # encendió filas_adicionales; si no, la matriz es de filas fijas y esto es un error
+            # del cliente, igual que siempre (ver Pregunta.filas_adicionales).
+            if not pregunta.filas_adicionales:
+                raise ValidationError(
+                    f'La pregunta {pregunta.id} es una matriz de filas fijas: no admite '
+                    f'fila_temporal (usa fila_id, o pide que se habiliten filas adicionales).'
+                )
+            if fila is not None:
+                raise ValidationError(
+                    f'La celda de la pregunta {pregunta.id} no puede traer fila_id y '
+                    f'fila_temporal a la vez: o es una fila fija o es una agregada.'
+                )
+            if columna is None:
+                raise ValidationError(
+                    f'La pregunta {pregunta.id}: cada celda de una fila agregada debe indicar columna.'
+                )
+            if columna.pregunta_id != pregunta.id:
+                raise ValidationError(f'La columna enviada no pertenece a la pregunta {pregunta.id}.')
+            if opciones:
+                raise ValidationError(f'La pregunta {pregunta.id} no acepta opciones.')
+            return
         if fila is None or columna is None:
             raise ValidationError(
                 f'La pregunta {pregunta.id} es de tipo matriz: cada respuesta debe indicar fila y columna.'
@@ -230,13 +252,17 @@ def _preguntas_obligatorias_faltantes(preguntas_obligatorias, entradas_por_pregu
     return faltantes
 
 
-def _guardar_respuestas_lista(pregunta, items, participante, dueño):
-    """Guarda las celdas de una pregunta tipo lista. A diferencia de matriz/abierta/única (que
-    hacen update_or_create celda por celda), acá cada envío REEMPLAZA por completo las filas
-    existentes de esta pregunta para este dueño — más simple y predecible que tratar de
-    emparejar filas de un envío con filas de otro, dado que `fila_temporal` es un número que el
-    cliente inventa en cada envío (fila_temporal=1 hoy no es necesariamente la misma fila que
-    fila_temporal=1 en un envío anterior)."""
+def _guardar_filas_dinamicas(pregunta, items, participante, dueño):
+    """Guarda las celdas que van en filas creadas por quien responde (`fila_temporal`): todas las
+    de una pregunta tipo lista, o las filas EXTRA de una matriz con `filas_adicionales`.
+
+    A diferencia de matriz/abierta/única (que hacen update_or_create celda por celda), acá cada
+    envío REEMPLAZA por completo las filas dinámicas existentes de esta pregunta para este dueño
+    — más simple y predecible que tratar de emparejar filas de un envío con filas de otro, dado
+    que `fila_temporal` es un número que el cliente inventa en cada envío (fila_temporal=1 hoy no
+    es necesariamente la misma fila que fila_temporal=1 en un envío anterior). Por eso se llama
+    también con `items` vacío: es lo que permite borrar todas las filas extra reenviando el
+    momento sin ninguna. Las filas FIJAS de una matriz no se tocan acá, van por el otro camino."""
     FilaListaRespuesta.objects.filter(pregunta=pregunta, **dueño).delete()
 
     ordenes_temporales = sorted({item['fila_temporal'] for item in items})
@@ -302,6 +328,12 @@ class RespuestasMomentoView(APIView):
         respuestas = respuestas.select_related('pregunta').prefetch_related('opciones')
         return Response(RespuestaSalidaSerializer(respuestas, many=True).data, status=status.HTTP_200_OK)
 
+    # Atómico porque el guardado de un momento no es celda a celda independiente: las filas
+    # dinámicas (lista, y las filas extra de una matriz) se borran y se recrean, así que si una
+    # celda posterior no valida, sin transacción el envío quedaría a medias — con las filas
+    # viejas ya borradas y las nuevas a medio escribir. Con esto, o entra el momento completo o
+    # no entra nada, que es como el cliente ya lo manda.
+    @transaction.atomic
     @extend_schema(request=RespuestaEnvioSerializer, responses=RespuestaSalidaSerializer(many=True))
     def post(self, request, jornada_slug, momento_id):
         momento = get_object_or_404(
@@ -371,9 +403,16 @@ class RespuestasMomentoView(APIView):
         respuestas_guardadas = []
         for items in entradas_por_pregunta.values():
             pregunta = items[0]['pregunta']
-            if pregunta.tipo == Pregunta.TIPO_LISTA:
-                respuestas_guardadas.extend(_guardar_respuestas_lista(pregunta, items, participante, dueño))
-                continue
+            if pregunta.acepta_filas_dinamicas:
+                # Una lista trae solo celdas dinámicas; una matriz con filas_adicionales trae las
+                # dos clases mezcladas en el mismo envío (las fijas por fila_id, las extra por
+                # fila_temporal) y cada grupo se guarda por su camino. El grupo dinámico se
+                # procesa aunque venga vacío: así, reenviar el momento sin filas extra las borra.
+                dinamicos = [i for i in items if i.get('fila_temporal') is not None]
+                items = [i for i in items if i.get('fila_temporal') is None]
+                respuestas_guardadas.extend(
+                    _guardar_filas_dinamicas(pregunta, dinamicos, participante, dueño)
+                )
             for item in items:
                 texto_libre = item.get('texto_libre', '')
                 opciones = item.get('opciones', [])

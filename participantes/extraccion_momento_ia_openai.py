@@ -3,16 +3,22 @@ llamada a OpenAI — mismo mecanismo que instrumentos.extraccion_ia_openai (ver 
 razonamiento completo de texto-vs-visión), portado acá porque este contenido vive en el modelo
 clásico `jornadas.Momento`/`jornadas.Pregunta`, no en el módulo `instrumentos`.
 
-A diferencia de esa otra vía, acá `Pregunta` no tiene tipo "matriz" — el esquema que se le manda
-a la IA es plano (una lista de preguntas con su id, tipo y opciones), así que el prompt es más
-simple. El resultado queda guardado en `ExtraccionMomento.resultado` (JSON) SIN tocar `Respuesta`
-— la escritura real pasa por `aprobar_extraccion_momento`, disparada a mano por un admin desde la
+El esquema que se le manda a la IA lleva, por pregunta, su id real, su tipo, sus opciones y —en
+las de tabla— sus filas y columnas con id propio. Transcribe los seis tipos de `Pregunta`,
+incluidas las FILAS AGREGADAS: si una pregunta tiene `filas_adicionales` (las filas extra de una
+matriz, y todas las filas de una lista), la IA puede transcribir filas que no están en el esquema
+agrupándolas con un `fila_temporal` que ella misma inventa — el mismo mecanismo que usa el envío
+normal desde la web (ver participantes.views).
+
+El resultado queda guardado en `ExtraccionMomento.resultado` (JSON) SIN tocar `Respuesta` — la
+escritura real pasa por `aprobar_extraccion_momento`, disparada a mano por un admin desde la
 vista (ver participantes/admin_views.py)."""
 import base64
 import json
 import os
 import threading
 
+from django.db import transaction
 from django.utils import timezone
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
@@ -46,8 +52,25 @@ SYSTEM_PROMPT_EXTRACCION = (
     "5. Pregunta tipo 'matriz': UNA entrada POR CADA celda (fila×columna) que tenga contenido, "
     "con fila_id y columna_id = los ids correspondientes de ESA pregunta y texto_libre = lo "
     "escrito en esa celda — nunca mezcles filas/columnas de una matriz con otra.\n"
-    "6. Nunca mezcles: no le pongas opcion_ids a una pregunta abierta/audio o matriz, no le pongas "
-    "fila_id/columna_id a una pregunta que no sea matriz, ni texto_libre a una de opción.\n\n"
+    "6. FILAS AGREGADAS. Algunas preguntas traen 'filas_adicionales': true en el esquema. Ahí el "
+    "documento puede tener filas que NO están en la lista 'filas' — se las agregó a mano quien "
+    "diligenció (una fila extra al final de la tabla, un renglón escrito en el margen, una hoja "
+    "anexa con más registros). Transcríbelas así:\n"
+    "   - una entrada POR CADA celda de esa fila nueva, con columna_id = la columna que "
+    "corresponde y texto_libre = lo escrito;\n"
+    "   - en vez de fila_id, pon 'fila_temporal': un número que TÚ inventas solo para agrupar "
+    "las celdas de una misma fila nueva (1 para la primera fila agregada de esa pregunta, 2 para "
+    "la segunda...). NO es el id de nada: no lo busques en el esquema, no lo reutilices entre "
+    "preguntas distintas;\n"
+    "   - nunca pongas fila_id y fila_temporal en la misma entrada: o la fila ya existía en el "
+    "esquema (fila_id) o la agregó quien diligenció (fila_temporal).\n"
+    "   Una pregunta tipo 'lista' funciona SOLO así: no tiene filas predefinidas, todas sus "
+    "filas van con fila_temporal.\n"
+    "   Si la pregunta NO trae 'filas_adicionales': true, no uses fila_temporal ahí — cualquier "
+    "fila que no esté en el esquema simplemente no se transcribe.\n"
+    "7. Nunca mezcles: no le pongas opcion_ids a una pregunta abierta/audio, matriz o lista, no le "
+    "pongas fila_id/columna_id a una pregunta que no sea matriz/lista, ni texto_libre a una de "
+    "opción.\n\n"
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin fences "
@@ -55,7 +78,7 @@ SYSTEM_PROMPT_EXTRACCION = (
     "{\n"
     '  "respuestas": [\n'
     '    {"pregunta": <id>, "texto_libre": "<texto o \'\'>", "opcion_ids": [<ids>], '
-    '"fila_id": <id o null>, "columna_id": <id o null>}\n'
+    '"fila_id": <id o null>, "fila_temporal": <número o null>, "columna_id": <id o null>}\n'
     "  ]\n"
     "}\n"
 )
@@ -120,10 +143,17 @@ def _construir_payload_esquema(momento):
 
     preguntas = []
     for pregunta in momento.preguntas.filter(activa=True).order_by('orden'):
+        # Las columnas van tanto en matriz como en lista (una lista ES columnas fijas + filas
+        # dinámicas). Las filas predefinidas solo existen en matriz. `filas_adicionales` es lo que
+        # le dice a la IA si puede transcribir filas que no están en el esquema, usando
+        # fila_temporal — sin este dato en el payload la regla 6 del prompt no tendría cómo
+        # aplicarse pregunta por pregunta.
+        es_tabla = pregunta.tipo in (Pregunta.TIPO_MATRIZ, Pregunta.TIPO_LISTA)
         preguntas.append({
             'id': pregunta.id,
             'texto': pregunta.texto,
             'tipo': pregunta.tipo,
+            'filas_adicionales': pregunta.acepta_filas_dinamicas,
             'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
             'filas': (
                 [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()]
@@ -131,7 +161,7 @@ def _construir_payload_esquema(momento):
             ),
             'columnas': (
                 [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()]
-                if pregunta.tipo == Pregunta.TIPO_MATRIZ else []
+                if es_tabla else []
             ),
         })
     return {'momento': momento.titulo, 'preguntas': preguntas}
@@ -221,18 +251,31 @@ def _limpiar_y_validar(resultado_crudo, momento):
         opciones = list(pregunta.opciones.filter(id__in=opcion_ids))
 
         fila = columna = None
-        if pregunta.tipo == Pregunta.TIPO_MATRIZ:
-            fila = pregunta.filas.filter(id=crudo.get('fila_id')).first()
+        fila_temporal = None
+        if pregunta.tipo in (Pregunta.TIPO_MATRIZ, Pregunta.TIPO_LISTA):
             columna = pregunta.columnas.filter(id=crudo.get('columna_id')).first()
+            if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+                fila = pregunta.filas.filter(id=crudo.get('fila_id')).first()
+            if pregunta.acepta_filas_dinamicas and crudo.get('fila_temporal') is not None:
+                # `fila_temporal` lo inventa la IA para agrupar las celdas de una fila que no
+                # estaba en el esquema (ver regla 6 del prompt). No se resuelve contra la base
+                # —no apunta a nada todavía—, solo tiene que ser un entero; cualquier otra cosa
+                # es una alucinación y la entrada se omite como cualquier otra inconsistencia.
+                try:
+                    fila_temporal = int(crudo['fila_temporal'])
+                except (TypeError, ValueError):
+                    omitidas.append(pregunta.id)
+                    continue
 
         try:
-            _validar_entrada(pregunta, texto_libre, opciones, fila, columna)
+            _validar_entrada(pregunta, texto_libre, opciones, fila, columna, fila_temporal)
         except Exception:  # noqa: BLE001 — ValidationError u otra inconsistencia de la IA
             omitidas.append(pregunta.id)
             continue
         limpio.append({
             'pregunta': pregunta.id, 'texto_libre': texto_libre, 'opcion_ids': [o.id for o in opciones],
-            'fila_id': fila.id if fila else None, 'columna_id': columna.id if columna else None,
+            'fila_id': fila.id if fila else None, 'fila_temporal': fila_temporal,
+            'columna_id': columna.id if columna else None,
         })
 
     return {'respuestas': limpio}, omitidas
@@ -283,11 +326,49 @@ def procesar_extraccion_momento(extraccion_id):
         close_old_connections()
 
 
+def _escribir_filas_agregadas(pregunta, items, participante):
+    """Escribe las celdas que la IA transcribió como filas AGREGADAS (`fila_temporal`): las filas
+    extra de una matriz con filas_adicionales, y todas las filas de una lista.
+
+    Reemplaza las filas dinámicas que ese participante ya tuviera **en esta pregunta**, igual que
+    el envío normal (participantes.views._guardar_filas_dinamicas) — el documento aprobado es la
+    versión buena de esa tabla, no un anexo a lo anterior. A diferencia del envío normal, acá NO
+    se borran las filas de preguntas que la IA no mencionó: aprobar una extracción escribe lo que
+    el documento traía, y un documento que no habla de una pregunta no es una instrucción de
+    borrarla."""
+    from .models import FilaListaRespuesta, Respuesta
+
+    FilaListaRespuesta.objects.filter(pregunta=pregunta, participante=participante).delete()
+
+    filas_por_temporal = {
+        ft: FilaListaRespuesta.objects.create(
+            pregunta=pregunta, participante=participante, orden=i,
+        )
+        for i, ft in enumerate(sorted({item['fila_temporal'] for item in items}), start=1)
+    }
+
+    guardadas = []
+    for item in items:
+        guardadas.append(Respuesta.objects.create(
+            pregunta=pregunta,
+            participante=participante,
+            fila_lista=filas_por_temporal[item['fila_temporal']],
+            columna_id=item.get('columna_id'),
+            texto_libre=item.get('texto_libre', ''),
+            registrado_por=participante,
+        ))
+    return guardadas
+
+
+@transaction.atomic
 def aprobar_extraccion_momento(extraccion, aprobado_por):
     """Escribe `extraccion.resultado` como Respuesta reales del participante — mismo lookup/save
     que RespuestasMomentoView.post() (participante individual, registrado_por=el mismo
     participante). Solo llamable sobre una extracción en estado completo y no aprobada aún (ver
-    la vista para esas guardas)."""
+    la vista para esas guardas).
+
+    Atómico por lo mismo que el envío normal: las filas agregadas se borran y se recrean, así que
+    una falla a mitad dejaría la tabla del participante incompleta."""
     from django.utils import timezone as tz
 
     from jornadas.models import Pregunta
@@ -296,9 +377,16 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
 
     preguntas = {p.id: p for p in Pregunta.objects.filter(momento=extraccion.momento)}
     guardadas = []
+    # Las celdas de fila agregada se juntan por pregunta antes de escribir: una FilaListaRespuesta
+    # agrupa varias celdas, así que no se puede ir celda por celda como con las de fila fija.
+    agregadas_por_pregunta = {}
+
     for item in extraccion.resultado.get('respuestas') or []:
         pregunta = preguntas.get(item['pregunta'])
         if pregunta is None:
+            continue
+        if item.get('fila_temporal') is not None and pregunta.acepta_filas_dinamicas:
+            agregadas_por_pregunta.setdefault(pregunta, []).append(item)
             continue
         respuesta, _ = Respuesta.objects.update_or_create(
             pregunta=pregunta, participante=extraccion.participante,
@@ -307,6 +395,9 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
         )
         respuesta.opciones.set(item.get('opcion_ids') or [])
         guardadas.append(respuesta)
+
+    for pregunta, items in agregadas_por_pregunta.items():
+        guardadas.extend(_escribir_filas_agregadas(pregunta, items, extraccion.participante))
 
     extraccion.aprobado_en = tz.now()
     extraccion.aprobado_por = aprobado_por

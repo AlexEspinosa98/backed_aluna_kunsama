@@ -108,7 +108,12 @@ class PreguntaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Pregunta
-        fields = ['id', 'tipo', 'texto', 'orden', 'obligatoria', 'opciones', 'filas', 'columnas']
+        # `filas_adicionales` viaja acá porque es lo único que le dice al front si debe pintar el
+        # botón de "agregar fila" en una matriz (en una lista siempre va encendido).
+        fields = [
+            'id', 'tipo', 'texto', 'orden', 'obligatoria', 'filas_adicionales', 'opciones',
+            'filas', 'columnas',
+        ]
 
 
 class MomentoIndiceSerializer(serializers.ModelSerializer):

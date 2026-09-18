@@ -62,12 +62,17 @@ class Participante(models.Model):
 
 
 class FilaListaRespuesta(models.Model):
-    """Una fila que el PARTICIPANTE agregó al responder una pregunta tipo `lista` — a diferencia
-    de FilaMatrizPregunta (predefinida por el admin, cantidad fija conocida de antemano, ej. una
-    tabla de exactamente 12 filas), acá el número de filas lo decide quien responde (ej. "reporte
-    tantos profesores como tenga su departamento" — puede ser 1, puede ser 10). Las columnas SÍ
-    se reutilizan de ColumnaMatrizPregunta (mismo concepto: encabezados fijos definidos por el
-    admin), solo las filas cambian de "predefinidas" a "dinámicas"."""
+    """Una fila que el PARTICIPANTE agregó al responder — a diferencia de FilaMatrizPregunta
+    (predefinida por el admin, cantidad fija conocida de antemano, ej. una tabla de exactamente
+    12 filas), acá el número de filas lo decide quien responde (ej. "reporte tantos profesores
+    como tenga su departamento" — puede ser 1, puede ser 10). Las columnas SÍ se reutilizan de
+    ColumnaMatrizPregunta (mismo concepto: encabezados fijos definidos por el admin), solo las
+    filas cambian de "predefinidas" a "dinámicas".
+
+    La usan dos casos: TODAS las filas de una pregunta tipo `lista`, y las filas EXTRA de una
+    matriz con `Pregunta.filas_adicionales` encendido (HU-53). En ese segundo caso una misma
+    pregunta tiene las dos clases de fila a la vez: las fijas del admin en `Respuesta.fila` y las
+    agregadas por quien responde acá, en `Respuesta.fila_lista`."""
     pregunta = models.ForeignKey(Pregunta, on_delete=models.CASCADE, related_name='filas_lista')
     participante = models.ForeignKey(
         Participante, on_delete=models.CASCADE, null=True, blank=True, related_name='filas_lista_creadas',
@@ -101,14 +106,15 @@ class Respuesta(models.Model):
         blank=True,
         related_name='respuestas_registradas',
     )
-    # Solo se usan cuando pregunta.tipo == matriz: una Respuesta por celda (fila × columna). Para
-    # el resto de los tipos quedan en null — mismo patrón que RespuestaInstrumento.fila/columna en
-    # el módulo instrumentos.
+    # `fila` solo se usa cuando pregunta.tipo == matriz: una Respuesta por celda (fila × columna),
+    # con la fila PREDEFINIDA por el admin. Para el resto de los tipos queda en null — mismo patrón
+    # que RespuestaInstrumento.fila/columna en el módulo instrumentos.
     fila = models.ForeignKey(FilaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
     columna = models.ForeignKey(ColumnaMatrizPregunta, on_delete=models.CASCADE, null=True, blank=True)
-    # Solo se usa cuando pregunta.tipo == lista — mutuamente excluyente con `fila` (que es para
-    # matriz): una Respuesta por celda (fila_lista × columna), igual que matriz pero apuntando a
-    # una fila creada por el participante en vez de una predefinida por el admin.
+    # `fila_lista` es la contraparte para las filas que agregó QUIEN RESPONDE: todas las de una
+    # pregunta tipo lista, y las filas extra de una matriz con filas_adicionales (HU-53). Es
+    # mutuamente excluyente con `fila` celda por celda — una celda es de fila fija o de fila
+    # agregada, nunca de las dos — pero una misma matriz mixta sí tiene celdas de los dos tipos.
     fila_lista = models.ForeignKey(FilaListaRespuesta, on_delete=models.CASCADE, null=True, blank=True)
     texto_libre = models.TextField(blank=True)
     opciones = models.ManyToManyField(OpcionPregunta, blank=True, related_name='respuestas')
@@ -155,8 +161,12 @@ class ExtraccionMomento(models.Model):
     archivo = models.FileField(upload_to='participantes/extracciones/%Y/%m/')
     nombre_archivo_original = models.CharField(max_length=255, blank=True)
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
-    # {"respuestas": [{"pregunta": id, "texto_libre": str, "opcion_ids": [ids]}, ...]} — mismo
-    # formato que RespuestaEnvioSerializer, sin escribir todavía en Respuesta (ver aprobar()).
+    # {"respuestas": [{"pregunta": id, "texto_libre": str, "opcion_ids": [ids], "fila_id": id|null,
+    # "fila_temporal": int|null, "columna_id": id|null}, ...]} — mismo formato que
+    # RespuestaEnvioSerializer, sin escribir todavía en Respuesta (ver aprobar()). `fila_temporal`
+    # agrupa las celdas de una fila que la IA encontró en el documento pero que no estaba en el
+    # esquema (filas agregadas: las extra de una matriz con filas_adicionales, y todas las de una
+    # lista) — igual que en el envío normal, no es el id de nada.
     resultado = models.JSONField(default=dict, blank=True)
     preguntas_omitidas = models.JSONField(default=list, blank=True)
     error_mensaje = models.TextField(blank=True)
