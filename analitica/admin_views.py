@@ -13,13 +13,15 @@ from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 
 from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
-from .models import AnalisisJornadaIA, AnalisisMomentoIA, PlantillaAnalisis, Reporte
+from .infografia_ia_openai import generar_infografias
+from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
     AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
-    AnalisisMomentoIASerializer, PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
+    AnalisisMomentoIASerializer, InfografiaJornadaSerializer, PlantillaAnalisisSerializer,
+    ReporteCrearSerializer, ReporteSerializer,
 )
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
@@ -37,6 +39,10 @@ UMBRAL_HUERFANO_PRESENTACION = timedelta(minutes=10)
 # pipeline local, así que un umbral corto alcanza para no bloquear reintentos legítimos tras un
 # redeploy a mitad de generación.
 UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
+# Mismo espíritu que UMBRAL_HUERFANO_PRESENTACION: la generación de infografía (OpenAI, ver
+# analitica/infografia_ia_openai.py) es independiente del pipeline local, así que un umbral corto
+# alcanza para no bloquear reintentos legítimos tras un redeploy a mitad de generación.
+UMBRAL_HUERFANO_INFOGRAFIA = timedelta(minutes=10)
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
@@ -167,6 +173,48 @@ class ReporteViewSet(
 
         salida = ReporteSerializer(reporte)
         return Response(salida.data, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=['post'], url_path='generar-infografia')
+    def generar_infografia(self, request, pk=None):
+        """Genera 3 imágenes de infografía para este reporte vía el modelo de imágenes de OpenAI
+        (ver analitica/infografia_ia_openai.py), a partir del análisis YA calculado y de los
+        JornadaAsset (fotos/logos + system design) de la jornada — igual patrón asíncrono que
+        `generar-presentacion`, pero produce una InfografiaJornada nueva en cada llamada (permite
+        pedir varias corridas para el mismo reporte) en vez de sobrescribir un único campo."""
+        reporte = self.get_object()
+        if reporte.estado != Reporte.ESTADO_COMPLETO:
+            return Response(
+                {'detail': 'El análisis de este reporte todavía no está completo — la '
+                           'infografía se genera a partir de datos ya calculados.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Auto-sanación, mismo espíritu que generar_presentacion: una infografía huérfana (su
+        # worker murió a mitad de generación) no debe bloquear pedir una nueva para siempre.
+        InfografiaJornada.objects.filter(
+            reporte=reporte,
+            estado__in=[InfografiaJornada.ESTADO_PENDIENTE, InfografiaJornada.ESTADO_PROCESANDO],
+            actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_INFOGRAFIA,
+        ).update(
+            estado=InfografiaJornada.ESTADO_ERROR,
+            error_mensaje='La infografía quedó procesando más de 10 minutos sin completarse '
+                          '(probablemente el worker que la generaba se reinició o falló) y se '
+                          'marcó como error automáticamente.',
+        )
+        if InfografiaJornada.objects.filter(
+            reporte=reporte,
+            estado__in=[InfografiaJornada.ESTADO_PENDIENTE, InfografiaJornada.ESTADO_PROCESANDO],
+        ).exists():
+            return Response(
+                {'detail': 'Ya hay una infografía en proceso para este reporte.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        infografia = InfografiaJornada.objects.create(reporte=reporte, solicitado_por=request.user)
+        threading.Thread(target=generar_infografias, args=(infografia.id,), daemon=True).start()
+
+        salida = InfografiaJornadaSerializer(infografia)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_202_ACCEPTED, headers=headers)
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def pdf(self, request, pk=None):
@@ -308,6 +356,22 @@ class AnalisisJornadaIAViewSet(
         salida = AnalisisJornadaIASerializer(analisis)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class InfografiaJornadaViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Solo lectura — las InfografiaJornada se crean vía `ReporteViewSet.generar_infografia`, esto
+    es únicamente para que el frontend haga polling del estado y consulte las imágenes ya
+    generadas (ver InfografiaJornadaSerializer)."""
+    serializer_class = InfografiaJornadaSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = InfografiaJornada.objects.select_related('reporte__jornada').prefetch_related('imagenes')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'reporte__jornada__propietarios')
+        reporte_id = self.request.query_params.get('reporte')
+        if reporte_id:
+            queryset = queryset.filter(reporte_id=reporte_id)
+        return queryset
 
 
 class EstadisticasPreguntasView(APIView):

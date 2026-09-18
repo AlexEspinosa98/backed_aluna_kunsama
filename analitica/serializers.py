@@ -2,7 +2,10 @@ from rest_framework import serializers
 
 from jornadas.models import Momento
 
-from .models import AnalisisJornadaIA, AnalisisMomentoIA, PlantillaAnalisis, Reporte
+from .models import (
+    AnalisisJornadaIA, AnalisisMomentoIA, InfografiaImagen, InfografiaJornada, PlantillaAnalisis,
+    Reporte,
+)
 
 
 class PlantillaAnalisisSerializer(serializers.ModelSerializer):
@@ -112,3 +115,21 @@ class AnalisisJornadaIACrearSerializer(serializers.ModelSerializer):
         model = AnalisisJornadaIA
         fields = ['id', 'jornada', 'estado', 'creado_en']
         read_only_fields = ['id', 'estado', 'creado_en']
+
+
+class InfografiaImagenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InfografiaImagen
+        fields = ['id', 'archivo', 'orden']
+
+
+class InfografiaJornadaSerializer(serializers.ModelSerializer):
+    imagenes = InfografiaImagenSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = InfografiaJornada
+        fields = [
+            'id', 'reporte', 'estado', 'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes',
+            'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
+        ]
+        read_only_fields = fields

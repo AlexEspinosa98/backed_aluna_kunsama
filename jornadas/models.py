@@ -60,6 +60,41 @@ class Jornada(models.Model):
         return self.nombre
 
 
+class JornadaAsset(models.Model):
+    """Archivos visuales de una jornada, subidos desde su creación/actualización, usados como
+    referencia real (no solo descrita en texto) al generar infografías con IA (ver
+    analitica/infografia_ia_openai.py). Dos tipos con reglas de formato distintas:
+    - `asset`: imágenes sueltas (fotos, logos, ilustraciones) que se mandan tal cual como
+      referencia visual.
+    - `system_design`: la guía de marca (paleta, tipografía, logo) que la infografía debe
+      respetar — imagen o PDF (se rasteriza su primera página). Un `.docx` de guía de marca no se
+      soporta acá: no hay forma de convertirlo a imagen sin LibreOffice, así que debe subirse como
+      imagen o PDF. Se permiten varias filas por jornada (historial); la generación de infografía
+      siempre usa la más reciente de cada tipo."""
+    TIPO_ASSET = 'asset'
+    TIPO_SYSTEM_DESIGN = 'system_design'
+    TIPO_CHOICES = [
+        (TIPO_ASSET, 'Asset'),
+        (TIPO_SYSTEM_DESIGN, 'System design'),
+    ]
+
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='assets')
+    tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default=TIPO_ASSET)
+    archivo = models.FileField(upload_to='jornadas/assets/%Y/%m/')
+    nombre_archivo_original = models.CharField(max_length=255, blank=True)
+    subido_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='assets_jornada_subidos',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+
+    def __str__(self):
+        return f'{self.jornada.slug} · {self.tipo} · {self.nombre_archivo_original or self.archivo.name}'
+
+
 class RolJornada(models.Model):
     """Catálogo de roles institucionales válidos para una jornada (ej. "estudiante",
     "directivo") — igual que la mesa (un entero simple, sin modelo propio) no le da a esto un

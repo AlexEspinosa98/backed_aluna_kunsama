@@ -3,12 +3,17 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from .models import (
-    ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, PerfilUsuario,
-    Pregunta, RolJornada,
+    ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, JornadaAsset, Momento, OpcionPregunta,
+    PerfilUsuario, Pregunta, RolJornada,
 )
 from .scoping import es_dependencia
 
 Usuario = get_user_model()
+
+EXTENSIONES_POR_TIPO_ASSET = {
+    JornadaAsset.TIPO_ASSET: ('png', 'jpg', 'jpeg', 'webp'),
+    JornadaAsset.TIPO_SYSTEM_DESIGN: ('png', 'jpg', 'jpeg', 'webp', 'pdf'),
+}
 
 
 class OpcionPreguntaSerializer(serializers.ModelSerializer):
@@ -133,6 +138,39 @@ class JornadaAdminSerializer(serializers.ModelSerializer):
         if request is not None and es_dependencia(request.user):
             fields['propietarios'].read_only = True
         return fields
+
+
+class JornadaAssetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JornadaAsset
+        fields = [
+            'id', 'jornada', 'tipo', 'archivo', 'nombre_archivo_original', 'subido_por', 'creado_en',
+        ]
+        read_only_fields = ['nombre_archivo_original', 'subido_por', 'creado_en']
+
+
+class JornadaAssetCrearSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = JornadaAsset
+        fields = ['id', 'jornada', 'tipo', 'archivo', 'creado_en']
+        read_only_fields = ['id', 'creado_en']
+
+    def validate(self, attrs):
+        archivo = attrs['archivo']
+        tipo = attrs.get('tipo', JornadaAsset.TIPO_ASSET)
+        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+        permitidas = EXTENSIONES_POR_TIPO_ASSET[tipo]
+        if extension not in permitidas:
+            raise serializers.ValidationError({'archivo': (
+                f'Formato no soportado para tipo "{tipo}": solo se aceptan '
+                f'{", ".join("." + ext for ext in permitidas)}.'
+            )})
+        return attrs
+
+    def create(self, validated_data):
+        return JornadaAsset.objects.create(
+            nombre_archivo_original=validated_data['archivo'].name, **validated_data,
+        )
 
 
 class JornadaPublicaSerializer(serializers.ModelSerializer):

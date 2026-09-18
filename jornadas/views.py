@@ -4,7 +4,8 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.viewsets import ModelViewSet
 
 from .models import (
-    ColumnaMatrizPregunta, FilaMatrizPregunta, Momento, OpcionPregunta, Pregunta, RolJornada,
+    ColumnaMatrizPregunta, FilaMatrizPregunta, JornadaAsset, Momento, OpcionPregunta, Pregunta,
+    RolJornada,
 )
 from .permissions import EsAdminCompleto
 from .scoping import es_dependencia, filtrar_por_propietario, jornadas_visibles
@@ -12,6 +13,8 @@ from .serializers import (
     ColumnaMatrizPreguntaSerializer,
     FilaMatrizPreguntaSerializer,
     JornadaAdminSerializer,
+    JornadaAssetCrearSerializer,
+    JornadaAssetSerializer,
     MomentoAdminSerializer,
     OpcionPreguntaSerializer,
     PreguntaAdminSerializer,
@@ -82,6 +85,32 @@ class RolJornadaAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
         return queryset
+
+
+class JornadaAssetAdminViewSet(ModelViewSet):
+    """Assets (imágenes) y system design de una jornada — usados como referencia visual real al
+    generar infografías (ver analitica.infografia_ia_openai). Solo list/create/destroy: un asset
+    se reemplaza subiendo uno nuevo y borrando el viejo, nunca se edita in place."""
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    permission_classes = [IsAdminUser]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return JornadaAssetCrearSerializer
+        return JornadaAssetSerializer
+
+    def get_queryset(self):
+        queryset = filtrar_por_propietario(JornadaAsset.objects.all(), self.request.user, 'jornada__propietarios')
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        return queryset
+
+    def perform_create(self, serializer):
+        jornada = serializer.validated_data['jornada']
+        if es_dependencia(self.request.user) and not jornada.propietarios.filter(id=self.request.user.id).exists():
+            raise PermissionDenied('No puedes crear contenido bajo una jornada que no es tuya.')
+        serializer.save(subido_por=self.request.user)
 
 
 class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
