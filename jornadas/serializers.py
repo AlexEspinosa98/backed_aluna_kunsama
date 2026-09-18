@@ -144,33 +144,72 @@ class JornadaAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = JornadaAsset
         fields = [
-            'id', 'jornada', 'tipo', 'archivo', 'nombre_archivo_original', 'subido_por', 'creado_en',
+            'id', 'jornada', 'tipo', 'archivo', 'nombre_archivo_original', 'texto', 'subido_por',
+            'creado_en',
         ]
         read_only_fields = ['nombre_archivo_original', 'subido_por', 'creado_en']
 
 
-class JornadaAssetCrearSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = JornadaAsset
-        fields = ['id', 'jornada', 'tipo', 'archivo', 'creado_en']
-        read_only_fields = ['id', 'creado_en']
+class JornadaAssetCrearSerializer(serializers.Serializer):
+    """Carga **en bloque**: un solo POST con varios archivos (y/o un texto de guía de marca),
+    todos de la misma jornada y el mismo `tipo` — que es como se cargan de verdad: se arrastran
+    de una vez las fotos de la jornada, y la guía de marca va aparte. Un `tipo` por request y no
+    por archivo porque mezclar fotos y guía de marca en la misma tanda no es un caso real, y
+    mapear tipo-por-archivo en multipart es frágil.
+
+    **Todo o nada**: si un archivo no pasa la validación no se crea ninguno. Una tanda a medias
+    deja al cliente adivinando cuáles de los 5 entraron, que es peor que reintentar los 5."""
+    jornada = serializers.PrimaryKeyRelatedField(queryset=Jornada.objects.all())
+    tipo = serializers.ChoiceField(choices=JornadaAsset.TIPO_CHOICES, default=JornadaAsset.TIPO_ASSET)
+    archivos = serializers.ListField(child=serializers.FileField(), required=False, default=list)
+    texto = serializers.CharField(required=False, allow_blank=True, default='', trim_whitespace=True)
 
     def validate(self, attrs):
-        archivo = attrs['archivo']
-        tipo = attrs.get('tipo', JornadaAsset.TIPO_ASSET)
-        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
-        permitidas = EXTENSIONES_POR_TIPO_ASSET[tipo]
-        if extension not in permitidas:
-            raise serializers.ValidationError({'archivo': (
-                f'Formato no soportado para tipo "{tipo}": solo se aceptan '
-                f'{", ".join("." + ext for ext in permitidas)}.'
+        tipo = attrs['tipo']
+        archivos = attrs['archivos']
+        texto = attrs['texto']
+
+        if tipo == JornadaAsset.TIPO_ASSET:
+            if texto:
+                raise serializers.ValidationError({'texto': (
+                    'Solo un system_design puede ser texto — un asset es una imagen que se usa '
+                    'como referencia visual.'
+                )})
+            if not archivos:
+                raise serializers.ValidationError({'archivos': 'Manda al menos un archivo.'})
+        elif not archivos and not texto:
+            raise serializers.ValidationError({'archivos': (
+                'Un system_design necesita al menos un archivo o un texto con la guía de marca.'
             )})
+
+        permitidas = EXTENSIONES_POR_TIPO_ASSET[tipo]
+        for archivo in archivos:
+            extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+            if extension not in permitidas:
+                raise serializers.ValidationError({'archivos': (
+                    f'"{archivo.name}": formato no soportado para tipo "{tipo}". Solo se aceptan '
+                    f'{", ".join("." + ext for ext in permitidas)}.'
+                )})
         return attrs
 
     def create(self, validated_data):
-        return JornadaAsset.objects.create(
-            nombre_archivo_original=validated_data['archivo'].name, **validated_data,
-        )
+        comunes = {
+            'jornada': validated_data['jornada'],
+            'tipo': validated_data['tipo'],
+            'subido_por': validated_data.get('subido_por'),
+        }
+        creados = [
+            JornadaAsset.objects.create(
+                archivo=archivo, nombre_archivo_original=archivo.name, **comunes,
+            )
+            for archivo in validated_data['archivos']
+        ]
+        # El texto va en su propia fila, no pegado a uno de los archivos: así cada referencia es
+        # un recurso con id propio (se puede borrar el texto sin borrar la imagen) y no hay que
+        # decidir a cuál de los N archivos "pertenece".
+        if validated_data['texto']:
+            creados.append(JornadaAsset.objects.create(texto=validated_data['texto'], **comunes))
+        return creados
 
 
 class JornadaPublicaSerializer(serializers.ModelSerializer):

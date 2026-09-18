@@ -92,18 +92,31 @@ def _leer_imagen_referencia(asset):
 
 def _reunir_imagenes_referencia(jornada):
     """Hasta MAX_ASSETS_REFERENCIA assets tipo 'asset' (más recientes primero, ya es el ordering
-    por defecto del modelo) + el 'system_design' más reciente, si existe. Un archivo individual
-    que falle al leerse/convertirse se omite (no debe tumbar toda la generación por un asset
-    puntual corrupto)."""
+    por defecto del modelo) + el 'system_design' con archivo más reciente, si existe. Se excluyen
+    las filas sin archivo (un system_design puede ser solo texto, ver `_texto_system_design`). Un
+    archivo individual que falle al leerse/convertirse se omite (no debe tumbar toda la generación
+    por un asset puntual corrupto)."""
     imagenes = []
-    assets = jornada.assets.filter(tipo=JornadaAsset.TIPO_ASSET)[:MAX_ASSETS_REFERENCIA]
-    system_design = jornada.assets.filter(tipo=JornadaAsset.TIPO_SYSTEM_DESIGN).first()
+    assets = jornada.assets.filter(tipo=JornadaAsset.TIPO_ASSET).exclude(archivo='')[:MAX_ASSETS_REFERENCIA]
+    system_design = jornada.assets.filter(
+        tipo=JornadaAsset.TIPO_SYSTEM_DESIGN,
+    ).exclude(archivo='').first()
     for asset in list(assets) + ([system_design] if system_design else []):
         try:
             imagenes.append(_leer_imagen_referencia(asset))
         except Exception:  # noqa: BLE001 — un asset ilegible no debe abortar la generación entera
             continue
     return imagenes
+
+
+def _texto_system_design(jornada):
+    """Guía de marca escrita (colores, tipografía, tono) de la jornada, si la cargaron — el
+    `system_design` con texto más reciente. Va al prompt, no como imagen: es una instrucción de
+    estilo, no algo que el modelo deba copiar visualmente."""
+    system_design = jornada.assets.filter(
+        tipo=JornadaAsset.TIPO_SYSTEM_DESIGN,
+    ).exclude(texto='').first()
+    return system_design.texto if system_design else ''
 
 
 def _obtener_datos_analitica(reporte):
@@ -138,10 +151,15 @@ def _obtener_datos_analitica(reporte):
     )
 
 
-def _construir_prompt(datos_analitica):
-    return SYSTEM_PROMPT_PREFIJO + '\n\nDATOS REALES (JSON):\n' + json.dumps(
-        datos_analitica, ensure_ascii=False, indent=2,
-    )
+def _construir_prompt(datos_analitica, texto_system_design=''):
+    partes = [SYSTEM_PROMPT_PREFIJO]
+    if texto_system_design:
+        partes.append(
+            'GUÍA DE MARCA (respétala por encima de cualquier criterio estético propio):\n'
+            + texto_system_design
+        )
+    partes.append('DATOS REALES (JSON):\n' + json.dumps(datos_analitica, ensure_ascii=False, indent=2))
+    return '\n\n'.join(partes)
 
 
 def _llamar_openai_imagenes(prompt, imagenes_referencia_png):
@@ -223,7 +241,7 @@ def generar_infografias(infografia_id):
             infografia.save(update_fields=['estado', 'error_mensaje'])
             return
 
-        prompt = _construir_prompt(datos)
+        prompt = _construir_prompt(datos, _texto_system_design(reporte.jornada))
         infografia.prompt_usado = prompt
         imagenes_referencia = _reunir_imagenes_referencia(reporte.jornada)
 

@@ -21,7 +21,7 @@ En la pantalla de creación/edición de una `Jornada` (después de guardarla, po
 siempre cuelga de un `id` de jornada ya existente): dos secciones, "Imágenes" y "System design
 (guía de marca)".
 
-### Subir un asset
+### Subir assets — **en bloque, un solo POST**
 
 ```
 POST /api/admin/jornada-assets/
@@ -30,33 +30,70 @@ Content-Type: multipart/form-data
 
 jornada: <id de la jornada>
 tipo: asset | system_design
-archivo: <el archivo>
+archivos: <archivo 1>
+archivos: <archivo 2>
+archivos: <archivo 3>
+texto: <opcional, solo para system_design>
 ```
 
-Formatos aceptados **según `tipo`** (`400` con la clave `archivo` si no calza):
+El campo se llama **`archivos`** (plural) y se repite una vez por archivo — es el formato estándar
+de multipart para listas, el que produce un `<input type="file" multiple>` tal cual. Con un solo
+archivo también va como lista de uno.
+
+Un POST **crea un asset por cada archivo**, más uno extra por el `texto` si lo mandan. Por eso la
+respuesta es siempre un **array**, nunca un objeto suelto:
+
+```json
+[
+  {
+    "id": 12,
+    "jornada": 4,
+    "tipo": "asset",
+    "archivo": "http://.../media/jornadas/assets/2026/09/foto-1.png",
+    "nombre_archivo_original": "foto-1.png",
+    "texto": "",
+    "subido_por": 3,
+    "creado_en": "2026-09-18T15:20:00Z"
+  },
+  { "id": 13, "...": "..." }
+]
+```
+
+**Todo o nada**: si un solo archivo de la tanda no pasa la validación, responde `400` (con la
+clave `archivos` y el nombre del archivo culpable) y **no se crea ninguno**. Así no quedan dudas
+de cuáles entraron — si falla, se corrige y se reintenta la tanda completa.
+
+Formatos aceptados **según `tipo`**:
 
 | `tipo`          | Formatos                        |
 |------------------|----------------------------------|
 | `asset`          | `.png`, `.jpg`, `.jpeg`, `.webp` |
 | `system_design`  | `.png`, `.jpg`, `.jpeg`, `.webp`, `.pdf` |
 
-`system_design` **no acepta `.docx`** — si la guía de marca solo existe en Word, hay que
-exportarla a PDF o a imagen antes de subirla (no hay forma de rasterizar un Word sin herramientas
-externas que el backend no tiene instaladas). Validen la extensión también en el cliente para no
-gastar la subida.
+`system_design` **no acepta `.docx`** — si la guía de marca solo existe en Word, o la exportan a
+PDF/imagen, o la mandan como `texto` (ver abajo). Validen la extensión también en el cliente para
+no gastar la subida.
 
-Respuesta `201`:
-```json
-{
-  "id": 12,
-  "jornada": 4,
-  "tipo": "asset",
-  "archivo": "http://.../media/jornadas/assets/2026/09/logo.png",
-  "nombre_archivo_original": "logo.png",
-  "subido_por": 3,
-  "creado_en": "2026-09-18T15:20:00Z"
-}
+### System design escrito (sin archivo)
+
+No hace falta tener un PDF de marca: se puede mandar la guía como texto plano.
+
 ```
+POST /api/admin/jornada-assets/
+jornada: 4
+tipo: system_design
+texto: Paleta #14384A (azul institucional) y #C08A28 (ocre). Tipografía serif para títulos,
+       sans-serif para cuerpo. Tono sobrio, institucional, sin ilustraciones caricaturescas.
+```
+
+- Se puede mandar **solo texto**, **solo archivos**, o **ambos** (ahí se crean dos registros: uno
+  con el archivo y otro con el texto, cada uno con su `id`, para poder borrar uno sin el otro).
+- Un `system_design` sin archivos **y** sin texto es `400`.
+- `texto` **solo aplica a `system_design`**. Mandarlo con `tipo: asset` es `400` (un asset es una
+  imagen que se compone, no una instrucción de estilo) — así no se pierde silenciosamente.
+- El texto entra **en el prompt** de la generación como guía de marca a respetar; los archivos
+  entran como **referencia visual**. Se complementan: pueden mandar el logo como archivo y las
+  reglas de color como texto.
 
 ### Listar / borrar
 
@@ -67,8 +104,9 @@ DELETE /api/admin/jornada-assets/{id}/
 
 No hay `PUT`/`PATCH`: un asset se reemplaza subiendo uno nuevo y borrando el viejo. Se permiten
 varios `asset` por jornada (se muestran todos, más reciente primero); de `system_design` también
-se pueden subir varios (historial), pero **la infografía siempre usa el más reciente** — si suben
-uno nuevo, el anterior queda solo como registro.
+se pueden cargar varios (historial). La infografía usa siempre **lo más reciente de cada clase**:
+el último `system_design` con archivo y el último `system_design` con texto — si suben uno nuevo,
+el anterior queda solo como registro.
 
 Mismo scoping por dependencia que el resto del panel: una cuenta de dependencia solo ve/crea
 assets de sus propias jornadas (`403` si intenta contra una ajena).
@@ -178,8 +216,14 @@ el frontend mande nada de esto en el `POST`: el backend los busca solo a partir 
 ## 3. Checklist
 
 - [ ] Solo dejar subir assets sobre una jornada ya guardada (con `id`).
+- [ ] Usar `<input type="file" multiple>` y mandar **`archivos`** repetido: es subida en bloque,
+      no un POST por archivo.
+- [ ] Tratar la respuesta del `POST` como **array**, no como objeto.
 - [ ] Validar extensión en cliente según `tipo` (`asset`: imagen; `system_design`: imagen o PDF,
-      nunca `.docx`).
+      nunca `.docx`) — el backend rechaza la tanda completa si uno falla.
+- [ ] Ofrecer el system design también como **campo de texto**, no solo como upload: es lo que se
+      va a usar cuando no haya PDF de marca a la mano.
+- [ ] No mandar `texto` con `tipo: asset` (es `400`).
 - [ ] Listar assets con `?jornada=<id>`; no hay edición, solo subir uno nuevo + borrar el viejo.
 - [ ] Deshabilitar (o avisar) el botón de generar infografía si la jornada no tiene ni `Reporte`
       completo ni `AnalisisJornadaIA` completo.

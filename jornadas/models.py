@@ -61,16 +61,21 @@ class Jornada(models.Model):
 
 
 class JornadaAsset(models.Model):
-    """Archivos visuales de una jornada, subidos desde su creación/actualización, usados como
-    referencia real (no solo descrita en texto) al generar infografías con IA (ver
-    analitica/infografia_ia_openai.py). Dos tipos con reglas de formato distintas:
+    """Referencias visuales de una jornada, cargadas desde su creación/actualización y usadas al
+    generar infografías con IA (ver analitica/infografia_ia_openai.py). Dos tipos:
     - `asset`: imágenes sueltas (fotos, logos, ilustraciones) que se mandan tal cual como
-      referencia visual.
+      referencia visual. Siempre tienen `archivo`.
     - `system_design`: la guía de marca (paleta, tipografía, logo) que la infografía debe
-      respetar — imagen o PDF (se rasteriza su primera página). Un `.docx` de guía de marca no se
-      soporta acá: no hay forma de convertirlo a imagen sin LibreOffice, así que debe subirse como
-      imagen o PDF. Se permiten varias filas por jornada (historial); la generación de infografía
-      siempre usa la más reciente de cada tipo."""
+      respetar. Puede ser un **archivo** (imagen o PDF, se rasteriza su primera página) o
+      **texto** (`texto`: "paleta #14384A y #C08A28, tipografía serif, tono institucional"), o
+      ambos en filas distintas. El texto existe porque muchas veces no hay un PDF de marca a la
+      mano pero sí se sabe perfectamente qué colores y tipografía usar, y obligar a fabricar una
+      imagen para decir eso era fricción pura. Un `.docx` no se soporta como archivo: no hay forma
+      de rasterizarlo sin LibreOffice — si la guía está en Word, va como texto o exportada a PDF.
+
+    Una fila = una referencia. Se permiten varias por jornada (historial); la generación usa
+    siempre la más reciente de cada clase (el último `asset`, el último `system_design` con
+    archivo y el último `system_design` con texto)."""
     TIPO_ASSET = 'asset'
     TIPO_SYSTEM_DESIGN = 'system_design'
     TIPO_CHOICES = [
@@ -80,8 +85,13 @@ class JornadaAsset(models.Model):
 
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='assets')
     tipo = models.CharField(max_length=20, choices=TIPO_CHOICES, default=TIPO_ASSET)
-    archivo = models.FileField(upload_to='jornadas/assets/%Y/%m/')
+    # Opcional porque un system_design puede ser solo texto. Un `asset` siempre trae archivo — eso
+    # se valida en el serializer, que es donde se distingue por tipo.
+    archivo = models.FileField(upload_to='jornadas/assets/%Y/%m/', blank=True)
     nombre_archivo_original = models.CharField(max_length=255, blank=True)
+    texto = models.TextField(blank=True, help_text=(
+        'Guía de marca escrita (colores, tipografía, tono). Solo aplica a tipo system_design.'
+    ))
     subido_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='assets_jornada_subidos',
@@ -92,7 +102,8 @@ class JornadaAsset(models.Model):
         ordering = ['-creado_en']
 
     def __str__(self):
-        return f'{self.jornada.slug} · {self.tipo} · {self.nombre_archivo_original or self.archivo.name}'
+        detalle = self.nombre_archivo_original or self.archivo.name or f'texto ({len(self.texto)} car.)'
+        return f'{self.jornada.slug} · {self.tipo} · {detalle}'
 
 
 class RolJornada(models.Model):

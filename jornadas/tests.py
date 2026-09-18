@@ -246,28 +246,96 @@ class JornadaAssetTests(APITestCase):
     def test_admin_sube_asset_imagen(self):
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post('/api/admin/jornada-assets/', {
-            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._imagen(),
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivos': [self._imagen()],
         }, format='multipart')
         self.assertEqual(resp.status_code, 201)
-        asset = JornadaAsset.objects.get(id=resp.data['id'])
+        self.assertEqual(len(resp.data), 1)
+        asset = JornadaAsset.objects.get(id=resp.data[0]['id'])
         self.assertEqual(asset.jornada, self.jornada_a)
         self.assertEqual(asset.nombre_archivo_original, 'logo.png')
         self.assertEqual(asset.subido_por, self.admin)
 
+    def test_sube_varios_assets_en_un_solo_post(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET,
+            'archivos': [self._imagen('uno.png'), self._imagen('dos.jpg'), self._imagen('tres.webp')],
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(resp.data), 3)
+        self.assertEqual(JornadaAsset.objects.filter(jornada=self.jornada_a).count(), 3)
+        self.assertEqual(
+            sorted(a.nombre_archivo_original for a in JornadaAsset.objects.all()),
+            ['dos.jpg', 'tres.webp', 'uno.png'],
+        )
+
+    def test_un_archivo_invalido_no_crea_ninguno(self):
+        """Todo o nada: una tanda a medias deja al cliente sin saber cuáles entraron."""
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET,
+            'archivos': [self._imagen('buena.png'), self._pdf('mala.pdf')],
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivos', resp.data)
+        self.assertEqual(JornadaAsset.objects.count(), 0)
+
     def test_admin_sube_system_design_como_pdf(self):
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post('/api/admin/jornada-assets/', {
-            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN, 'archivo': self._pdf(),
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN,
+            'archivos': [self._pdf()],
         }, format='multipart')
         self.assertEqual(resp.status_code, 201)
+
+    def test_system_design_puede_ser_solo_texto(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN,
+            'texto': 'Paleta #14384A y #C08A28, tipografía serif, tono institucional.',
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(resp.data), 1)
+        asset = JornadaAsset.objects.get(id=resp.data[0]['id'])
+        self.assertEqual(asset.archivo, '')
+        self.assertIn('#14384A', asset.texto)
+
+    def test_system_design_con_archivo_y_texto_crea_dos_filas(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN,
+            'archivos': [self._pdf()], 'texto': 'Usar el azul institucional.',
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(resp.data), 2)
+        self.assertEqual(JornadaAsset.objects.exclude(archivo='').count(), 1)
+        self.assertEqual(JornadaAsset.objects.exclude(texto='').count(), 1)
+
+    def test_system_design_vacio_es_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN,
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(JornadaAsset.objects.count(), 0)
+
+    def test_asset_no_acepta_texto(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/jornada-assets/', {
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET,
+            'archivos': [self._imagen()], 'texto': 'azul',
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('texto', resp.data)
+        self.assertEqual(JornadaAsset.objects.count(), 0)
 
     def test_rechaza_pdf_para_tipo_asset(self):
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post('/api/admin/jornada-assets/', {
-            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._pdf(),
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivos': [self._pdf()],
         }, format='multipart')
         self.assertEqual(resp.status_code, 400)
-        self.assertIn('archivo', resp.data)
+        self.assertIn('archivos', resp.data)
 
     def test_rechaza_docx_para_system_design(self):
         self.client.force_authenticate(user=self.admin)
@@ -276,15 +344,15 @@ class JornadaAssetTests(APITestCase):
             content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         )
         resp = self.client.post('/api/admin/jornada-assets/', {
-            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN, 'archivo': archivo,
+            'jornada': self.jornada_a.id, 'tipo': JornadaAsset.TIPO_SYSTEM_DESIGN, 'archivos': [archivo],
         }, format='multipart')
         self.assertEqual(resp.status_code, 400)
-        self.assertIn('archivo', resp.data)
+        self.assertIn('archivos', resp.data)
 
     def test_dependencia_no_puede_subir_asset_a_jornada_ajena(self):
         self.client.force_authenticate(user=self.dependencia_a)
         resp = self.client.post('/api/admin/jornada-assets/', {
-            'jornada': self.jornada_b.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivo': self._imagen(),
+            'jornada': self.jornada_b.id, 'tipo': JornadaAsset.TIPO_ASSET, 'archivos': [self._imagen()],
         }, format='multipart')
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(JornadaAsset.objects.count(), 0)

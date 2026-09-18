@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
+from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAdminUser
+from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from .models import (
@@ -106,11 +108,17 @@ class JornadaAssetAdminViewSet(ModelViewSet):
             queryset = queryset.filter(jornada_id=jornada_id)
         return queryset
 
-    def perform_create(self, serializer):
-        jornada = serializer.validated_data['jornada']
-        if es_dependencia(self.request.user) and not jornada.propietarios.filter(id=self.request.user.id).exists():
+    def create(self, request, *args, **kwargs):
+        """Un POST crea un asset por cada archivo enviado, más uno por el `texto` si viene — por
+        eso responde una **lista**, no un objeto."""
+        entrada = self.get_serializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada = entrada.validated_data['jornada']
+        if es_dependencia(request.user) and not jornada.propietarios.filter(id=request.user.id).exists():
             raise PermissionDenied('No puedes crear contenido bajo una jornada que no es tuya.')
-        serializer.save(subido_por=self.request.user)
+        creados = entrada.save(subido_por=request.user)
+        salida = JornadaAssetSerializer(creados, many=True, context=self.get_serializer_context())
+        return Response(salida.data, status=status.HTTP_201_CREATED)
 
 
 class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
