@@ -1,9 +1,9 @@
-from django.conf import settings
-from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
+
+from .media_views import servir_media_publica
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -17,13 +17,10 @@ urlpatterns = [
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    # Los assets de marca y las infografías generadas son los primeros archivos subidos que el
+    # frontend necesita VER por URL (el resto de `media/` solo lo lee el backend para mandarlo a
+    # OpenAI). Se sirven desde Django y no desde nginx porque este despliegue no tiene un `alias`
+    # para /media/ y agregarlo requiere root — ver config/media_views.py, que restringe qué se
+    # expone. Va sin depender de DEBUG: en producción es justamente donde hace falta.
+    re_path(r'^media/(?P<path>.*)$', servir_media_publica, name='media-publica'),
 ]
-
-# Hasta ahora ningún archivo subido se servía por URL pública (ver el comentario junto a MEDIA_URL
-# en config/settings.py): todos los FileField existentes solo los leía el propio backend para
-# mandarlos a OpenAI. Las imágenes de infografía (InfografiaImagen) son las primeras que sí
-# necesita ver/descargar el frontend. `static()` únicamente sirve `/media/` cuando DEBUG=True — en
-# producción falta decidir cómo se expone (nginx, whitenoise o un bucket S3 vía django-storages),
-# eso queda fuera del alcance de este cambio.
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

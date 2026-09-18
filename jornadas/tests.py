@@ -2,6 +2,7 @@ import datetime
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 from .models import Jornada, JornadaAsset, Momento, PerfilUsuario, Pregunta
@@ -384,6 +385,33 @@ class JornadaAssetTests(APITestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(len(resp.data), 1)
         self.assertEqual(resp.data[0]['jornada'], self.jornada_a.id)
+
+    def test_media_publica_sirve_un_asset(self):
+        """Los assets se sirven desde Django porque nginx no tiene alias para /media/."""
+        asset = JornadaAsset.objects.create(jornada=self.jornada_a, archivo=self._imagen())
+        resp = self.client.get(f'/media/{asset.archivo.name}')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_media_publica_no_expone_documentos_de_participantes(self):
+        """`media/` también guarda documentos con datos personales: servirlo entero los publicaría."""
+        resp = self.client.get('/media/participantes/extracciones/2026/09/secreto.pdf')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_media_publica_bloquea_path_traversal(self):
+        """Empieza por un directorio público pero apunta fuera: se normaliza antes de comparar."""
+        resp = self.client.get('/media/jornadas/assets/../participantes/extracciones/secreto.pdf')
+        self.assertEqual(resp.status_code, 404)
+
+    @override_settings(MEDIA_URL='/api/aluna-kunsama/media/')
+    def test_url_del_asset_respeta_el_prefijo_de_montaje(self):
+        """Detrás del proxy la app vive bajo /api/aluna-kunsama/ y nginx quita ese prefijo antes
+        de pasar la petición, así que Django no puede deducirlo: se configura por MEDIA_URL. Sin
+        esto el FE recibía enlaces sin el prefijo, que daban 404."""
+        JornadaAsset.objects.create(jornada=self.jornada_a, archivo=self._imagen())
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/jornada-assets/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('/api/aluna-kunsama/media/jornadas/assets/', resp.data[0]['archivo'])
 
     def test_admin_borra_asset(self):
         asset = JornadaAsset.objects.create(jornada=self.jornada_a, archivo=self._imagen())

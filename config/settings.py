@@ -99,11 +99,20 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Primer uso de subida de archivos del proyecto (documentos ya diligenciados para
-# ExtraccionInstrumento) — nunca se sirven públicamente por URL, solo los lee el propio backend
-# para mandarlos a OpenAI, así que no hace falta configurar nginx para esto.
-MEDIA_URL = 'media/'
+# Configurable por entorno porque la app puede vivir bajo un prefijo de ruta: en el despliegue
+# nginx la monta en /api/aluna-kunsama/ y QUITA ese prefijo antes de pasar la petición, así que
+# Django no tiene forma de adivinarlo y las URLs de los archivos salían apuntando a un /media/
+# que no existe de cara al público. Ahí se pone MEDIA_URL=/api/aluna-kunsama/media/.
+# Ojo: `media/` NO es público en bloque. Los documentos diligenciados que suben participantes solo
+# los lee el backend para mandarlos a OpenAI; lo único que se sirve por URL son los assets de
+# marca y las infografías, y eso lo restringe config/media_views.py.
+MEDIA_URL = env('MEDIA_URL', default='/media/')
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# nginx termina el TLS y pasa el esquema real acá. Sin esto Django cree que todo es http y arma
+# las URLs absolutas (las de los assets, entre otras) con http://, que el navegador bloquea como
+# contenido mixto al cargarlas desde un frontend en https.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

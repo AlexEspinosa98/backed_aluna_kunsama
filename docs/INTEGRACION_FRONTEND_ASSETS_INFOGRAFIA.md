@@ -49,7 +49,7 @@ respuesta es siempre un **array**, nunca un objeto suelto:
     "id": 12,
     "jornada": 4,
     "tipo": "asset",
-    "archivo": "http://.../media/jornadas/assets/2026/09/foto-1.png",
+    "archivo": "https://back.alunaia.co/api/aluna-kunsama/media/jornadas/assets/2026/09/foto-1.png",
     "nombre_archivo_original": "foto-1.png",
     "texto": "",
     "subido_por": 3,
@@ -82,6 +82,27 @@ silencio a la hora de generar.
 `system_design` **no acepta `.docx`** — si la guía de marca solo existe en Word, o la exportan a
 PDF/imagen, o la mandan como `texto` (ver abajo). Validen la extensión también en el cliente para
 no gastar la subida.
+
+### Límites de carga (importante para la subida en bloque)
+
+| Límite | Valor | Quién lo impone | Qué pasa si se excede |
+|---|---|---|---|
+| **Tamaño total del request** | **20 MB** | nginx (`client_max_body_size`) | **413** con una página HTML de nginx, **no** un JSON |
+| Cantidad de archivos por request | 100 | Django | `400` |
+| Tamaño por archivo | sin límite propio | — | lo acota el de 20 MB del request |
+
+**El que van a chocar es el de 20 MB, y es por request completo, no por archivo.** Cinco fotos de
+celular de 5 MB cada una ya lo superan. Y como nginx corta la petición **antes** de que Django la
+vea, el backend no puede devolverles un mensaje decente: reciben HTML, no JSON.
+
+Por eso, del lado del FE:
+- Sumen el tamaño de los archivos seleccionados **antes** de enviar y avisen si pasan de ~18 MB.
+- Si el usuario selecciona muchas fotos, **manden varias tandas** en vez de una sola. Como cada
+  POST crea sus assets de forma independiente, partir en lotes no tiene ningún efecto secundario.
+- Contemplen el `413` con cuerpo HTML como caso de error, porque no van a poder parsearlo como JSON.
+
+Si les resulta muy justo, el límite de nginx se puede subir (son dos líneas de config en el
+servidor, requiere root) — díganlo y se gestiona.
 
 ### System design escrito (sin archivo)
 
@@ -198,9 +219,9 @@ Respuesta cuando `estado: "completo"`:
   "error_mensaje": "",
   "modelo_usado": "gpt-image-2",
   "imagenes": [
-    {"id": 30, "archivo": "http://.../media/analitica/infografias/2026/09/infografia-7-0.png", "orden": 0},
-    {"id": 31, "archivo": "http://.../media/analitica/infografias/2026/09/infografia-7-1.png", "orden": 1},
-    {"id": 32, "archivo": "http://.../media/analitica/infografias/2026/09/infografia-7-2.png", "orden": 2}
+    {"id": 30, "archivo": "https://back.alunaia.co/api/aluna-kunsama/media/analitica/infografias/2026/09/infografia-7-0.png", "orden": 0},
+    {"id": 31, "archivo": "https://back.alunaia.co/api/aluna-kunsama/media/analitica/infografias/2026/09/infografia-7-1.png", "orden": 1},
+    {"id": 32, "archivo": "https://back.alunaia.co/api/aluna-kunsama/media/analitica/infografias/2026/09/infografia-7-2.png", "orden": 2}
   ],
   "solicitado_por": 3,
   "creado_en": "2026-09-18T15:30:00Z",
