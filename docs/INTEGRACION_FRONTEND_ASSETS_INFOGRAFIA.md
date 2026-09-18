@@ -13,6 +13,59 @@ que el resto del panel — ver la nota de autenticación al final.
 
 ---
 
+## 0. URL base — el prefijo de despliegue
+
+**Esto aplica a TODOS los endpoints de esta API, no solo a los de este documento.** En el servidor
+la aplicación no vive en la raíz del dominio: está montada bajo `/api/aluna-kunsama/`, y nginx
+quita ese prefijo antes de pasarle la petición al backend.
+
+```
+Base URL (producción):  https://back.alunaia.co/api/aluna-kunsama
+```
+
+Todas las rutas que aparecen en este documento son **relativas a esa base**:
+
+| Lo que dice el documento | URL completa que hay que llamar |
+|---|---|
+| `POST /api/admin/infografias/` | `https://back.alunaia.co/api/aluna-kunsama/api/admin/infografias/` |
+| `GET /api/admin/jornada-assets/?jornada=14` | `https://back.alunaia.co/api/aluna-kunsama/api/admin/jornada-assets/?jornada=14` |
+
+Sí, el `/api/` aparece dos veces: uno es el prefijo de despliegue y el otro es parte de la ruta de
+la app. No es un error de tipeo.
+
+### Si les da 404, revisen esto primero
+
+Omitir el prefijo devuelve **404**, y es un 404 engañoso porque **lo genera nginx, no la
+aplicación**: la petición nunca llega al backend, así que no deja rastro en los logs del servidor y
+parece que el endpoint "no existe" cuando en realidad está respondiendo bien a todos los demás.
+
+```
+❌  https://back.alunaia.co/api/admin/infografias/?jornada=15              → 404 (nginx)
+✅  https://back.alunaia.co/api/aluna-kunsama/api/admin/infografias/?jornada=15  → 200
+```
+
+**La barra final también importa.** Sin ella, Django responde `301` a la versión con barra; si su
+cliente HTTP no sigue redirecciones —o las sigue pero descarta el header `Authorization` al
+hacerlo, que es el comportamiento por defecto de varias librerías— van a ver un `401` o un error
+raro en lugar del dato.
+
+```
+❌  .../api/admin/infografias?jornada=15   → 301
+✅  .../api/admin/infografias/?jornada=15  → 200
+```
+
+Recomendación: definan la base URL **una sola vez** en el cliente HTTP y nunca escriban URLs
+absolutas a mano en los servicios. La mayoría de estos casos aparecen justo en la ruta que alguien
+escribió suelta.
+
+### Las URLs de archivos ya vienen completas
+
+Los campos `archivo` de assets e infografías **ya incluyen el prefijo y el dominio**
+(`https://back.alunaia.co/api/aluna-kunsama/media/...`). Úsenlos tal cual en un `<img src>`: no
+hay que anteponerles la base ni reconstruirlos, porque hacerlo los rompe.
+
+---
+
 ## 1. Assets de la jornada
 
 ### Cuándo mostrarlos
@@ -314,3 +367,25 @@ el frontend mande nada de esto en el `POST`: el backend los busca solo a partir 
 Todo esto vive bajo `/api/admin/...`: `Authorization: Token <hex de 40 chars>`, mismo token de
 sesión admin que ya usan para jornadas/momentos/reportes. No hay ninguna ruta pública (de
 participante) para assets ni infografías.
+
+Recuerden el prefijo de despliegue de la sección 0: la ruta completa es
+`https://back.alunaia.co/api/aluna-kunsama` + lo que diga cada endpoint acá.
+
+---
+
+## Apéndice — Diagnóstico rápido por código de respuesta
+
+Tabla para no tener que rastrear de cero cuando algo falla:
+
+| Código | Qué suele significar | Dónde mirar |
+|---|---|---|
+| `401` | Falta el header `Authorization`, o se perdió al seguir un `301` | El header y la barra final de la URL |
+| `403` | El token es de una cuenta *dependencia* y la jornada no le pertenece | Propietarios de la jornada |
+| `404` (HTML) | **Falta el prefijo `/api/aluna-kunsama`** — lo corta nginx, no llega al backend | La URL completa en la pestaña Network |
+| `404` (JSON) | El id existe en la URL pero no en la base, o está fuera del alcance de la cuenta | El id que están mandando |
+| `400` | Validación: campo mal nombrado, formato no soportado, o falta analítica para generar | El cuerpo de la respuesta, que dice cuál |
+| `409` | Ya hay una generación en curso para esa jornada | Esperar a que termine o falle |
+| `413` (HTML) | La tanda de archivos superó los 20 MB de nginx | Sumar tamaños antes de enviar |
+
+La diferencia entre los dos `404` es la clave: si el cuerpo es **HTML** de nginx, el problema es la
+URL; si es **JSON** de DRF, la URL está bien y el problema es el recurso.
