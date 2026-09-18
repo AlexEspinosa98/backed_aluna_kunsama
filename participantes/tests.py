@@ -162,45 +162,100 @@ class RespuestasIndividualesTests(BaseJornadaTestCase):
 
 
 class RespuestasPorMesaTests(BaseJornadaTestCase):
+    """Lo que se prueba acá es que en un momento tipo mesa la respuesta es de LA MESA, no de la
+    persona: quien la manda queda en `registrado_por`, pero la fila es una sola por mesa.
+
+    Esta clase quedó desactualizada cuando mesa/vocero pasaron a fijarse en el registro (ver
+    ff4d47a): la mesa ya no viaja en el body del POST — se lee de `Participante.mesa` para que
+    nadie pueda responder a nombre de otra mesa — y solo el vocero puede enviar. Los dos
+    participantes de antes no eran voceros, así que recibían 403 y no se guardaba nada.
+    """
     def setUp(self):
         super().setUp()
-        self.token_1 = self.registrar_participante('uno@uni.edu.co').data['token']
-        self.token_2 = self.registrar_participante('dos@uni.edu.co').data['token']
+        # Los dos son de la MESA 1; solo uno puede ser vocero a la vez (_validar_vocero_unico).
+        self.token_1 = self.registrar_participante(
+            'uno@uni.edu.co', mesa=1, es_vocero=True,
+        ).data['token']
+        self.token_2 = self.registrar_participante(
+            'dos@uni.edu.co', mesa=1, es_vocero=False,
+        ).data['token']
+        self.participante_1 = Participante.objects.get(correo_institucional='uno@uni.edu.co')
+        self.participante_2 = Participante.objects.get(correo_institucional='dos@uni.edu.co')
+        self.url = f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/'
 
-    def _payload(self, mesa='Mesa 1', opciones=None):
+    def _payload(self, opciones=None):
+        # Sin clave `mesa`: el body ya no la acepta, sale de Participante.mesa (ver
+        # RespuestaEnvioSerializer).
         return {
-            'mesa': mesa,
             'respuestas': [
                 {'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': opciones or [self.opcion_mesa_a.id]},
             ],
         }
 
+    def _cambiar_voceria(self, nuevo_vocero):
+        """Mueve la vocería de la mesa 1 de un participante al otro, como lo haría un admin con
+        PATCH /api/admin/participantes/{id}/ — en dos pasos porque no puede haber dos voceros de
+        la misma mesa al tiempo."""
+        for participante in (self.participante_1, self.participante_2):
+            if participante.es_vocero and participante != nuevo_vocero:
+                participante.es_vocero = False
+                participante.save(update_fields=['es_vocero'])
+        nuevo_vocero.es_vocero = True
+        nuevo_vocero.save(update_fields=['es_vocero'])
+
     def test_respuesta_por_mesa_requiere_mesa(self):
+        # Vocero SIN mesa asignada: pasa el filtro de vocería y cae justo en la validación de
+        # mesa, que es lo que este test quiere fijar (un 403 por no ser vocero lo dejaría pasar
+        # sin probar nada de esto).
+        token = self.registrar_participante(
+            'sinmesa@uni.edu.co', es_vocero=True,
+        ).data['token']
         resp = self.client.post(
-            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
-            {'respuestas': [{'pregunta_id': self.pregunta_mesa.id, 'opcion_ids': [self.opcion_mesa_a.id]}]},
-            format='json',
-            **self.auth_header(self.token_1),
+            self.url, self._payload(), format='json', **self.auth_header(token),
         )
         self.assertEqual(resp.status_code, 400)
+        self.assertIn('mesa', resp.data)
+
+    def test_no_vocero_no_puede_responder_momento_de_mesa(self):
+        resp = self.client.post(
+            self.url, self._payload(), format='json', **self.auth_header(self.token_2),
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_mesa).count(), 0)
 
     def test_dos_participantes_misma_mesa_comparten_respuesta(self):
-        self.client.post(
-            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
-            self._payload(opciones=[self.opcion_mesa_a.id]),
-            format='json',
-            **self.auth_header(self.token_1),
+        resp_1 = self.client.post(
+            self.url, self._payload(opciones=[self.opcion_mesa_a.id]),
+            format='json', **self.auth_header(self.token_1),
         )
-        self.client.post(
-            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_mesa.id}/respuestas/',
-            self._payload(opciones=[self.opcion_mesa_a.id, self.opcion_mesa_b.id]),
-            format='json',
-            **self.auth_header(self.token_2),
+        self.assertEqual(resp_1.status_code, 200)
+
+        # La vocería cambia de persona, pero la mesa sigue siendo la 1: el segundo envío tiene
+        # que ACTUALIZAR la fila de la mesa, no crear una segunda.
+        self._cambiar_voceria(self.participante_2)
+        resp_2 = self.client.post(
+            self.url, self._payload(opciones=[self.opcion_mesa_a.id, self.opcion_mesa_b.id]),
+            format='json', **self.auth_header(self.token_2),
         )
+        self.assertEqual(resp_2.status_code, 200)
+
         self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_mesa).count(), 1)
         respuesta = Respuesta.objects.get(pregunta=self.pregunta_mesa)
+        self.assertEqual(respuesta.mesa, 1)
+        self.assertIsNone(respuesta.participante)
         self.assertEqual(respuesta.opciones.count(), 2)
         self.assertEqual(respuesta.registrado_por.token.hex, self.token_2.replace('-', ''))
+
+    def test_cualquiera_de_la_mesa_lee_lo_que_respondio_el_vocero(self):
+        self.client.post(
+            self.url, self._payload(opciones=[self.opcion_mesa_a.id]),
+            format='json', **self.auth_header(self.token_1),
+        )
+        # El no vocero no puede escribir, pero sí ver lo que su mesa ya respondió.
+        resp = self.client.get(self.url, **self.auth_header(self.token_2))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(resp.data[0]['pregunta'], self.pregunta_mesa.id)
 
 
 class PreguntaRestringidaPorMesaTests(BaseJornadaTestCase):
