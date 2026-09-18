@@ -242,12 +242,16 @@ class AnalisisJornadaIA(models.Model):
 
 
 class InfografiaJornada(models.Model):
-    """Una corrida de generación de infografía (3 imágenes) para un `Reporte` ya completo, vía el
-    modelo de imágenes de OpenAI (ver analitica/infografia_ia_openai.py). Usa como referencia
-    visual directa los `JornadaAsset` de `reporte.jornada` (fotos/logos + el system design más
-    reciente) y como contenido `reporte.analisis` (o, si aún no está calculado, el
-    `AnalisisJornadaIA` más reciente de esa jornada) — mismo espíritu que
-    `Reporte.presentacion_*`, pero produciendo imágenes en vez de HTML."""
+    """Una corrida de generación de infografía (3 imágenes) para una `Jornada`, vía el modelo de
+    imágenes de OpenAI (ver analitica/infografia_ia_openai.py). Usa como referencia visual directa
+    los `JornadaAsset` de la jornada (fotos/logos + el system design más reciente) y como contenido
+    la analítica ya calculada.
+
+    Cuelga de la JORNADA, no de un `Reporte`. La analítica puede venir de cualquiera de las dos
+    vías del módulo —el pipeline local (`Reporte`) o el reporte integral de una sola llamada
+    (`AnalisisJornadaIA`)— y exigir un `Reporte` dejaba sin salida a quien usara la segunda: tenía
+    que crear y esperar un reporte que no necesitaba solo para desbloquear el botón. `reporte`
+    queda como referencia opcional de cuál se usó, para cuando se dispara desde uno."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -259,7 +263,11 @@ class InfografiaJornada(models.Model):
         (ESTADO_ERROR, 'Error'),
     ]
 
-    reporte = models.ForeignKey(Reporte, on_delete=models.CASCADE, related_name='infografias')
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='infografias')
+    reporte = models.ForeignKey(
+        Reporte, on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
+        help_text='Solo si se disparó desde un reporte concreto. Borrarlo no borra la infografía.',
+    )
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     prompt_usado = models.TextField(blank=True)
     error_mensaje = models.TextField(blank=True)
@@ -278,7 +286,7 @@ class InfografiaJornada(models.Model):
         verbose_name_plural = 'Infografías de jornada (IA)'
 
     def __str__(self):
-        return f'Infografía {self.id} · {self.reporte} · {self.estado}'
+        return f'Infografía {self.id} · {self.jornada} · {self.estado}'
 
 
 class InfografiaImagen(models.Model):

@@ -147,32 +147,43 @@ assets de sus propias jornadas (`403` si intenta contra una ajena).
 
 ### Requisito previo
 
-La infografía se genera a partir de la analítica **ya calculada** de la jornada — hace falta que
-exista, para esa jornada, alguno de estos dos (los que ya usan para el reporte/presentación
-normales):
+La infografía se genera a partir de la analítica **ya calculada** de la jornada. Basta con que
+exista **cualquiera** de estas dos (no las dos):
 
-- un `Reporte` con `estado: "completo"` (`POST /api/admin/reportes/` con alcance jornada +
-  esperar a que termine), **o**
-- un `AnalisisJornadaIA` con `estado: "completo"`.
+- un **reporte integral** (`AnalisisJornadaIA`) con `estado: "completo"` ← el que genera el panel, **o**
+- un `Reporte` del pipeline local con `estado: "completo"`.
 
-Si no hay ninguno, la generación termina en `error` con un mensaje explícito pidiendo generar uno
-primero — no hace falta validarlo ustedes antes de ofrecer el botón, pero sí es buena UX
-deshabilitarlo si saben que la jornada no tiene ni reporte ni análisis completo todavía.
+**No hace falta crear un `Reporte`.** Si lo que tienen es el reporte integral, con eso alcanza.
 
 ### Disparar la generación
 
-Cuelga de un `Reporte` puntual (no de la jornada directo):
+Cuelga de la **jornada**:
 
 ```
-POST /api/admin/reportes/{reporte_id}/generar-infografia/
+POST /api/admin/infografias/
 Authorization: Token <hex de 40 chars>
+Content-Type: application/json
+
+{"jornada": 14}
 ```
 
-Respuesta `202` — arranca en background, no trae las imágenes todavía:
+Mismo patrón que ya usan para `analisis-jornada-ia` y `reportes`. Opcionalmente pueden mandar
+`{"jornada": 14, "reporte": 8}` para forzar que los datos salgan de un reporte concreto, pero es
+un caso de borde: sin `reporte`, el backend usa el reporte integral más reciente.
+
+Si la jornada **no tiene analítica**, responde `400` de inmediato con el mensaje explicándolo —
+no crea un registro que iba a fallar. Así pueden mostrar el error sin esperar al polling.
+
+> Existe también `POST /api/admin/reportes/{id}/generar-infografia/` como atajo desde un reporte
+> concreto. Sigue funcionando, pero la vía normal es la de arriba.
+
+Respuesta `201` — arranca en background, no trae las imágenes todavía:
 ```json
 {
   "id": 7,
-  "reporte": 21,
+  "jornada": 14,
+  "jornada_slug": "mujeres-al-mar",
+  "reporte": null,
   "estado": "pendiente",
   "prompt_usado": "",
   "error_mensaje": "",
@@ -185,18 +196,18 @@ Respuesta `202` — arranca en background, no trae las imágenes todavía:
 }
 ```
 
-- `400` si el reporte todavía no está `completo`.
-- `409` si ya hay una infografía `pendiente`/`procesando` para ese mismo reporte — esperen a que
-  termine (o falle) antes de dejar pedir otra desde el botón.
-- Se puede pedir **más de una vez** sobre el mismo reporte (cada `POST` crea una
-  `InfografiaJornada` nueva, no sobrescribe la anterior) — útil si quieren repetir la generación.
+- `400` si la jornada no tiene analítica calculada (ni reporte integral ni `Reporte` completo).
+- `409` si ya hay una infografía `pendiente`/`procesando` para esa jornada — esperen a que termine
+  (o falle) antes de dejar pedir otra desde el botón.
+- Se puede pedir **más de una vez** (cada `POST` crea una `InfografiaJornada` nueva, no sobrescribe
+  la anterior) — útil para regenerar sin perder la versión previa.
 
 ### Esperar el resultado — es asíncrono
 
 `estado` avanza `pendiente` → `procesando` → `completo` (o `error`). Hagan **polling** contra:
 
 ```
-GET /api/admin/infografias/?reporte={reporte_id}
+GET /api/admin/infografias/?jornada={jornada_id}
 ```
 
 o directo por id si ya lo tienen: `GET /api/admin/infografias/{id}/`. Un intervalo de 3–5 s está
@@ -213,7 +224,7 @@ Respuesta cuando `estado: "completo"`:
 ```json
 {
   "id": 7,
-  "reporte": 21,
+  "reporte": null,
   "estado": "completo",
   "prompt_usado": "Diseña una infografía vertical...",
   "error_mensaje": "",
@@ -257,9 +268,9 @@ el frontend mande nada de esto en el `POST`: el backend los busca solo a partir 
 - [ ] Listar assets con `?jornada=<id>`; no hay edición, solo subir uno nuevo + borrar el viejo.
 - [ ] Deshabilitar (o avisar) el botón de generar infografía si la jornada no tiene ni `Reporte`
       completo ni `AnalisisJornadaIA` completo.
-- [ ] `generar-infografia/` cuelga del `id` del **reporte**, no de la jornada.
+- [ ] Pedir la infografía con `POST /api/admin/infografias/` y `{"jornada": id}` — **no** hace falta crear un `Reporte`.
 - [ ] Manejar `409` (ya hay una en curso) sin dejar mandar un segundo `POST` mientras tanto.
-- [ ] Polling de `estado` contra `/api/admin/infografias/?reporte=<id>` hasta `completo`/`error`.
+- [ ] Polling de `estado` contra `/api/admin/infografias/?jornada=<id>` hasta `completo`/`error`.
 - [ ] Mostrar las 3 `imagenes` en orden (`orden` 0/1/2), no asumir que viene una sola.
 - [ ] En `error`, mostrar `error_mensaje` y permitir reintentar con un `POST` nuevo.
 

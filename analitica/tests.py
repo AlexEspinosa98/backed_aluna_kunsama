@@ -1,11 +1,12 @@
 import datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
 from jornadas.models import Jornada, PerfilUsuario
 
-from .models import AnalisisJornadaIA, PlantillaAnalisis, Reporte
+from .models import AnalisisJornadaIA, InfografiaJornada, PlantillaAnalisis, Reporte
 
 Usuario = get_user_model()
 
@@ -119,6 +120,97 @@ class AnalisisJornadaIAScopingTests(APITestCase):
         self.client.force_authenticate(user=self.dependencia_a)
         resp = self.client.post('/api/admin/analisis-jornada-ia/', {'jornada': self.jornada_a.id}, format='json')
         self.assertEqual(resp.status_code, 409)
+
+
+class InfografiaSinReporteTests(APITestCase):
+    """La infografía se pide a nivel de JORNADA. Exigir un `Reporte` dejaba sin salida al panel,
+    que usa el reporte integral (AnalisisJornadaIA) y no el pipeline local."""
+
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia_a')
+        self.jornada = crear_jornada('jornada-a', propietario=self.dependencia)
+        self.ajena = crear_jornada('jornada-b')
+
+    def _analisis_integral_completo(self, jornada):
+        return AnalisisJornadaIA.objects.create(
+            jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Hubo consenso.', 'hallazgos': [{'titulo': 'Tema'}]},
+        )
+
+    def test_genera_desde_el_reporte_integral_sin_reporte_local(self):
+        self._analisis_integral_completo(self.jornada)
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+            )
+        self.assertEqual(resp.status_code, 201)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.jornada, self.jornada)
+        self.assertIsNone(infografia.reporte)
+        self.assertEqual(Reporte.objects.count(), 0)
+
+    def test_400_si_la_jornada_no_tiene_analitica(self):
+        """Se avisa de una vez, en vez de crear un registro que va a fallar en background."""
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(InfografiaJornada.objects.count(), 0)
+
+    def test_409_si_ya_hay_una_en_curso(self):
+        self._analisis_integral_completo(self.jornada)
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 409)
+
+    def test_dependencia_no_puede_pedirla_para_jornada_ajena(self):
+        self._analisis_integral_completo(self.ajena)
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.post(
+            '/api/admin/infografias/', {'jornada': self.ajena.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(InfografiaJornada.objects.count(), 0)
+
+    def test_dependencia_solo_ve_las_de_su_jornada(self):
+        InfografiaJornada.objects.create(jornada=self.jornada)
+        InfografiaJornada.objects.create(jornada=self.ajena)
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get('/api/admin/infografias/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([i['jornada'] for i in resp.data], [self.jornada.id])
+
+    def test_rechaza_un_reporte_de_otra_jornada(self):
+        reporte_ajeno = Reporte.objects.create(
+            jornada=self.ajena, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        self._analisis_integral_completo(self.jornada)
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/infografias/', {
+            'jornada': self.jornada.id, 'reporte': reporte_ajeno.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_el_atajo_desde_un_reporte_sigue_funcionando(self):
+        reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA,
+            estado=Reporte.ESTADO_COMPLETO, analisis={'participacion': {'total': 3}},
+        )
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(f'/api/admin/reportes/{reporte.id}/generar-infografia/')
+        self.assertEqual(resp.status_code, 202)
+        infografia = InfografiaJornada.objects.get()
+        self.assertEqual(infografia.jornada, self.jornada)
+        self.assertEqual(infografia.reporte, reporte)
 
 
 class PlantillaAnalisisPermisosTests(APITestCase):

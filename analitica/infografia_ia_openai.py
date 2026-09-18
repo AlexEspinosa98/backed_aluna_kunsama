@@ -119,35 +119,50 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
-def _obtener_datos_analitica(reporte):
-    """(datos, error) — nunca lanza excepción. Prefiere `reporte.analisis` (ya calculado, es la
-    fuente más completa); si está vacío, cae al `AnalisisJornadaIA` completo más reciente de la
-    misma jornada. Si ninguno existe, error controlado."""
-    if reporte.analisis:
+def _obtener_datos_analitica(jornada, reporte=None):
+    """(datos, error) — nunca lanza excepción. Si se disparó desde un `Reporte` con `analisis`, esa
+    es la fuente (la más detallada). Si no, se usa el reporte integral más reciente de la jornada
+    (`AnalisisJornadaIA`), que es la vía que usa el panel. Si no hay ninguno, error controlado."""
+    if reporte is not None and reporte.analisis:
         return {
             'fuente': 'reporte',
-            'jornada': reporte.jornada.nombre,
+            'jornada': jornada.nombre,
             'participacion': reporte.analisis.get('participacion'),
             'momentos': reporte.analisis.get('momentos'),
             'sintesis_narrativa': reporte.texto_reporte,
         }, None
 
-    from .models import AnalisisJornadaIA
+    from .models import AnalisisJornadaIA, Reporte
 
     analisis_ia = AnalisisJornadaIA.objects.filter(
-        jornada=reporte.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+        jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
     ).order_by('-creado_en').first()
     if analisis_ia and analisis_ia.resultado:
         return {
             'fuente': 'analisis_jornada_ia',
-            'jornada': reporte.jornada.nombre,
+            'jornada': jornada.nombre,
             'resumen_ejecutivo': analisis_ia.resultado.get('resumen_ejecutivo'),
             'hallazgos': analisis_ia.resultado.get('hallazgos'),
         }, None
 
+    # Último recurso: cualquier reporte local ya completo de esta jornada. Cubre el caso de pedir
+    # la infografía a nivel de jornada cuando lo que existe es un Reporte y no un análisis IA.
+    reporte_completo = Reporte.objects.filter(
+        jornada=jornada, estado=Reporte.ESTADO_COMPLETO,
+    ).exclude(analisis={}).order_by('-creado_en').first()
+    if reporte_completo:
+        return {
+            'fuente': 'reporte',
+            'jornada': jornada.nombre,
+            'participacion': reporte_completo.analisis.get('participacion'),
+            'momentos': reporte_completo.analisis.get('momentos'),
+            'sintesis_narrativa': reporte_completo.texto_reporte,
+        }, None
+
     return None, (
-        'No hay analítica calculada para esta jornada — ni el reporte tiene `analisis`, ni existe '
-        'un AnalisisJornadaIA completo. Genera alguno de los dos antes de pedir la infografía.'
+        'No hay analítica calculada para esta jornada — no existe ni un reporte integral '
+        '(AnalisisJornadaIA) completo ni un Reporte con análisis. Genera alguno antes de pedir '
+        'la infografía.'
     )
 
 
@@ -229,21 +244,21 @@ def generar_infografias(infografia_id):
 
     infografia = None
     try:
-        infografia = InfografiaJornada.objects.select_related('reporte__jornada').get(pk=infografia_id)
+        infografia = InfografiaJornada.objects.select_related('jornada', 'reporte').get(pk=infografia_id)
         infografia.estado = InfografiaJornada.ESTADO_PROCESANDO
         infografia.save(update_fields=['estado'])
 
-        reporte = infografia.reporte
-        datos, error = _obtener_datos_analitica(reporte)
+        jornada = infografia.jornada
+        datos, error = _obtener_datos_analitica(jornada, infografia.reporte)
         if error:
             infografia.estado = InfografiaJornada.ESTADO_ERROR
             infografia.error_mensaje = error
             infografia.save(update_fields=['estado', 'error_mensaje'])
             return
 
-        prompt = _construir_prompt(datos, _texto_system_design(reporte.jornada))
+        prompt = _construir_prompt(datos, _texto_system_design(jornada))
         infografia.prompt_usado = prompt
-        imagenes_referencia = _reunir_imagenes_referencia(reporte.jornada)
+        imagenes_referencia = _reunir_imagenes_referencia(jornada)
 
         imagenes_png, error = _llamar_openai_imagenes(prompt, imagenes_referencia)
 

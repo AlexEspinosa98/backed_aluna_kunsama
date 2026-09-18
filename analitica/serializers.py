@@ -125,11 +125,32 @@ class InfografiaImagenSerializer(serializers.ModelSerializer):
 
 class InfografiaJornadaSerializer(serializers.ModelSerializer):
     imagenes = InfografiaImagenSerializer(many=True, read_only=True)
+    jornada_slug = serializers.CharField(source='jornada.slug', read_only=True)
 
     class Meta:
         model = InfografiaJornada
         fields = [
-            'id', 'reporte', 'estado', 'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes',
-            'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
+            'id', 'jornada', 'jornada_slug', 'reporte', 'estado', 'prompt_usado', 'error_mensaje',
+            'modelo_usado', 'imagenes', 'solicitado_por', 'creado_en', 'actualizado_en',
+            'completado_en',
         ]
         read_only_fields = fields
+
+
+class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
+    """`reporte` es opcional: la infografía se pide a nivel de jornada y se alimenta de la
+    analítica que exista (el reporte integral vía AnalisisJornadaIA, o un Reporte del pipeline
+    local). Solo se manda cuando se quiere forzar uno concreto."""
+
+    class Meta:
+        model = InfografiaJornada
+        fields = ['id', 'jornada', 'reporte', 'estado', 'creado_en']
+        read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate(self, attrs):
+        reporte = attrs.get('reporte')
+        if reporte is not None and reporte.jornada_id != attrs['jornada'].id:
+            raise serializers.ValidationError(
+                {'reporte': 'Ese reporte no pertenece a la jornada seleccionada.'}
+            )
+        return attrs
