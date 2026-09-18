@@ -20,6 +20,8 @@ import threading
 
 from django.utils import timezone
 
+from jornadas import emparejamiento
+
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
@@ -59,12 +61,22 @@ SYSTEM_PROMPT_EXTRACCION = (
     "columna por cada aspecto (color, cómo funciona hoy, problema/brecha, propuesta) — no mezcles "
     "el contenido de una columna en otra.\n"
     "6. Nunca agregues fila/columna a una pregunta que no sea tipo matriz, ni opciones a una "
-    "pregunta abierta, ni texto_libre a una pregunta de opción (salvo que sea matriz).\n\n"
+    "pregunta abierta, ni texto_libre a una pregunta de opción (salvo que sea matriz).\n"
+    "7. RESPONSABLE. Además de las respuestas, busca quién diligenció el documento — casi siempre "
+    "está en las primeras líneas o en un encabezado, con etiquetas como 'Responsable', "
+    "'Diligenciado por', 'Nombre', 'Elaborado por' o una firma al pie. Devuélvelo en el "
+    "bloque 'responsable', copiando el texto TAL CUAL aparece (no lo normalices, no lo "
+    "completes, no deduzcas un correo que no esté escrito). Si un dato no está, déjalo en null; "
+    "si no encuentras ningún responsable, deja todo el bloque en null. NUNCA inventes un nombre "
+    "ni uses el de una persona mencionada dentro de una respuesta — solo quien firma o declara "
+    "haber diligenciado el documento.\n\n"
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin fences "
     "de markdown, con esta forma exacta:\n"
     "{\n"
+    '  "responsable": {"nombre": "<texto o null>", "correo": "<texto o null>", '
+    '"cargo": "<texto o null>", "dependencia": "<texto o null>"},\n'
     '  "respuestas": [\n'
     '    {"pregunta": <id>, "texto_libre": "<texto o \'\'>", "opciones": [<ids>], '
     '"fila": <id o null>, "columna": <id o null>}\n'
@@ -267,6 +279,107 @@ def _guardar_respuestas(aplicacion, items_crudos, preguntas_validas):
     return guardadas, omitidas
 
 
+def _limpiar_responsable(crudo):
+    """Normaliza el bloque `responsable` que devolvió la IA a un dict de strings. La IA puede
+    mandar null, omitirlo, o poner cualquier cosa en los campos — nada de eso puede tumbar una
+    extracción que por lo demás salió bien."""
+    if not isinstance(crudo, dict):
+        return {}
+    limpio = {}
+    for clave in ('nombre', 'correo', 'cargo', 'dependencia'):
+        valor = crudo.get(clave)
+        if isinstance(valor, str) and valor.strip():
+            limpio[clave] = valor.strip()
+    return limpio
+
+
+def emparejar_responsable_instrumento(instrumento, responsable):
+    """Busca a qué usuario corresponde el responsable que leyó la IA.
+
+    Se intenta primero contra los **preregistrados de este instrumento** (el conjunto chico y
+    correcto: a esa gente ya se le asignó este instrumento) y solo si ahí no hay nada contra el
+    resto de usuarios no-staff. Ese orden importa: buscar de una en todos los usuarios haría
+    ambiguo cualquier nombre común, y un homónimo que no tiene nada que ver con el instrumento no
+    debería competir con alguien a quien sí se le asignó."""
+    from django.contrib.auth import get_user_model
+
+    from .models import PreregistroInstrumento
+
+    if not responsable:
+        return None, emparejamiento.ESTADO_SIN_DATO
+
+    nombre = responsable.get('nombre')
+    correo = responsable.get('correo')
+
+    preregistrados = [
+        (pr.usuario, f'{pr.usuario.first_name} {pr.usuario.last_name}'.strip() or pr.usuario.username,
+         pr.usuario.email)
+        for pr in PreregistroInstrumento.objects.filter(instrumento=instrumento).select_related('usuario')
+    ]
+    usuario, estado = emparejamiento.emparejar(preregistrados, nombre=nombre, correo=correo)
+    if usuario is not None or estado == emparejamiento.ESTADO_AMBIGUO:
+        return usuario, estado
+
+    Usuario = get_user_model()
+    ids_preregistrados = {u.id for u, _n, _c in preregistrados}
+    otros = [
+        (u, f'{u.first_name} {u.last_name}'.strip() or u.username, u.email)
+        for u in Usuario.objects.filter(is_staff=False).exclude(id__in=ids_preregistrados)
+    ]
+    return emparejamiento.emparejar(otros, nombre=nombre, correo=correo)
+
+
+def _escribir_aplicacion(extraccion, resultado):
+    """Escribe la transcripción como una AplicacionInstrumento del usuario de la extracción.
+    Separada de procesar_extraccion_instrumento porque es exactamente lo que hay que volver a
+    correr cuando el responsable se asigna después (ver asignar_responsable_instrumento) — el
+    mismo trabajo, con la transcripción que ya estaba guardada."""
+    from .models import AplicacionInstrumento, ExtraccionInstrumento, PreguntaInstrumento, PreregistroInstrumento
+
+    preregistro, _ = PreregistroInstrumento.objects.get_or_create(
+        instrumento=extraccion.instrumento, usuario=extraccion.usuario,
+        defaults={'creado_por': extraccion.solicitado_por},
+    )
+    aplicacion, _ = AplicacionInstrumento.objects.get_or_create(preregistro=preregistro)
+
+    preguntas_validas = {
+        p.id: p for p in PreguntaInstrumento.objects.filter(
+            seccion__instrumento=extraccion.instrumento, seccion__activa=True, activa=True,
+        )
+    }
+    _guardadas, omitidas = _guardar_respuestas(
+        aplicacion, resultado.get('respuestas') or [], preguntas_validas
+    )
+
+    aplicacion.generado_por_ia = True
+    aplicacion.estado = AplicacionInstrumento.ESTADO_PENDIENTE
+    aplicacion.enviado_en = timezone.now()
+    aplicacion.revisado_por = None
+    aplicacion.revisado_en = None
+    aplicacion.save()
+
+    extraccion.aplicacion = aplicacion
+    extraccion.preguntas_omitidas = omitidas
+    extraccion.estado = ExtraccionInstrumento.ESTADO_COMPLETO
+    extraccion.error_mensaje = ''
+    extraccion.modelo_usado = MODELO_USADO_LABEL
+    extraccion.completado_en = timezone.now()
+    extraccion.save(update_fields=[
+        'aplicacion', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado',
+        'completado_en', 'usuario', 'responsable_estado', 'resultado_crudo',
+    ])
+    return aplicacion
+
+
+def asignar_responsable_instrumento(extraccion, usuario):
+    """Termina una extracción que quedó en `sin_responsable`: le asigna la persona y escribe la
+    AplicacionInstrumento con la transcripción que ya estaba guardada, sin volver a llamar a
+    OpenAI. `responsable_estado` NO se toca — deja constancia de por qué hubo que asignar a mano
+    (sin coincidencia, ambiguo, el documento no traía responsable)."""
+    extraccion.usuario = usuario
+    return _escribir_aplicacion(extraccion, extraccion.resultado_crudo or {})
+
+
 def procesar_extraccion_instrumento(extraccion_id):
     """Genera la AplicacionInstrumento de una ExtraccionInstrumento ya creada (estado
     'pendiente'). Corre en un hilo de background — mismo patrón que
@@ -292,37 +405,34 @@ def procesar_extraccion_instrumento(extraccion_id):
             extraccion.save(update_fields=['estado', 'error_mensaje'])
             return
 
-        preregistro, _ = PreregistroInstrumento.objects.get_or_create(
-            instrumento=extraccion.instrumento, usuario=extraccion.usuario,
-            defaults={'creado_por': extraccion.solicitado_por},
-        )
-        aplicacion, _ = AplicacionInstrumento.objects.get_or_create(preregistro=preregistro)
+        # La transcripción se guarda SIEMPRE, antes de saber a quién atribuirla: es el trabajo
+        # caro (una llamada a OpenAI con el documento entero) y no puede perderse porque el
+        # responsable no se haya podido emparejar.
+        extraccion.resultado_crudo = resultado
 
-        preguntas_validas = {
-            p.id: p for p in PreguntaInstrumento.objects.filter(
-                seccion__instrumento=extraccion.instrumento, seccion__activa=True, activa=True,
+        if extraccion.usuario_id is None:
+            detectado = _limpiar_responsable(resultado.get('responsable'))
+            usuario, estado_responsable = emparejar_responsable_instrumento(
+                extraccion.instrumento, detectado,
             )
-        }
-        _guardadas, omitidas = _guardar_respuestas(
-            aplicacion, resultado.get('respuestas') or [], preguntas_validas
-        )
+            extraccion.responsable_detectado = detectado
+            extraccion.responsable_estado = estado_responsable
+            extraccion.usuario = usuario
 
-        aplicacion.generado_por_ia = True
-        aplicacion.estado = AplicacionInstrumento.ESTADO_PENDIENTE
-        aplicacion.enviado_en = timezone.now()
-        aplicacion.revisado_por = None
-        aplicacion.revisado_en = None
-        aplicacion.save()
+        if extraccion.usuario_id is None:
+            # Transcrito pero sin dueño: queda esperando que un admin asigne a la persona con
+            # asignar_responsable_instrumento, que termina exactamente este mismo trabajo. No se
+            # crea una cuenta a partir del nombre leído — ver jornadas/emparejamiento.py.
+            extraccion.estado = ExtraccionInstrumento.ESTADO_SIN_RESPONSABLE
+            extraccion.error_mensaje = ''
+            extraccion.modelo_usado = MODELO_USADO_LABEL
+            extraccion.save(update_fields=[
+                'resultado_crudo', 'responsable_detectado', 'responsable_estado', 'usuario',
+                'estado', 'error_mensaje', 'modelo_usado',
+            ])
+            return
 
-        extraccion.aplicacion = aplicacion
-        extraccion.preguntas_omitidas = omitidas
-        extraccion.estado = ExtraccionInstrumento.ESTADO_COMPLETO
-        extraccion.error_mensaje = ''
-        extraccion.modelo_usado = MODELO_USADO_LABEL
-        extraccion.completado_en = timezone.now()
-        extraccion.save(update_fields=[
-            'aplicacion', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
-        ])
+        _escribir_aplicacion(extraccion, resultado)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if extraccion is not None:
             extraccion.estado = ExtraccionInstrumento.ESTADO_ERROR

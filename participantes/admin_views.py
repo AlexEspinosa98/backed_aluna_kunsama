@@ -12,8 +12,9 @@ from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 from .extraccion_momento_ia_openai import aprobar_extraccion_momento, procesar_extraccion_momento
 from .models import ExtraccionMomento, Participante, Respuesta
 from .serializers import (
-    ExtraccionMomentoCrearSerializer, ExtraccionMomentoSerializer, ParticipanteMesaVoceroSerializer,
-    ParticipanteSerializer, RespuestaSalidaSerializer,
+    AsignarResponsableMomentoSerializer, ExtraccionMomentoCrearSerializer,
+    ExtraccionMomentoSerializer, ParticipanteMesaVoceroSerializer, ParticipanteSerializer,
+    RespuestaSalidaSerializer,
 )
 
 
@@ -114,4 +115,25 @@ class ExtraccionMomentoViewSet(
 
         aprobar_extraccion_momento(extraccion, request.user)
         extraccion.refresh_from_db()
+        return Response(ExtraccionMomentoSerializer(extraccion).data)
+
+    @action(detail=True, methods=['post'], url_path='asignar-responsable')
+    def asignar_responsable(self, request, pk=None):
+        """Asigna a mano el participante que la IA no pudo emparejar (HU-55) — la transcripción
+        ya está en `resultado`, lo único que falta es a nombre de quién se va a escribir. No toca
+        `responsable_estado`: ese campo deja constancia de POR QUÉ hubo que asignar a mano."""
+        extraccion = self.get_object()
+        if extraccion.aprobado_en is not None:
+            raise PermissionDenied('Esta extracción ya fue aprobada, no se puede reasignar.')
+
+        entrada = AsignarResponsableMomentoSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        participante = entrada.validated_data['participante']
+        if participante.jornada_id != extraccion.momento.jornada_id:
+            raise ValidationError(
+                {'participante_id': 'Ese participante no pertenece a la jornada de este momento.'}
+            )
+
+        extraccion.participante = participante
+        extraccion.save(update_fields=['participante'])
         return Response(ExtraccionMomentoSerializer(extraccion).data)

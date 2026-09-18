@@ -11,14 +11,15 @@ from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 from jornadas.scoping import verificar_acceso_jornada
 
 from .docx_aplicacion import respuesta_docx_http
-from .extraccion_ia_openai import procesar_extraccion_instrumento
+from .extraccion_ia_openai import asignar_responsable_instrumento, procesar_extraccion_instrumento
 from .models import (
     AplicacionInstrumento, ColumnaMatrizInstrumento, ExtraccionInstrumento, FilaMatrizInstrumento,
     OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento, SeccionInstrumento,
 )
 from .scoping import es_dependencia, filtrar_por_encargado, instrumentos_visibles, verificar_acceso_instrumento
 from .serializers import (
-    AplicacionInstrumentoAdminSerializer, ColumnaMatrizInstrumentoSerializer,
+    AplicacionInstrumentoAdminSerializer, AsignarResponsableInstrumentoSerializer,
+    ColumnaMatrizInstrumentoSerializer,
     ExtraccionInstrumentoCrearSerializer, ExtraccionInstrumentoSerializer,
     FilaMatrizInstrumentoSerializer, InstrumentoAdminSerializer, OpcionPreguntaInstrumentoSerializer,
     PreguntaInstrumentoAdminSerializer, PreregistroInstrumentoAdminSerializer,
@@ -307,3 +308,21 @@ class ExtraccionInstrumentoViewSet(
         salida = ExtraccionInstrumentoSerializer(extraccion)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=True, methods=['post'], url_path='asignar-responsable')
+    def asignar_responsable(self, request, pk=None):
+        """Termina una extracción que quedó en `sin_responsable` (HU-55): la IA ya transcribió el
+        documento pero no se pudo emparejar a quien lo firmaba. Acá se le asigna la persona y se
+        escribe la AplicacionInstrumento con lo ya transcrito, **sin volver a llamar a OpenAI**."""
+        extraccion = self.get_object()
+        verificar_acceso_instrumento(request.user, extraccion.instrumento)
+        if extraccion.estado != ExtraccionInstrumento.ESTADO_SIN_RESPONSABLE:
+            raise ValidationError(
+                'Solo se puede asignar responsable a una extracción en estado "sin_responsable".'
+            )
+
+        entrada = AsignarResponsableInstrumentoSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        asignar_responsable_instrumento(extraccion, entrada.validated_data['usuario'])
+        extraccion.refresh_from_db()
+        return Response(ExtraccionInstrumentoSerializer(extraccion).data)

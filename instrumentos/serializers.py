@@ -58,8 +58,8 @@ class InstrumentoAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = Instrumento
         fields = [
-            'id', 'slug', 'nombre', 'descripcion', 'activo', 'jornada', 'jornada_nombre',
-            'encargados', 'creado_por', 'creado_en', 'actualizado_en', 'secciones',
+            'id', 'slug', 'nombre', 'descripcion', 'activo', 'permite_carga_archivo', 'jornada',
+            'jornada_nombre', 'encargados', 'creado_por', 'creado_en', 'actualizado_en', 'secciones',
         ]
         read_only_fields = ['slug', 'creado_por', 'creado_en', 'actualizado_en']
 
@@ -139,6 +139,15 @@ class PreregistroInstrumentoAdminSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         usuario = validated_data.pop('usuario', None)
+        if usuario is None and 'username' not in validated_data:
+            # No dijeron de quién es el documento: queda sin usuario y lo resuelve la IA al
+            # procesar (ver emparejar_responsable_instrumento). Si no se logra emparejar, la
+            # extracción queda en `sin_responsable` con la transcripción guardada — nunca se crea
+            # una cuenta a partir de un nombre leído por IA.
+            for campo in ['email', 'first_name', 'last_name', 'password']:
+                validated_data.pop(campo, None)
+            validated_data['nombre_archivo_original'] = validated_data['archivo'].name
+            return super().create(validated_data)
         if usuario is None:
             username = validated_data.pop('username', None)
             password = validated_data.pop('password', None)
@@ -206,10 +215,21 @@ class ExtraccionInstrumentoSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'instrumento', 'instrumento_nombre', 'usuario', 'usuario_username',
             'nombre_archivo_original', 'estado', 'aplicacion', 'preguntas_omitidas',
+            'responsable_detectado', 'responsable_estado',
             'error_mensaje', 'modelo_usado', 'solicitado_por', 'creado_en', 'actualizado_en',
             'completado_en',
         ]
         read_only_fields = fields
+
+
+class AsignarResponsableInstrumentoSerializer(serializers.Serializer):
+    """Asigna a mano el usuario de una extracción que la IA no pudo emparejar (HU-55). Solo
+    usuarios que ya existen: no se dan de alta cuentas por esta vía, justamente porque el caso
+    que lleva acá es que el nombre leído no correspondió a nadie, y crear una cuenta con ese
+    nombre sería fabricar a la persona que faltó identificar."""
+    usuario_id = serializers.PrimaryKeyRelatedField(
+        source='usuario', queryset=Usuario.objects.all(),
+    )
 
 
 class ExtraccionInstrumentoCrearSerializer(serializers.ModelSerializer):
@@ -241,15 +261,25 @@ class ExtraccionInstrumentoCrearSerializer(serializers.ModelSerializer):
         return archivo
 
     def validate(self, attrs):
-        if 'usuario' not in attrs and 'username' not in attrs:
-            raise serializers.ValidationError(
-                'Debes indicar usuario_id (de un usuario existente) o username+password (para '
-                'crear uno nuevo).'
-            )
+        # Desde HU-55 los tres caminos son válidos: usuario_id (persona existente),
+        # username+password (alta en el mismo request) o NINGUNO de los dos — en ese último caso
+        # la IA lee el responsable del propio documento y se intenta emparejar al procesar (ver
+        # instrumentos.extraccion_ia_openai.emparejar_responsable_instrumento). Si no se logra,
+        # la extracción queda en `sin_responsable` con la transcripción guardada, nunca se crea
+        # una cuenta a partir de un nombre leído por IA.
         return attrs
 
     def create(self, validated_data):
         usuario = validated_data.pop('usuario', None)
+        if usuario is None and 'username' not in validated_data:
+            # No dijeron de quién es el documento: queda sin usuario y lo resuelve la IA al
+            # procesar (ver emparejar_responsable_instrumento). Si no se logra emparejar, la
+            # extracción queda en `sin_responsable` con la transcripción guardada — nunca se crea
+            # una cuenta a partir de un nombre leído por IA.
+            for campo in ['email', 'first_name', 'last_name', 'password']:
+                validated_data.pop(campo, None)
+            validated_data['nombre_archivo_original'] = validated_data['archivo'].name
+            return super().create(validated_data)
         if usuario is None:
             username = validated_data.pop('username', None)
             password = validated_data.pop('password', None)

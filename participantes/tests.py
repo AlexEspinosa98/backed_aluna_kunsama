@@ -1,4 +1,5 @@
 import datetime
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -6,8 +7,11 @@ from rest_framework.test import APITestCase
 
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
+from jornadas import emparejamiento
+
 from .extraccion_momento_ia_openai import (
     _construir_payload_esquema, _limpiar_y_validar, aprobar_extraccion_momento,
+    emparejar_responsable_momento,
 )
 from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
 
@@ -1296,3 +1300,139 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
         self.assertEqual(
             Respuesta.objects.get(pregunta=self.matriz, fila_lista__isnull=False).texto_libre, 'Se queda',
         )
+
+
+class ResponsableDetectadoMomentoTests(BaseJornadaTestCase):
+    """HU-55 del lado de momentos: subir un documento sin decir de quién es y dejar que la IA
+    detecte al responsable. Acá no hace falta un estado nuevo como en instrumentos — este modelo
+    ya difiere la escritura hasta `aprobar`, así que sin responsable simplemente no se aprueba."""
+    def setUp(self):
+        super().setUp()
+        self.ana = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='ana@uni.edu.co',
+            nombre='Ana María', apellido='Gómez', rol='docente',
+        )
+        self.juan = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='juan@uni.edu.co',
+            nombre='Juan', apellido='Pérez', rol='docente',
+        )
+        self.admin = get_user_model().objects.create_user(
+            username='admin_resp', password='pass12345', is_staff=True,
+        )
+
+    def test_empareja_por_nombre_parcial(self):
+        participante, estado = emparejar_responsable_momento(
+            self.momento_individual, {'nombre': 'Ana Gómez'},
+        )
+        self.assertEqual(participante, self.ana)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_empareja_por_correo_institucional(self):
+        participante, estado = emparejar_responsable_momento(
+            self.momento_individual, {'nombre': 'No coincide', 'correo': 'JUAN@UNI.EDU.CO'},
+        )
+        self.assertEqual(participante, self.juan)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_no_empareja_contra_otra_jornada(self):
+        otra = Jornada.objects.create(
+            slug='otra-jornada', nombre='Otra', fecha_inicio=datetime.date(2026, 9, 1),
+            fecha_fin=datetime.date(2026, 9, 2),
+        )
+        Participante.objects.create(
+            jornada=otra, correo_institucional='externo@uni.edu.co',
+            nombre='Carlos', apellido='Restrepo', rol='docente',
+        )
+        participante, estado = emparejar_responsable_momento(
+            self.momento_individual, {'nombre': 'Carlos Restrepo'},
+        )
+        self.assertIsNone(participante)
+        self.assertEqual(estado, emparejamiento.ESTADO_SIN_COINCIDENCIA)
+
+    def test_sin_coincidencia_no_crea_participante(self):
+        antes = Participante.objects.count()
+        participante, estado = emparejar_responsable_momento(
+            self.momento_individual, {'nombre': 'Nadie Conocido'},
+        )
+        self.assertIsNone(participante)
+        self.assertEqual(estado, emparejamiento.ESTADO_SIN_COINCIDENCIA)
+        self.assertEqual(Participante.objects.count(), antes)
+
+    def test_subir_sin_participante_ya_no_es_error_de_validacion(self):
+        self.client.force_authenticate(user=self.admin)
+        with patch('participantes.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/momento-extracciones/', {
+                'momento': self.momento_individual.id,
+                'archivo': SimpleUploadedFile('d.pdf', b'x', content_type='application/pdf'),
+            }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        self.assertIsNone(ExtraccionMomento.objects.get(id=resp.data['id']).participante)
+
+    def test_ficha_de_alta_incompleta_sigue_siendo_error(self):
+        """Omitir todo es delegarle la detección a la IA; mandar media ficha es un bug del
+        cliente y tiene que seguir fallando."""
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/momento-extracciones/', {
+            'momento': self.momento_individual.id,
+            'archivo': SimpleUploadedFile('d.pdf', b'x', content_type='application/pdf'),
+            'nombre': 'Solo el nombre',
+        }, format='multipart')
+        self.assertEqual(resp.status_code, 400)
+
+    def _extraccion_sin_responsable(self):
+        return ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=None,
+            archivo=SimpleUploadedFile('e.pdf', b'x', content_type='application/pdf'),
+            estado=ExtraccionMomento.ESTADO_COMPLETO,
+            responsable_detectado={'nombre': 'Alguien Sin Registro'},
+            responsable_estado=emparejamiento.ESTADO_SIN_COINCIDENCIA,
+            resultado={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Del papel', 'opcion_ids': []},
+            ]},
+        )
+
+    def test_no_se_puede_aprobar_sin_responsable(self):
+        extraccion = self._extraccion_sin_responsable()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(f'/api/admin/momento-extracciones/{extraccion.id}/aprobar/')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_abierta).count(), 0)
+
+    def test_asignar_responsable_y_luego_aprobar(self):
+        extraccion = self._extraccion_sin_responsable()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            f'/api/admin/momento-extracciones/{extraccion.id}/asignar-responsable/',
+            {'participante_id': self.ana.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        resp = self.client.post(f'/api/admin/momento-extracciones/{extraccion.id}/aprobar/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=self.ana).texto_libre,
+            'Del papel',
+        )
+
+    def test_asignar_rechaza_participante_de_otra_jornada(self):
+        extraccion = self._extraccion_sin_responsable()
+        otra = Jornada.objects.create(
+            slug='jornada-ajena', nombre='Ajena', fecha_inicio=datetime.date(2026, 9, 1),
+            fecha_fin=datetime.date(2026, 9, 2),
+        )
+        ajeno = Participante.objects.create(
+            jornada=otra, correo_institucional='x@uni.edu.co', nombre='X', apellido='Y', rol='z',
+        )
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            f'/api/admin/momento-extracciones/{extraccion.id}/asignar-responsable/',
+            {'participante_id': ajeno.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_el_listado_no_revienta_con_una_extraccion_sin_responsable(self):
+        self._extraccion_sin_responsable()
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/momento-extracciones/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIsNone(resp.data[0]['participante_nombre'])

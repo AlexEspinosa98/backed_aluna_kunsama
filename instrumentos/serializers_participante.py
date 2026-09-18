@@ -69,7 +69,12 @@ class InstrumentoDetalleParticipanteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Instrumento
-        fields = ['id', 'slug', 'nombre', 'descripcion', 'secciones', 'mi_aplicacion']
+        # `permite_carga_archivo` es lo único que le dice al FE si mostrar el botón de subir un
+        # documento diligenciado en esta pantalla (ver InstrumentoCargarArchivoView).
+        fields = [
+            'id', 'slug', 'nombre', 'descripcion', 'permite_carga_archivo', 'secciones',
+            'mi_aplicacion',
+        ]
 
     def get_secciones(self, instrumento):
         secciones = instrumento.secciones.filter(activa=True).order_by('orden')
@@ -86,12 +91,26 @@ class InstrumentoAsignadoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Instrumento
-        fields = ['id', 'slug', 'nombre', 'descripcion', 'estado_visible']
+        fields = ['id', 'slug', 'nombre', 'descripcion', 'permite_carga_archivo', 'estado_visible']
 
     def get_estado_visible(self, instrumento):
         preregistro = instrumento._preregistro_actual
         aplicacion = getattr(preregistro, 'aplicacion', None)
         return aplicacion.estado_visible if aplicacion else 'sin_enviar'
+
+
+class CargarArchivoInstrumentoSerializer(serializers.Serializer):
+    """Subida de un documento diligenciado por el PROPIO usuario (HU-56). A diferencia del
+    serializer de admin (ExtraccionInstrumentoCrearSerializer), acá no se puede indicar a quién
+    pertenece el documento: el dueño es siempre quien sube, se fuerza en la vista. Tampoco se dan
+    de alta usuarios — quien sube ya está preregistrado, por el permiso de la vista."""
+    archivo = serializers.FileField()
+
+    def validate_archivo(self, archivo):
+        extension = archivo.name.rsplit('.', 1)[-1].lower() if '.' in archivo.name else ''
+        if extension not in ('pdf', 'docx'):
+            raise serializers.ValidationError('Solo se aceptan archivos .pdf o .docx.')
+        return archivo
 
 
 class RespuestaInstrumentoEnvioItemSerializer(serializers.Serializer):

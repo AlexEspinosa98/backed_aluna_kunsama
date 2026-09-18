@@ -1,5 +1,6 @@
 import datetime
 import io
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -9,7 +10,12 @@ from rest_framework.test import APITestCase
 from jornadas.models import Jornada, PerfilUsuario
 from participantes.models import Participante
 
-from .extraccion_ia_openai import _guardar_respuestas
+from jornadas import emparejamiento
+
+from .extraccion_ia_openai import (
+    _guardar_respuestas, _limpiar_responsable, asignar_responsable_instrumento,
+    emparejar_responsable_instrumento,
+)
 from .models import (
     AplicacionInstrumento, ColumnaMatrizInstrumento, ExtraccionInstrumento, FilaMatrizInstrumento,
     Instrumento, OpcionPreguntaInstrumento, PreguntaInstrumento, PreregistroInstrumento,
@@ -460,3 +466,244 @@ class ExtraccionInstrumentoScopingTests(BaseInstrumentoTestCase):
         }, format='multipart')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('archivo', resp.data)
+
+
+class EmparejarResponsableInstrumentoTests(BaseInstrumentoTestCase):
+    """Emparejamiento del responsable que la IA leyó en el documento (HU-55). Nada de esto llama
+    a OpenAI: se prueba la resolución contra la base, que es la parte que decide a nombre de
+    quién va a quedar una respuesta."""
+    def setUp(self):
+        super().setUp()
+        self.preregistrado = Usuario.objects.create_user(
+            username='jperez', password='clave12345', is_staff=False,
+            first_name='Juan', last_name='Pérez', email='juan@uni.edu.co',
+        )
+        PreregistroInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.preregistrado, creado_por=self.admin,
+        )
+
+    def test_empareja_por_nombre_del_preregistrado(self):
+        usuario, estado = emparejar_responsable_instrumento(self.instrumento, {'nombre': 'juan perez'})
+        self.assertEqual(usuario, self.preregistrado)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_empareja_por_correo(self):
+        usuario, estado = emparejar_responsable_instrumento(
+            self.instrumento, {'nombre': 'Otro Nombre', 'correo': 'JUAN@UNI.EDU.CO'},
+        )
+        self.assertEqual(usuario, self.preregistrado)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_prefiere_al_preregistrado_sobre_un_homonimo_ajeno(self):
+        """Un homónimo que no tiene nada que ver con el instrumento no debería competir con
+        alguien a quien sí se le asignó — si compitiera, cualquier nombre común sería ambiguo."""
+        Usuario.objects.create_user(
+            username='jperez2', password='clave12345', is_staff=False,
+            first_name='Juan', last_name='Pérez',
+        )
+        usuario, estado = emparejar_responsable_instrumento(self.instrumento, {'nombre': 'Juan Pérez'})
+        self.assertEqual(usuario, self.preregistrado)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_cae_a_usuarios_no_preregistrados_si_no_hay_nada_en_el_instrumento(self):
+        externo = Usuario.objects.create_user(
+            username='ext', password='clave12345', is_staff=False,
+            first_name='Ana', last_name='Gómez',
+        )
+        usuario, estado = emparejar_responsable_instrumento(self.instrumento, {'nombre': 'Ana Gómez'})
+        self.assertEqual(usuario, externo)
+        self.assertEqual(estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_sin_coincidencia_no_inventa_usuario(self):
+        antes = Usuario.objects.count()
+        usuario, estado = emparejar_responsable_instrumento(
+            self.instrumento, {'nombre': 'Persona Que No Existe'},
+        )
+        self.assertIsNone(usuario)
+        self.assertEqual(estado, emparejamiento.ESTADO_SIN_COINCIDENCIA)
+        self.assertEqual(Usuario.objects.count(), antes)
+
+    def test_documento_sin_responsable(self):
+        usuario, estado = emparejar_responsable_instrumento(self.instrumento, {})
+        self.assertIsNone(usuario)
+        self.assertEqual(estado, emparejamiento.ESTADO_SIN_DATO)
+
+    def test_limpiar_responsable_tolera_basura_de_la_ia(self):
+        self.assertEqual(_limpiar_responsable(None), {})
+        self.assertEqual(_limpiar_responsable('Juan'), {})
+        self.assertEqual(
+            _limpiar_responsable({'nombre': '  Juan  ', 'correo': None, 'cargo': 12, 'dependencia': ''}),
+            {'nombre': 'Juan'},
+        )
+
+
+class AsignarResponsableInstrumentoTests(BaseInstrumentoTestCase):
+    """Una extracción que quedó en `sin_responsable` (la IA transcribió pero nadie coincidió) se
+    termina asignando la persona a mano, SIN volver a llamar a OpenAI — la transcripción ya está
+    guardada en `resultado_crudo`."""
+    def setUp(self):
+        super().setUp()
+        self.usuario = crear_preregistrado('depto')
+        self.extraccion = ExtraccionInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=None,
+            archivo=SimpleUploadedFile('doc.pdf', b'x', content_type='application/pdf'),
+            estado=ExtraccionInstrumento.ESTADO_SIN_RESPONSABLE,
+            responsable_detectado={'nombre': 'Alguien Sin Cuenta'},
+            responsable_estado=emparejamiento.ESTADO_SIN_COINCIDENCIA,
+            resultado_crudo={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Respuesta del papel', 'opciones': []},
+            ]},
+        )
+
+    def test_la_transcripcion_no_se_pierde_mientras_no_hay_responsable(self):
+        self.assertEqual(len(self.extraccion.resultado_crudo['respuestas']), 1)
+        self.assertIsNone(self.extraccion.aplicacion)
+
+    def test_asignar_escribe_la_aplicacion_con_lo_ya_transcrito(self):
+        asignar_responsable_instrumento(self.extraccion, self.usuario)
+        self.extraccion.refresh_from_db()
+        self.assertEqual(self.extraccion.usuario, self.usuario)
+        self.assertEqual(self.extraccion.estado, ExtraccionInstrumento.ESTADO_COMPLETO)
+        self.assertIsNotNone(self.extraccion.aplicacion)
+        self.assertTrue(self.extraccion.aplicacion.generado_por_ia)
+        self.assertEqual(
+            self.extraccion.aplicacion.estado, AplicacionInstrumento.ESTADO_PENDIENTE,
+        )
+        self.assertEqual(
+            RespuestaInstrumento.objects.get(
+                aplicacion=self.extraccion.aplicacion, pregunta=self.pregunta_abierta,
+            ).texto_libre,
+            'Respuesta del papel',
+        )
+
+    def test_asignar_crea_el_preregistro_si_no_existia(self):
+        self.assertFalse(
+            PreregistroInstrumento.objects.filter(
+                instrumento=self.instrumento, usuario=self.usuario,
+            ).exists()
+        )
+        asignar_responsable_instrumento(self.extraccion, self.usuario)
+        self.assertTrue(
+            PreregistroInstrumento.objects.filter(
+                instrumento=self.instrumento, usuario=self.usuario,
+            ).exists()
+        )
+
+    def test_asignar_conserva_por_que_hubo_que_asignar_a_mano(self):
+        asignar_responsable_instrumento(self.extraccion, self.usuario)
+        self.extraccion.refresh_from_db()
+        self.assertEqual(self.extraccion.responsable_estado, emparejamiento.ESTADO_SIN_COINCIDENCIA)
+        self.assertEqual(self.extraccion.responsable_detectado, {'nombre': 'Alguien Sin Cuenta'})
+
+    def test_endpoint_asignar_responsable(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            f'/api/admin/instrumento-extracciones/{self.extraccion.id}/asignar-responsable/',
+            {'usuario_id': self.usuario.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['estado'], ExtraccionInstrumento.ESTADO_COMPLETO)
+
+    def test_endpoint_rechaza_asignar_sobre_una_extraccion_ya_completa(self):
+        self.extraccion.estado = ExtraccionInstrumento.ESTADO_COMPLETO
+        self.extraccion.save(update_fields=['estado'])
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            f'/api/admin/instrumento-extracciones/{self.extraccion.id}/asignar-responsable/',
+            {'usuario_id': self.usuario.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_subir_sin_usuario_ya_no_es_error_de_validacion(self):
+        """Antes era obligatorio decir de quién era el documento. Desde HU-55 se puede omitir y
+        dejar que la IA lo detecte."""
+        self.client.force_authenticate(user=self.admin)
+        with patch('instrumentos.views.threading.Thread'):
+            resp = self.client.post('/api/admin/instrumento-extracciones/', {
+                'instrumento': self.instrumento.id,
+                'archivo': SimpleUploadedFile('x.pdf', b'x', content_type='application/pdf'),
+            }, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        self.assertIsNone(ExtraccionInstrumento.objects.get(id=resp.data['id']).usuario)
+
+
+class CargaArchivoPorUsuarioTests(BaseInstrumentoTestCase):
+    """HU-56: el propio usuario preregistrado sube su documento, si el instrumento lo permite."""
+    def setUp(self):
+        super().setUp()
+        self.usuario = crear_preregistrado('docente1')
+        PreregistroInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.usuario, creado_por=self.admin,
+        )
+        self.otro = crear_preregistrado('ajeno')
+        self.instrumento.permite_carga_archivo = True
+        self.instrumento.save(update_fields=['permite_carga_archivo'])
+        self.url = f'/api/instrumentos/{self.instrumento.slug}/cargar-archivo/'
+
+    def _archivo(self, nombre='diligenciado.pdf'):
+        return SimpleUploadedFile(nombre, b'contenido', content_type='application/pdf')
+
+    def test_usuario_preregistrado_puede_subir(self):
+        self.client.force_authenticate(user=self.usuario)
+        with patch('instrumentos.views_participante.threading.Thread'):
+            resp = self.client.post(self.url, {'archivo': self._archivo()}, format='multipart')
+        self.assertEqual(resp.status_code, 201)
+        extraccion = ExtraccionInstrumento.objects.get(id=resp.data['id'])
+        self.assertEqual(extraccion.usuario, self.usuario)
+        self.assertEqual(extraccion.solicitado_por, self.usuario)
+
+    def test_el_documento_siempre_queda_a_nombre_de_quien_sube(self):
+        """No hay forma de subir a nombre de otro: el usuario sale de request.user, no del body.
+        Mandar usuario_id no debe cambiar nada."""
+        self.client.force_authenticate(user=self.usuario)
+        with patch('instrumentos.views_participante.threading.Thread'):
+            resp = self.client.post(
+                self.url, {'archivo': self._archivo(), 'usuario_id': self.otro.id}, format='multipart',
+            )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(ExtraccionInstrumento.objects.get(id=resp.data['id']).usuario, self.usuario)
+
+    def test_403_si_el_instrumento_no_permite_carga(self):
+        self.instrumento.permite_carga_archivo = False
+        self.instrumento.save(update_fields=['permite_carga_archivo'])
+        self.client.force_authenticate(user=self.usuario)
+        resp = self.client.post(self.url, {'archivo': self._archivo()}, format='multipart')
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(ExtraccionInstrumento.objects.count(), 0)
+
+    def test_403_si_no_esta_preregistrado(self):
+        self.client.force_authenticate(user=self.otro)
+        resp = self.client.post(self.url, {'archivo': self._archivo()}, format='multipart')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_rechaza_extension_no_soportada(self):
+        self.client.force_authenticate(user=self.usuario)
+        resp = self.client.post(
+            self.url, {'archivo': SimpleUploadedFile('x.txt', b'x', content_type='text/plain')},
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('archivo', resp.data)
+
+    def test_el_detalle_del_instrumento_expone_el_flag(self):
+        self.client.force_authenticate(user=self.usuario)
+        resp = self.client.get(f'/api/instrumentos/{self.instrumento.slug}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['permite_carga_archivo'])
+
+    def test_mis_cargas_solo_muestra_las_propias(self):
+        ExtraccionInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.usuario,
+            archivo=self._archivo('mia.pdf'),
+        )
+        PreregistroInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.otro, creado_por=self.admin,
+        )
+        ExtraccionInstrumento.objects.create(
+            instrumento=self.instrumento, usuario=self.otro,
+            archivo=self._archivo('ajena.pdf'),
+        )
+        self.client.force_authenticate(user=self.usuario)
+        resp = self.client.get(f'/api/instrumentos/{self.instrumento.slug}/mis-cargas/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([e['usuario'] for e in resp.data], [self.usuario.id])

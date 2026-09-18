@@ -2,12 +2,23 @@ from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
 
+from jornadas import emparejamiento
+
 
 class Instrumento(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     nombre = models.CharField(max_length=255)
     descripcion = models.TextField(blank=True)
     activo = models.BooleanField(default=True)
+    # Habilita que el propio usuario preregistrado suba su documento ya diligenciado, en vez de
+    # que solo un admin pueda hacerlo (ver instrumentos/views_participante.py). Apagado por
+    # defecto a propósito: la carga dispara una llamada a OpenAI y crea una AplicacionInstrumento
+    # en estado pendiente, así que se abre instrumento por instrumento cuando el equipo lo decide,
+    # no en todos de golpe. Es también lo que el FE lee para saber si mostrar el botón de subir.
+    permite_carga_archivo = models.BooleanField(default=False, help_text=(
+        'Si los usuarios preregistrados pueden subir ellos mismos un documento diligenciado para '
+        'que la IA lo transcriba. Apagado = solo un administrador puede hacerlo.'
+    ))
     # Opcional: vincula este instrumento a una jornada (ej. el diagnóstico de un departamento se
     # aplica como parte de una jornada concreta, junto a sus momentos). Cuando está vinculado,
     # `encargados` deja de usarse para scoping — pasa a ser Jornada.propietarios, un solo lugar
@@ -256,11 +267,13 @@ class ExtraccionInstrumento(models.Model):
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
+    ESTADO_SIN_RESPONSABLE = 'sin_responsable'
     ESTADO_ERROR = 'error'
     ESTADO_CHOICES = [
         (ESTADO_PENDIENTE, 'Pendiente'),
         (ESTADO_PROCESANDO, 'Procesando'),
         (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_SIN_RESPONSABLE, 'Transcrito — falta asignar responsable'),
         (ESTADO_ERROR, 'Error'),
     ]
 
@@ -268,12 +281,29 @@ class ExtraccionInstrumento(models.Model):
     # A quién (persona/departamento) pertenece el documento ya diligenciado. Si todavía no tiene
     # PreregistroInstrumento para este instrumento, se le crea uno al procesar — mismo espíritu
     # que un preregistro manual, solo que disparado por esta carga en vez de un alta explícita.
+    # Opcional desde HU-55: si no se indica al subir, la IA lee el responsable del propio documento
+    # y se intenta emparejar (ver responsable_estado). Si no se logra, la extracción queda en
+    # ESTADO_SIN_RESPONSABLE con la transcripción ya guardada en `resultado_crudo`, a la espera de
+    # que un admin asigne a la persona — nunca se crea una cuenta a partir de un nombre leído.
     usuario = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='extracciones_instrumento',
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='extracciones_instrumento',
     )
+    # Lo que la IA LEYÓ como responsable en el documento: {"nombre", "correo", "cargo",
+    # "dependencia"}, todo opcional. Se guarda aunque el emparejamiento falle — es lo que le
+    # permite a un admin entender por qué no se emparejó y a quién debería asignarlo.
+    responsable_detectado = models.JSONField(default=dict, blank=True)
+    responsable_estado = models.CharField(
+        max_length=20, choices=emparejamiento.ESTADO_CHOICES,
+        default=emparejamiento.ESTADO_NO_BUSCADO,
+    )
+    # La transcripción cruda de la IA, tal como volvió. Existe para que el trabajo no se pierda
+    # cuando no hay responsable al que atribuirle la AplicacionInstrumento: se guarda acá y se
+    # escribe después, cuando un admin asigne a la persona (ver asignar_responsable_instrumento).
+    resultado_crudo = models.JSONField(default=dict, blank=True)
     archivo = models.FileField(upload_to='instrumentos/extracciones/%Y/%m/')
     nombre_archivo_original = models.CharField(max_length=255, blank=True)
-    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     aplicacion = models.ForeignKey(
         AplicacionInstrumento, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='extraccion_origen',

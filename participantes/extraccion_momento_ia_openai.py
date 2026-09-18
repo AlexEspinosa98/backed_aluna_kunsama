@@ -21,6 +21,8 @@ import threading
 from django.db import transaction
 from django.utils import timezone
 
+from jornadas import emparejamiento
+
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
@@ -70,12 +72,22 @@ SYSTEM_PROMPT_EXTRACCION = (
     "fila que no esté en el esquema simplemente no se transcribe.\n"
     "7. Nunca mezcles: no le pongas opcion_ids a una pregunta abierta/audio, matriz o lista, no le "
     "pongas fila_id/columna_id a una pregunta que no sea matriz/lista, ni texto_libre a una de "
-    "opción.\n\n"
+    "opción.\n"
+    "8. RESPONSABLE. Además de las respuestas, busca quién diligenció el documento — casi siempre "
+    "está en las primeras líneas o en un encabezado, con etiquetas como 'Responsable', "
+    "'Diligenciado por', 'Nombre', 'Elaborado por' o una firma al pie. Devuélvelo en el "
+    "bloque 'responsable', copiando el texto TAL CUAL aparece (no lo normalices, no lo "
+    "completes, no deduzcas un correo que no esté escrito). Si un dato no está, déjalo en null; "
+    "si no encuentras ningún responsable, deja todo el bloque en null. NUNCA inventes un nombre "
+    "ni uses el de una persona mencionada dentro de una respuesta — solo quien firma o declara "
+    "haber diligenciado el documento.\n\n"
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin fences "
     "de markdown, con esta forma exacta:\n"
     "{\n"
+    '  "responsable": {"nombre": "<texto o null>", "correo": "<texto o null>", '
+    '"cargo": "<texto o null>", "dependencia": "<texto o null>"},\n'
     '  "respuestas": [\n'
     '    {"pregunta": <id>, "texto_libre": "<texto o \'\'>", "opcion_ids": [<ids>], '
     '"fila_id": <id o null>, "fila_temporal": <número o null>, "columna_id": <id o null>}\n'
@@ -281,6 +293,40 @@ def _limpiar_y_validar(resultado_crudo, momento):
     return {'respuestas': limpio}, omitidas
 
 
+def _limpiar_responsable(crudo):
+    """Normaliza el bloque `responsable` que devolvió la IA a un dict de strings. La IA puede
+    mandar null, omitirlo, o mandar cualquier cosa en los campos — nada de eso puede tumbar una
+    extracción que por lo demás salió bien."""
+    if not isinstance(crudo, dict):
+        return {}
+    limpio = {}
+    for clave in ('nombre', 'correo', 'cargo', 'dependencia'):
+        valor = crudo.get(clave)
+        if isinstance(valor, str) and valor.strip():
+            limpio[clave] = valor.strip()
+    return limpio
+
+
+def emparejar_responsable_momento(momento, responsable):
+    """Busca a qué Participante de ESTA jornada corresponde el responsable que leyó la IA.
+
+    El conjunto de candidatos es la jornada completa, no el momento: un participante existe a
+    nivel de jornada y puede no haber respondido todavía nada de este momento — que es
+    justamente el caso de quien llenó el documento en papel."""
+    from .models import Participante
+
+    if not responsable:
+        return None, emparejamiento.ESTADO_SIN_DATO
+
+    candidatos = [
+        (p, f'{p.nombre} {p.apellido}', p.correo_institucional)
+        for p in Participante.objects.filter(jornada_id=momento.jornada_id)
+    ]
+    return emparejamiento.emparejar(
+        candidatos, nombre=responsable.get('nombre'), correo=responsable.get('correo'),
+    )
+
+
 def procesar_extraccion_momento(extraccion_id):
     """Genera el `resultado` de una ExtraccionMomento ya creada (estado 'pendiente'). Corre en un
     hilo de background — mismo patrón que instrumentos.extraccion_ia_openai. NO escribe
@@ -308,6 +354,18 @@ def procesar_extraccion_momento(extraccion_id):
 
         limpio, omitidas = _limpiar_y_validar(resultado, extraccion.momento)
 
+        # El responsable solo se busca si no lo dijeron al subir: un participante indicado a mano
+        # es una decisión humana y no se pisa con lo que haya leído la IA.
+        campos_responsable = []
+        if extraccion.participante_id is None:
+            detectado = _limpiar_responsable(resultado.get('responsable'))
+            participante, estado = emparejar_responsable_momento(extraccion.momento, detectado)
+            extraccion.responsable_detectado = detectado
+            extraccion.responsable_estado = estado
+            if participante is not None:
+                extraccion.participante = participante
+            campos_responsable = ['responsable_detectado', 'responsable_estado', 'participante']
+
         extraccion.resultado = limpio
         extraccion.preguntas_omitidas = omitidas
         extraccion.estado = ExtraccionMomento.ESTADO_COMPLETO
@@ -315,7 +373,8 @@ def procesar_extraccion_momento(extraccion_id):
         extraccion.modelo_usado = MODELO_USADO_LABEL
         extraccion.completado_en = timezone.now()
         extraccion.save(update_fields=[
-            'resultado', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
+            'resultado', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado',
+            'completado_en', *campos_responsable,
         ])
     except Exception as exc:  # noqa: BLE001
         if extraccion is not None:
@@ -371,9 +430,20 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
     una falla a mitad dejaría la tabla del participante incompleta."""
     from django.utils import timezone as tz
 
+    from rest_framework.exceptions import ValidationError
+
     from jornadas.models import Pregunta
 
     from .models import Respuesta
+
+    if extraccion.participante_id is None:
+        # Desde HU-55 el responsable puede venir sin resolver (la IA no lo encontró, o encontró
+        # dos personas con ese nombre). La transcripción sigue intacta en `resultado`; lo único
+        # que falta es a nombre de quién se escribe, y eso lo decide una persona.
+        raise ValidationError({'participante': (
+            'Esta extracción todavía no tiene responsable asignado. Asigna uno antes de aprobarla '
+            f'(responsable detectado: {extraccion.responsable_detectado or "ninguno"}).'
+        )})
 
     preguntas = {p.id: p for p in Pregunta.objects.filter(momento=extraccion.momento)}
     guardadas = []

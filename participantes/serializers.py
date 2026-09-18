@@ -204,13 +204,26 @@ class ExtraccionMomentoSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'momento', 'momento_titulo', 'participante', 'participante_nombre',
             'nombre_archivo_original', 'estado', 'resultado', 'preguntas_omitidas',
+            'responsable_detectado', 'responsable_estado',
             'error_mensaje', 'modelo_usado', 'aprobado_en', 'aprobado_por', 'solicitado_por',
             'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
 
     def get_participante_nombre(self, extraccion):
+        # Puede no haber participante todavía: desde HU-55 se puede subir sin decir de quién es
+        # el documento y que la IA lo detecte — si no se logró emparejar, queda en null hasta que
+        # un admin lo asigne.
+        if extraccion.participante_id is None:
+            return None
         return f'{extraccion.participante.nombre} {extraccion.participante.apellido}'.strip()
+
+
+class AsignarResponsableMomentoSerializer(serializers.Serializer):
+    """Asigna a mano el participante de una extracción que la IA no pudo emparejar (HU-55)."""
+    participante_id = serializers.PrimaryKeyRelatedField(
+        source='participante', queryset=Participante.objects.all(),
+    )
 
 
 class ExtraccionMomentoCrearSerializer(serializers.ModelSerializer):
@@ -248,16 +261,29 @@ class ExtraccionMomentoCrearSerializer(serializers.ModelSerializer):
                     {'participante_id': 'Ese participante no pertenece a la jornada de este momento.'}
                 )
             return attrs
-        faltantes = [c for c in ('correo_institucional', 'nombre', 'apellido', 'rol') if c not in attrs]
-        if faltantes:
+        # Desde HU-55 también vale no mandar NINGUNO de los dos: la IA lee el responsable del
+        # propio documento y se intenta emparejar contra los participantes de la jornada al
+        # procesar. Solo se exige el paquete completo si mandaron parte de él — mandar media
+        # ficha de alta sí es un error del cliente, no una decisión de delegarle esto a la IA.
+        campos_alta = ('correo_institucional', 'nombre', 'apellido', 'rol')
+        presentes = [c for c in campos_alta if c in attrs]
+        if presentes and len(presentes) < len(campos_alta):
             raise serializers.ValidationError(
-                'Debes indicar participante_id (de alguien ya registrado) o '
-                'correo_institucional+nombre+apellido+rol (para registrar a alguien nuevo).'
+                'Para registrar a alguien nuevo hacen falta correo_institucional+nombre+apellido+rol. '
+                'También puedes mandar participante_id, o no mandar nada y dejar que la IA '
+                'detecte el responsable en el documento.'
             )
         return attrs
 
     def create(self, validated_data):
         participante = validated_data.pop('participante', None)
+        if participante is None and 'correo_institucional' not in validated_data:
+            # Sin responsable indicado: queda en null y lo resuelve la IA al procesar (ver
+            # emparejar_responsable_momento). La extracción no se puede aprobar hasta que haya uno.
+            for campo in ('nombre', 'apellido', 'telefono', 'rol'):
+                validated_data.pop(campo, None)
+            validated_data['nombre_archivo_original'] = validated_data['archivo'].name
+            return super().create(validated_data)
         if participante is None:
             jornada = validated_data['momento'].jornada
             correo = validated_data.pop('correo_institucional')

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
 
+from jornadas import emparejamiento
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
 
 
@@ -157,7 +158,21 @@ class ExtraccionMomento(models.Model):
     momento = models.ForeignKey(Momento, on_delete=models.CASCADE, related_name='extracciones')
     # A quién (persona/departamento) pertenece el documento ya diligenciado. Se crea/reutiliza al
     # subir el archivo (no al aprobar) — mismo espíritu que un registro manual de participante.
-    participante = models.ForeignKey(Participante, on_delete=models.CASCADE, related_name='extracciones')
+    # Opcional desde HU-55: si no se indica al subir, la IA lee el responsable del propio documento
+    # y se intenta emparejar contra los participantes de esa jornada (ver responsable_estado).
+    # Acá no hace falta un estado aparte como en instrumentos: este modelo YA difiere la escritura
+    # hasta `aprobar`, así que una extracción sin responsable simplemente no se puede aprobar
+    # todavía (ver aprobar_extraccion_momento) y la transcripción queda intacta en `resultado`.
+    participante = models.ForeignKey(
+        Participante, on_delete=models.CASCADE, null=True, blank=True, related_name='extracciones',
+    )
+    # Lo que la IA LEYÓ como responsable: {"nombre", "correo", "cargo", "dependencia"}, todo
+    # opcional. Se guarda aunque el emparejamiento falle, para que un admin entienda por qué.
+    responsable_detectado = models.JSONField(default=dict, blank=True)
+    responsable_estado = models.CharField(
+        max_length=20, choices=emparejamiento.ESTADO_CHOICES,
+        default=emparejamiento.ESTADO_NO_BUSCADO,
+    )
     archivo = models.FileField(upload_to='participantes/extracciones/%Y/%m/')
     nombre_archivo_original = models.CharField(max_length=255, blank=True)
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
