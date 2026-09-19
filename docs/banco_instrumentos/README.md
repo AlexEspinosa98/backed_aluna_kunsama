@@ -1,8 +1,8 @@
 # Banco de instrumentos (plantillas de momentos) — plan de desarrollo
 
-> **Estado: propuesta, pendiente de decisiones.** Nada de esto está implementado. Antes de tocar
-> código hay que cerrar las decisiones marcadas como **bloqueantes** en
-> [02_decisiones.md](02_decisiones.md).
+> **Estado: decisiones cerradas el 2026-09-19, en implementación.** El resumen al final de
+> [02_decisiones.md](02_decisiones.md) es la fuente de verdad; el avance por fase está en
+> [06_plan_de_desarrollo.md](06_plan_de_desarrollo.md).
 
 ## Qué es
 
@@ -46,11 +46,12 @@ flowchart LR
     C2 -.->|momento_origen<br/>solo documental| M
 ```
 
-La recomendación central es **no crear un modelo aparte de plantillas**: el propio `Momento` es la
+Decisión tomada (D1-A): **no hay un modelo aparte de plantillas**. El propio `Momento` es la
 plantilla y el banco es una *vista filtrada* de los momentos existentes (`visibilidad=publico` o
 "míos"). Eso reutiliza el árbol de preguntas tal cual, no duplica cuatro modelos, y hace que
-"publicar" sea cambiar un campo. El costo es que la plantilla vive atada a su jornada; los
-detalles y la alternativa (snapshot con `jornada=NULL`) están en la decisión **D1**.
+"publicar" sea cambiar un campo. El costo aceptado es que la plantilla vive atada a su jornada y
+lo que ven los demás es el momento "vivo". La siguiente iteración (Fase 5) extiende lo mismo a
+jornadas completas.
 
 ## Numeración de HU reservada
 

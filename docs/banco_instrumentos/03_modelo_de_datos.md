@@ -20,7 +20,8 @@ class Momento(models.Model):
 
     # Banco de instrumentos. Un momento SIEMPRE está en el banco: privado (solo lo reutilizan
     # los propietarios de su jornada) o público (cualquier usuario del panel). No hay estado
-    # "fuera del banco": para retirar uno sin borrarlo se pone activo=False.
+    # "fuera del banco": activo=False lo saca del listado por defecto (se ve con
+    # ?incluir_inactivos=1) pero sigue siendo usable como plantilla (D12-B).
     visibilidad = models.CharField(
         max_length=10, choices=VISIBILIDAD_CHOICES, default=VISIBILIDAD_PRIVADO,
     )
@@ -132,9 +133,10 @@ Pasos, en orden:
    `contexto`, `tipo`, `categorias_semilla`, `mesas_permitidas`, `roles_permitidos`,
    `permite_carga_archivo`, `activo=True`, `visibilidad`, `creado_por=usuario`,
    `momento_origen=origen`, `origen_info={…}`.
-3. Para cada `Pregunta` de origen con `activa=True` (D11-A), ordenadas por `orden`: crear la
-   copia con los mismos campos **excepto** `momento` (la copia) y `depende_de_opcion` (se deja
-   `NULL` en esta pasada). Guardar `mapa_preguntas[id_origen] = copia`.
+3. Para **cada** `Pregunta` de origen, activa o no (D11-B), ordenadas por `orden`: crear la
+   copia con los mismos campos (incluido `activa` tal cual) **excepto** `momento` (la copia) y
+   `depende_de_opcion` (se deja `NULL` en esta pasada). Guardar
+   `mapa_preguntas[id_origen] = copia`.
 4. Para cada pregunta copiada: copiar `opciones`, `filas` y `columnas` conservando `texto` y
    `orden`. Guardar `mapa_opciones[id_origen] = copia`.
 5. Segunda pasada para `depende_de_opcion` (D9-A): si la opción origen está en `mapa_opciones`

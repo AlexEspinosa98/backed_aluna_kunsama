@@ -45,7 +45,7 @@ flowchart TD
     Q[GET /api/admin/banco-momentos/?q=&tipo=&alcance=] --> S{¿Quién pregunta?}
     S -->|dependencia| F1[publico=True ∪ jornada.propietarios ∋ yo]
     S -->|admin completo| F2[todos]
-    F1 --> A[activo=True]
+    F1 --> A[activo=True salvo ?incluir_inactivos=1]
     F2 --> A
     A --> R[Lista: id, titulo, tipo, visibilidad, creado_por, jornada, n_preguntas, veces_usado, puedo_editar]
     R --> D[GET /banco-momentos/{id}/ → árbol completo de preguntas, solo lectura]
@@ -129,7 +129,7 @@ queryset): no revelar que el recurso existe.
 | C05 | Dependencia crea momento en jornada ajena | 403 (comportamiento actual, sin cambio). |
 | C06 | Publicar un momento sin preguntas | Permitido. El banco muestra `n_preguntas: 0`. |
 | C07 | Publicar y luego volver a privado | Las copias existentes no cambian; deja de verse para terceros. |
-| C08 | Poner `activo=False` a un momento público | Desaparece del banco (D12), las copias no cambian. |
+| C08 | Poner `activo=False` a un momento público | Desaparece del listado por defecto del banco; sigue apareciendo con `?incluir_inactivos=1` y sigue siendo usable (D12-B). Las copias no cambian. |
 | C09 | Momentos existentes tras la migración | Todos `privado`, `creado_por` = `jornada.creada_por` o null (D7). No aparece nada nuevo en el banco público. |
 
 ### 4.2 Exploración del banco
@@ -138,6 +138,7 @@ queryset): no revelar que el recurso existe.
 |---|---|---|
 | B01 | Dependencia lista sin filtros | Públicos de cualquiera ∪ momentos de sus jornadas, `activo=True`, sin duplicados (`distinct`). |
 | B02 | Admin lista sin filtros | Todos los `activo=True`, incluidos privados ajenos (D5). |
+| B02b | Cualquiera lista con `?incluir_inactivos=1` | Igual que B01/B02 pero sin el filtro `activo=True`. |
 | B03 | `?alcance=mios` | Solo momentos de jornadas donde soy propietario (cualquier visibilidad). |
 | B04 | `?alcance=publicos` | Solo `visibilidad=publico` (incluye los míos públicos). |
 | B05 | `?q=diagn` | `icontains` sobre `titulo` y `contexto`. |
@@ -145,7 +146,8 @@ queryset): no revelar que el recurso existe.
 | B07 | `?jornada=<id>` | Solo momentos de esa jornada (útil para "reutilizar todo lo de mi jornada anterior"). Si la jornada no es visible para mí y no es pública nada de ella → lista vacía. |
 | B08 | `?solo_originales=1` | Excluye momentos con `momento_origen` no nulo, para no ver copias de copias. |
 | B09 | Detalle de un privado ajeno por id | 404. |
-| B10 | Detalle de un momento inactivo | 404 (no está en el queryset del banco), aunque sea mío. Para verlo, `GET /momentos/{id}/` de siempre. |
+| B10 | Detalle de un momento inactivo visible para mí | 200 (D12-B: el detalle no filtra por `activo`). El item trae `activo: false`. |
+| B10b | `?incluir_inactivos=1` en el listado | Incluye momentos `activo=False`; sin el flag no aparecen. |
 | B11 | Momento cuyo `creado_por` fue borrado | `creado_por: null` en la respuesta; se sigue listando. |
 | B12 | Momento de jornada `activa=False` | Se lista igual (D12): las jornadas pasadas son la fuente principal de plantillas. |
 | B13 | Orden del listado | `-actualizado_en` por defecto; `?ordering=titulo` opcional. |
@@ -163,15 +165,15 @@ queryset): no revelar que el recurso existe.
 | U05 | `jornada` en el body no es mía (dependencia) | 403 `"Esta jornada no te pertenece."` |
 | U06 | `jornada` en el body no existe | 400 `{"jornada": ["Objeto inválido"]}`. |
 | U07 | Origen privado ajeno | 404 (no está en mi banco). |
-| U08 | Origen inactivo | 404 (no está en el banco). |
+| U08 | Origen inactivo (visible para mí) | 201 (D12-B). La copia nace `activo=True`. |
 | U09 | Body con `orden` explícito ya ocupado en destino | 400 `{"orden": ["Ya existe un momento con ese orden en la jornada."]}`. No se desplaza a los demás. |
 | U10 | Body con `orden` explícito libre | Se respeta. |
 | U11 | Body con `titulo` override | La copia usa ese título; el slug se genera a partir de él. |
 | U12 | Body con `visibilidad=publico` | La copia nace pública. |
-| U13 | Origen con preguntas `activa=False` | No se copian (D11). |
-| U14 | Origen con `depende_de_opcion` interna al momento | Remapeada al id nuevo; la copia conserva la condicionalidad. |
+| U13 | Origen con preguntas `activa=False` | Se copian conservando `activa=False` (D11-B). |
+| U14 | Origen con `depende_de_opcion` interna al momento (incluida una opción de pregunta inactiva) | Remapeada al id nuevo; la copia conserva la condicionalidad. |
 | U15 | Origen con `depende_de_opcion` a opción de otro momento | Queda `NULL` + advertencia (D9). |
-| U16 | Origen con `depende_de_opcion` a opción de una pregunta inactiva (no copiada) | Queda `NULL` + advertencia (D9 + D11). |
+| U16 | *(absorbido por U14 tras D11-B)* | — |
 | U17 | Origen con `roles_permitidos` que no existen en la jornada destino | Se copian tal cual + advertencia listando los roles (D10). |
 | U18 | Origen con `mesas_permitidas` | Se copian tal cual, sin advertencia (los números de mesa no tienen catálogo). |
 | U19 | Origen tipo `mesa` con `filas_adicionales` / tipo `lista` | Se copian los flags; no hay `FilaListaRespuesta` porque son ejecución. |

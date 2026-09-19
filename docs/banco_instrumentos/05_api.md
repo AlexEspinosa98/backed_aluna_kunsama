@@ -1,7 +1,8 @@
 # 05 — API
 
 Todo bajo `/api/admin/` con `Authorization: Token <token>` de un usuario `is_staff`. Nombres
-según **D2-A** (`banco-momentos`).
+según **D2-A** (`banco-momentos`). Refleja las decisiones cerradas el 2026-09-19 (D11-B y
+D12-B incluidas).
 
 ## 1. Cambios en endpoints existentes
 
@@ -54,17 +55,19 @@ Query params:
 | `tipo` | `individual` \| `mesa` | — |
 | `jornada` | id | — |
 | `solo_originales` | `1` | — (excluye los que tienen `momento_origen`) |
+| `incluir_inactivos` | `1` | — (por defecto el listado excluye `activo=False`; D12-B) |
 | `ordering` | `titulo` \| `-actualizado_en` \| `-veces_usado` | `-actualizado_en` |
 
-Queryset base (dependencia):
+Queryset base (dependencia), **sin** filtro de `activo` (lo aplica solo el listado):
 
 ```python
-Momento.objects.filter(activo=True).filter(
+Momento.objects.filter(
     Q(visibilidad=Momento.VISIBILIDAD_PUBLICO) | Q(jornada__propietarios=user)
 ).distinct()
 ```
 
-Admin completo: `Momento.objects.filter(activo=True)`.
+Admin completo: `Momento.objects.all()`. El listado añade `.filter(activo=True)` salvo
+`?incluir_inactivos=1`; detalle, `usar/` y `derivados/` usan el queryset base tal cual.
 
 Respuesta `200` (item):
 
@@ -78,7 +81,9 @@ Respuesta `200` (item):
   "visibilidad": "publico",
   "creado_por": {"id": 5, "username": "mgarcia", "nombre": "María García"},
   "jornada": {"id": 4, "slug": "jornada-agil-2026", "nombre": "Jornada Ágil 2026", "activa": false},
+  "activo": true,
   "n_preguntas": 12,
+  "n_preguntas_inactivas": 1,
   "veces_usado": 3,
   "momento_origen": null,
   "es_mio": true,
@@ -88,7 +93,8 @@ Respuesta `200` (item):
 }
 ```
 
-- `n_preguntas`: solo `activa=True` (lo que se copiaría).
+- `n_preguntas`: solo `activa=True` (lo que ve un participante). `n_preguntas_inactivas`: las
+  que también se copiarán pero llegarán con `activa=False` (D11-B).
 - `veces_usado`: `COUNT(momentos_derivados)`.
 - `es_mio`: soy propietario de su jornada. `puedo_editar`: `es_mio or admin`. El FE usa esto
   para mostrar u ocultar el botón de editar (que lleva a la pantalla normal del momento).
@@ -113,7 +119,8 @@ Mismo item que arriba más `contexto` completo y `preguntas` con el árbol de so
 }
 ```
 
-Errores: `404` si no está en mi banco visible (privado ajeno, inactivo, inexistente).
+Errores: `404` si no está en mi banco visible (privado ajeno o inexistente). Un momento
+inactivo visible para mí responde `200` con `activo: false` (D12-B).
 
 ### `POST /api/admin/banco-momentos/{id}/usar/`
 

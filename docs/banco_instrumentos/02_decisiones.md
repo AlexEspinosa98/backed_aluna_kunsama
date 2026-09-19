@@ -4,7 +4,8 @@ Cada decisión trae: contexto, opciones, **recomendación** y si **bloquea** el 
 cerrar una, basta con responder "Dn: opción X" (o proponer otra). Las no bloqueantes se toman
 con la recomendación si nadie dice lo contrario.
 
-Estado global: **todas pendientes**.
+Estado global: **todas cerradas el 2026-09-19** (respondidas en este mismo archivo: se
+conservó solo la opción elegida en cada una). El resumen al final es la fuente de verdad.
 
 ---
 
@@ -31,7 +32,7 @@ ya construido).
 
 **Pregunta concreta:** ¿te sirve que la plantilla pública sea el momento "vivo" de la jornada, o
 necesitas que lo que ven los demás quede congelado hasta que decidas republicar?
-
+ Me sirve que
 ---
 
 ## D2 — Nomenclatura: cómo llamar al feature en código y API — **BLOQUEANTE**
@@ -42,9 +43,7 @@ Opciones:
 - **A (recomendada).** En **código y API**: "banco de momentos" (`/api/admin/banco-momentos/`,
   `visibilidad`, `momento_origen`, `BancoMomentoSerializer`). En **UI y HU**: "banco de
   instrumentos", aclarando una vez que instrumento = momento.
-- **B.** "banco de instrumentos" en todo (`/api/admin/banco-instrumentos/`). Riesgo: el FE va a
-  confundirlo con `/api/admin/instrumentos/`, que ya existe.
-- **C.** "plantillas" (`/api/admin/plantillas-momento/`). Choca con `plantillas-analisis/`.
+
 
 ---
 
@@ -57,9 +56,6 @@ Opciones:
 - **A (recomendada).** "Mío" = momentos de jornadas donde soy propietario. Coherente con todo el
   scoping actual: si un co-propietario ya ve y edita ese momento en la jornada, ocultárselo en el
   banco no protege nada. `creado_por` se guarda igual, para atribución y para D4.
-- **B.** "Mío" = `creado_por == yo`, estricto. Un co-propietario ve el momento en la jornada pero
-  no lo puede usar como plantilla. Más literal, menos coherente.
-
 ---
 
 ## D4 — ¿Quién puede editar una plantilla?
@@ -73,10 +69,6 @@ Opciones:
   El creador es propietario, así que queda cubierto; los co-propietarios también (igual que hoy).
   Terceros nunca pueden editar: el banco es de solo lectura y el `PATCH /momentos/{id}/` les da
   404 porque no está en su queryset.
-- **B.** Restringir `PATCH/DELETE` de un momento con `visibilidad=publico` a `creado_por` + admin.
-  Cambia el comportamiento actual solo para momentos públicos.
-- **C.** Restringir siempre a `creado_por` + admin. Regresión clara; no recomendada.
-
 ---
 
 ## D5 — Alcance del rol "administrador" en el banco
@@ -84,16 +76,12 @@ Opciones:
 - **A (recomendada).** Admin completo ve **todo** en el banco, incluidos los privados de otros
   (igual que hoy ve todas las jornadas), y puede editar cualquiera. Un usuario `dependencia` con
   sus jornadas es "el usuario" del enunciado.
-- **B.** Admin ve solo públicos + propios en el banco, aunque pueda editar cualquier momento por
-  los endpoints normales. Inconsistente; no recomendada.
-
 ---
 
 ## D6 — Visibilidad por defecto de un momento nuevo
 
 - **A (recomendada).** `privado`. Nada se comparte sin decisión explícita; los momentos
   existentes quedan privados en la migración y nadie ve de golpe contenido ajeno.
-- **B.** `publico`. El banco se llena solo, pero expone contenido que no se pensó como plantilla.
 
 ---
 
@@ -102,15 +90,12 @@ Opciones:
 Los momentos actuales no tienen creador. Opciones para la migración de datos:
 - **A (recomendada).** `creado_por = jornada.creada_por` si existe; si no, `NULL`. Con D3-A
   esto no afecta a la visibilidad (que va por propietarios), solo a la atribución mostrada.
-- **B.** Dejar `NULL` en todos y que un admin lo asigne a mano si le importa.
-
 ---
 
 ## D8 — Visibilidad de la copia recién creada
 
 - **A (recomendada).** Siempre nace `privado`, salvo que el body de `usar` diga otra cosa. Evita
   que el banco público se llene de duplicados de la misma plantilla.
-- **B.** Hereda la visibilidad del origen.
 
 ---
 
@@ -121,7 +106,6 @@ Ver [01_contexto.md](01_contexto.md) §4.
   apunta a otro momento → dejar `NULL` en la copia y devolver una **advertencia** en la respuesta
   (`advertencias: ["La pregunta 3 dependía de una opción de otro momento; la dependencia se
   quitó."]`). La copia queda válida y el usuario decide.
-- **B.** Rechazar la copia con 400. Bloquea un caso legítimo por un detalle menor.
 
 ---
 
@@ -132,35 +116,24 @@ destino esos roles pueden no existir (`RolJornada` es por jornada).
 - **A (recomendada).** Copiar tal cual (son contenido) y, si algún rol no existe como
   `RolJornada` en la jornada destino, agregar una advertencia en la respuesta. Nada se rompe:
   `roles_permitidos` se compara contra `Participante.rol` como texto libre.
-- **B.** Vaciar ambas listas en la copia. Pierde información que costó configurar.
 
 ---
 
 ## D11 — Preguntas inactivas (`activa=False`) al copiar
 
-- **A (recomendada).** No copiarlas. Una pregunta inactiva es una pregunta "quitada" del
-  formulario; la copia debe reflejar lo que ve un participante. (Si la opción de la que dependía
-  otra pregunta estaba en una inactiva, aplica D9.)
 - **B.** Copiarlas conservando `activa=False`.
 
 ---
 
 ## D12 — Momentos inactivos y jornadas inactivas en el banco
 
-- **A (recomendada).** El banco lista solo momentos `activo=True`. La `Jornada.activa` **no**
-  filtra: reutilizar momentos de jornadas pasadas es justamente el caso de uso principal.
-  Desactivar un momento equivale a "retirarlo del banco" sin borrarlo.
 - **B.** Listar también inactivos con un filtro `?incluir_inactivos=1`.
 
 ---
 
 ## D13 — Usar varias plantillas de una vez
 
-- **A (recomendada, fase 1).** Un `POST …/usar/` por plantilla; el FE encadena llamadas. Simple,
-  sin semántica de "todo o nada" que definir.
-- **B (fase 2, opcional).** `POST /api/admin/jornadas/{slug}/momentos/desde-banco/` con
-  `{"plantillas": [id, id, …]}`, atómico, asignando `orden` consecutivo. Se agrega solo si el FE
-  lo pide.
+- **A (recomendada, fase 1).** Un `POST …/usar/` por plantilla; el FE encadena llamadas. Simple, sin semántica de "todo o nada" que definir.
 
 ---
 
@@ -170,7 +143,6 @@ destino esos roles pueden no existir (`RolJornada` es por jornada).
 - **A (recomendada).** Además de la FK, guardar `origen_info` (JSON) con `{id, titulo,
   jornada_slug, jornada_nombre, creado_por_username, copiado_en}` en el momento copiado. Es lo que
   hace que la relación sea *documental* de verdad: sobrevive al borrado.
-- **B.** Solo la FK.
 
 ---
 
@@ -178,14 +150,14 @@ destino esos roles pueden no existir (`RolJornada` es por jornada).
 
 Con D4-A, cualquier propietario de la jornada puede cambiar `visibilidad`. Si prefieres que
 publicar/despublicar sea exclusivo del creador + admin (aunque editar el contenido no lo sea),
-se implementa como validación en el serializer. **Recomendación:** misma regla que D4.
+se implementa como validación en el serializer. **Descicion:** misma regla que D4.
 
 ---
 
 ## D16 — Fuera de alcance (confirmar)
 
 Doy por **fuera de alcance** de esta iteración, salvo que digas lo contrario:
-- Banco de **jornadas completas** (copiar una jornada con todos sus momentos).
+- Banco de **jornadas completas** (copiar una jornada con todos sus momentos). ESTO ES LA SIGUIENTE FASE. 
 - Banco para `instrumentos.Instrumento` (el otro módulo).
 - Versionado de plantillas ("actualizar mi copia con los cambios del original"). El enunciado dice
   explícitamente que las copias son aisladas, así que no se contempla.
@@ -195,23 +167,35 @@ Doy por **fuera de alcance** de esta iteración, salvo que digas lo contrario:
 
 ---
 
-## Resumen para responder rápido
+## Resumen — decisiones cerradas (2026-09-19)
 
-| Decisión | Recomendación | Bloquea |
+| Decisión | Decisión tomada | Estado |
 |---|---|---|
-| D1 modelo | A: el momento es la plantilla | **sí** |
-| D2 nombre | A: `banco-momentos` en API, "banco de instrumentos" en UI | **sí** |
-| D3 "mío" | A: jornadas donde soy propietario | no |
-| D4 editar | A: regla actual (propietarios + admin) | no |
-| D5 admin | A: ve y edita todo | no |
-| D6 default | A: `privado` | no |
-| D7 backfill | A: `jornada.creada_por` | no |
-| D8 copia | A: nace `privado` | no |
-| D9 dependencias | A: remapear o anular con advertencia | no |
-| D10 mesas/roles | A: copiar tal cual con advertencia | no |
-| D11 inactivas | A: no copiar | no |
-| D12 filtro activo | A: solo `activo=True`, jornada no filtra | no |
-| D13 varias | A: una llamada por plantilla | no |
-| D14 origen_info | A: sí, JSON snapshot | no |
-| D15 visibilidad | A: misma regla que editar | no |
-| D16 alcance | confirmar lista | no |
+| D1 modelo | **A**: el momento *es* la plantilla; el banco es una vista filtrada. Lo que ven los demás es el momento "vivo". | cerrada |
+| D2 nombre | **A**: `banco-momentos` en código y API; "banco de instrumentos" en UI y HU. | cerrada |
+| D3 "mío" | **A**: momentos de jornadas donde soy propietario. | cerrada |
+| D4 editar | **A**: regla actual (propietarios de la jornada + admin completo). | cerrada |
+| D5 admin | **A**: admin completo ve y edita todo, incluidos privados ajenos. | cerrada |
+| D6 default | **A**: `privado`. | cerrada |
+| D7 backfill | **A**: `creado_por = jornada.creada_por` o `NULL`. | cerrada |
+| D8 copia | **A**: la copia nace `privado` salvo que el body diga otra cosa. | cerrada |
+| D9 dependencias | **A**: remapear dentro del árbol; fuera del árbol → `NULL` + advertencia. | cerrada |
+| D10 mesas/roles | **A**: copiar tal cual; roles inexistentes en destino → advertencia. | cerrada |
+| D11 inactivas | **B**: se copian **todas** las preguntas conservando `activa=False` donde aplique. | cerrada (difiere de la recomendación) |
+| D12 inactivos | **B**: el listado del banco excluye `activo=False` por defecto y los incluye con `?incluir_inactivos=1`. Detalle, `usar/` y `derivados/` funcionan sobre inactivos sin flag. `Jornada.activa` no filtra. | cerrada (difiere de la recomendación) |
+| D13 varias | **A**: una llamada `usar/` por plantilla. | cerrada |
+| D14 origen_info | **A**: FK `SET_NULL` + snapshot JSON `origen_info`. | cerrada |
+| D15 visibilidad | misma regla que D4. | cerrada |
+| D16 alcance | Fuera de esta iteración: banco de `Instrumento`, versionado, favoritos/etiquetas, analítica comparada. **El banco de jornadas completas es la siguiente fase** (ver [06_plan_de_desarrollo.md](06_plan_de_desarrollo.md), Fase 5). | cerrada |
+
+### Consecuencias de D11-B y D12-B sobre el resto del plan
+
+- Copia: se copian todas las `Pregunta` del origen con su flag `activa` tal cual. Una
+  dependencia (`depende_de_opcion`) hacia una opción de una pregunta inactiva **sí** se remapea,
+  porque esa pregunta ahora existe en la copia (antes era el caso U16; queda absorbido por U14).
+- El `Momento` copiado nace siempre `activo=True`, aunque el origen esté inactivo: es un momento
+  nuevo en la jornada destino y el usuario decide su estado ahí.
+- Banco: el queryset base **no** filtra `activo`. El listado aplica `activo=True` salvo
+  `?incluir_inactivos=1`. Detalle, `usar/` y `derivados/` no filtran por `activo`.
+- `n_preguntas` en el listado cuenta solo `activa=True` (lo que ve un participante); se agrega
+  `n_preguntas_inactivas` para que el usuario sepa que la copia traerá más.

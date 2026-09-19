@@ -1,13 +1,13 @@
 # 06 — Plan de desarrollo
 
 Cuatro fases, cada una entregable y desplegable por separado. Estimaciones para una persona.
-Requisito previo: cerrar **D1** y **D2** (las bloqueantes de [02_decisiones.md](02_decisiones.md)).
 
-## Fase 0 — Cerrar decisiones (½ día)
+## Fase 0 — Cerrar decisiones ✅ (2026-09-19)
 
-- [ ] Responder D1 y D2 (bloqueantes).
-- [ ] Confirmar o ajustar D3–D16 (si no hay respuesta, va la recomendación).
-- [ ] Actualizar este plan y marcar en [02_decisiones.md](02_decisiones.md) el estado de cada una.
+- [x] D1 y D2 cerradas (ambas con la opción A).
+- [x] D3–D16 cerradas; D11 y D12 se apartaron de la recomendación (B en ambas) y D16 convierte
+      el banco de jornadas completas en la Fase 5.
+- [x] Plan ajustado; el resumen de [02_decisiones.md](02_decisiones.md) es la fuente de verdad.
 
 ## Fase 1 — Modelo, migración y visibilidad al crear (1 día) → **HU-67**
 
@@ -42,11 +42,11 @@ Tareas:
 - [ ] Función auxiliar `siguiente_orden(jornada)` con `select_for_update`.
 - [ ] Función auxiliar `advertencias_roles(momento_copia, jornada_destino)`.
 - [ ] HU-68 en `docs/USER_STORIES_COMPLETO.md` (explica por qué copia profunda y no referencia,
-      por qué las inactivas no se copian, por qué las dependencias cruzadas se anulan en vez de
-      fallar).
+      por qué las inactivas **sí** se copian conservando su flag (D11-B), por qué las dependencias
+      cruzadas se anulan en vez de fallar).
 
-Tests (`jornadas/tests_banco.py`, clase `CopiarMomentoTests`, sin API): U02, U04, U13–U21,
-U24, U25, U27–U31, U32 (con un momento de 90 preguntas y 3 matrices, medir tiempo).
+Tests (`jornadas/tests_banco.py`, clase `CopiarMomentoTests`, sin API): U02, U04, U13–U15,
+U17–U21, U24, U25, U27–U31, U32 (con un momento de 90 preguntas y 3 matrices, medir tiempo).
 
 ## Fase 3 — Endpoints del banco (1–1½ días) → **HU-69**
 
@@ -59,18 +59,19 @@ Tareas:
       `PreguntaAdminSerializer` o una variante sin `momento`), `UsarMomentoSerializer` (body de
       `usar/`).
 - [ ] `jornadas/scoping.py`: `momentos_del_banco(user)` con el queryset de
-      [05_api.md](05_api.md) §2, anotado con `Count('preguntas', filter=Q(preguntas__activa=True))`
-      y `Count('momentos_derivados')`.
+      [05_api.md](05_api.md) §2 (sin filtro de `activo`), anotado con
+      `Count('preguntas', filter=Q(preguntas__activa=True))`,
+      `Count('preguntas', filter=Q(preguntas__activa=False))` y `Count('momentos_derivados')`.
 - [ ] `jornadas/views.py`: `BancoMomentoViewSet(ReadOnlyModelViewSet)` con filtros `alcance`,
-      `q`, `tipo`, `jornada`, `solo_originales`, `ordering`; acciones `usar` (POST) y
-      `derivados` (GET).
+      `q`, `tipo`, `jornada`, `solo_originales`, `incluir_inactivos` (solo en `list`),
+      `ordering`; acciones `usar` (POST) y `derivados` (GET).
 - [ ] `jornadas/urls.py`: `router.register('banco-momentos', BancoMomentoViewSet,
       basename='banco-momento')`.
 - [ ] `@extend_schema` para el listado y `usar/`.
 - [ ] HU-69 en `docs/USER_STORIES_COMPLETO.md`.
 
-Tests (`jornadas/tests_banco.py`, clase `BancoMomentoAPITests`): B01–B12, B15, U01, U03,
-U05–U12, U22 (con `TransactionTestCase` y dos hilos, o al menos documentar que
+Tests (`jornadas/tests_banco.py`, clase `BancoMomentoAPITests`): B01–B12 (incluidos B02b y
+B10b), B15, U01, U03, U05–U12, U22 (con `TransactionTestCase` y dos hilos, o al menos documentar que
 `select_for_update` lo cubre), U26, T01–T05, y la matriz de permisos completa de
 [04_flujos_y_casos.md](04_flujos_y_casos.md) §3 (una prueba por celda).
 
@@ -88,7 +89,22 @@ U05–U12, U22 (con `TransactionTestCase` y dos hilos, o al menos documentar que
 - [ ] Commit y push directo a `main`; luego el despliegue de producción
       (`migrate` obligatorio por las migraciones 0016/0017).
 
-## Fase 5 — Opcionales, solo si se piden
+## Fase 5 — Banco de jornadas completas (siguiente iteración, decidido en D16)
+
+Se planifica en detalle cuando cierre la Fase 4, pero el diseño ya queda encaminado:
+
+- `Jornada` recibe los mismos campos que `Momento` (`visibilidad`, `jornada_origen`,
+  `origen_info`; `creada_por` ya existe).
+- Servicio `copiar_jornada(origen, usuario, *, nombre, slug, fechas, visibilidad)` que crea la
+  jornada nueva, copia `RolJornada` y `JornadaAsset` (archivos incluidos) y llama a
+  `copiar_momento` por cada momento del origen, en una sola transacción. Como copia **todos** los
+  momentos de la jornada, las dependencias `depende_de_opcion` entre momentos de la misma jornada
+  se remapean completas (ya no aplica la advertencia de D9).
+- Endpoints `GET /api/admin/banco-jornadas/`, `GET …/{id}/`, `POST …/{id}/usar/`.
+- No se copian participantes, respuestas, transcripciones, reportes ni infografías.
+- Estimación: 2 días, porque reutiliza `copiar_momento` y el patrón del banco de momentos.
+
+## Opcionales, solo si se piden
 
 | Item | Decisión asociada | Esfuerzo |
 |---|---|---|
@@ -96,7 +112,6 @@ U05–U12, U22 (con `TransactionTestCase` y dos hilos, o al menos documentar que
 | Snapshot en el banco (plantillas que sobreviven a su jornada) | D1-B | 2–3 días |
 | Paginación en el listado del banco | B14 | 1 h |
 | Etiquetas/categorías del banco para búsqueda | D16 | 1 día |
-| Banco de jornadas completas | D16 | 2 días (reutiliza `copiar_momento` en bucle) |
 
 ## Archivos que se tocan (resumen)
 
@@ -127,6 +142,7 @@ Ningún archivo de `participantes`, `analitica`, `transcripciones` ni `instrumen
 | Confusión de nombres con `instrumentos.Instrumento` | Medio | D2: `banco-momentos` en código/API; "instrumento" solo en UI y HU con la aclaración. |
 | El backfill asigna `creado_por` a quien no creó el momento | Bajo | Es solo atribución (no controla acceso, D3-A); un admin lo puede corregir por PATCH si se decide exponer el campo como escribible para admin (no previsto en fase 1). |
 | Copias de copias llenan el banco público | Bajo | Copias nacen `privado` (D8) y `?solo_originales=1` en el listado. |
+| La copia trae preguntas inactivas que el usuario no esperaba (D11-B) | Bajo | `n_preguntas_inactivas` visible en el banco antes de usar; en la copia siguen `activa=False`, así que el participante no las ve. |
 
 ## Definición de hecho
 
