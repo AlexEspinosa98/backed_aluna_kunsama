@@ -134,6 +134,13 @@ class Momento(models.Model):
         (TIPO_MESA, 'Respuesta por mesa'),
     ]
 
+    VISIBILIDAD_PRIVADO = 'privado'
+    VISIBILIDAD_PUBLICO = 'publico'
+    VISIBILIDAD_CHOICES = [
+        (VISIBILIDAD_PRIVADO, 'Privado — solo yo puedo reutilizarlo'),
+        (VISIBILIDAD_PUBLICO, 'Público — cualquiera puede usarlo como plantilla'),
+    ]
+
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='momentos')
     orden = models.PositiveIntegerField()
     titulo = models.CharField(max_length=255)
@@ -173,6 +180,34 @@ class Momento(models.Model):
         'momento, para que la IA lo transcriba. Apagado = solo un administrador puede hacerlo.'
     ))
     activo = models.BooleanField(default=True)
+    # Banco de instrumentos (D1-A: el momento ES la plantilla, el banco es una vista filtrada).
+    # Un momento SIEMPRE está en el banco: privado (solo lo reutilizan los propietarios de su
+    # jornada) o público (cualquier usuario del panel). No hay estado "fuera del banco":
+    # activo=False lo saca del listado por defecto (se ve con ?incluir_inactivos=1) pero sigue
+    # siendo usable como plantilla (D12-B). db_index porque entra en el filtro principal del
+    # banco (jornadas.scoping.momentos_del_banco).
+    visibilidad = models.CharField(
+        max_length=10, choices=VISIBILIDAD_CHOICES, default=VISIBILIDAD_PRIVADO, db_index=True,
+    )
+    # Quién lo creó. Solo atribución (se muestra en el banco) — el acceso sigue yendo por
+    # jornada.propietarios, igual que todo lo demás (D3/D4: "mío" = jornadas propias, no
+    # "creado por mí"). SET_NULL: borrar un usuario no borra sus momentos.
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='momentos_creados',
+    )
+    # De qué momento se copió, si se creó desde el banco (jornadas.banco.copiar_momento).
+    # Relación puramente documental: no restringe editar ni borrar ninguno de los dos lados.
+    # SET_NULL: si borran el original, la copia sigue intacta y origen_info conserva el rastro
+    # (D14) aunque la FK quede en null.
+    momento_origen = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='momentos_derivados',
+    )
+    # Snapshot de identificación del origen al momento de copiar (D14) — sobrevive al borrado del
+    # original, que es lo que hace que la trazabilidad sea documental de verdad y no dependa solo
+    # de la FK. Vacío ({}) si el momento no salió del banco (creado "desde cero").
+    origen_info = models.JSONField(default=dict, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 

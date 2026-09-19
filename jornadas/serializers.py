@@ -101,16 +101,33 @@ class PreguntaAdminSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class CreadoPorSerializer(serializers.ModelSerializer):
+    """Atribución mínima (banco de instrumentos) — nunca el usuario completo: acá no importa el
+    email ni si está activo, solo quién es para mostrarlo en el listado del banco."""
+    nombre = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Usuario
+        fields = ['id', 'username', 'nombre']
+
+    def get_nombre(self, obj):
+        return obj.get_full_name() or obj.username
+
+
 class MomentoAdminSerializer(serializers.ModelSerializer):
     preguntas = PreguntaAdminSerializer(many=True, read_only=True)
+    # `creado_por` lo fija perform_create desde request.user (ver MomentoAdminViewSet) — nunca
+    # el body (C04). `momento_origen`/`origen_info` solo los escribe jornadas.banco.copiar_momento.
+    creado_por = CreadoPorSerializer(read_only=True)
 
     class Meta:
         model = Momento
         fields = [
             'id', 'jornada', 'orden', 'titulo', 'slug', 'contexto', 'tipo', 'categorias_semilla',
-            'mesas_permitidas', 'roles_permitidos', 'permite_carga_archivo', 'activo', 'preguntas',
+            'mesas_permitidas', 'roles_permitidos', 'permite_carga_archivo', 'activo',
+            'visibilidad', 'creado_por', 'momento_origen', 'origen_info', 'preguntas',
         ]
-        read_only_fields = ['slug']
+        read_only_fields = ['slug', 'momento_origen', 'origen_info']
 
 
 class RolJornadaSerializer(serializers.ModelSerializer):
@@ -237,6 +254,70 @@ class JornadaResumenSerializer(serializers.ModelSerializer):
     class Meta:
         model = Jornada
         fields = ['id', 'slug', 'nombre', 'activa']
+
+
+class BancoMomentoListaSerializer(serializers.ModelSerializer):
+    """Item del listado/derivados del banco de instrumentos — de solo lectura a propósito (sin
+    ids "editables" que tienten al FE a mandar un PATCH acá; eso sigue siendo /momentos/{id}/)."""
+    creado_por = CreadoPorSerializer(read_only=True)
+    jornada = JornadaResumenSerializer(read_only=True)
+    contexto = serializers.SerializerMethodField()
+    # Las anotaciones (n_preguntas, n_preguntas_inactivas, veces_usado) las agrega el queryset —
+    # ver jornadas.scoping.anotar_conteos_banco — acá solo se declaran para que entren al schema.
+    n_preguntas = serializers.IntegerField(read_only=True)
+    n_preguntas_inactivas = serializers.IntegerField(read_only=True)
+    veces_usado = serializers.IntegerField(read_only=True)
+    es_mio = serializers.SerializerMethodField()
+    puedo_editar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Momento
+        fields = [
+            'id', 'titulo', 'slug', 'tipo', 'contexto', 'visibilidad', 'activo', 'creado_por',
+            'jornada', 'n_preguntas', 'n_preguntas_inactivas', 'veces_usado', 'momento_origen',
+            'es_mio', 'puedo_editar', 'creado_en', 'actualizado_en',
+        ]
+
+    def get_contexto(self, obj):
+        return (obj.contexto or '')[:200]
+
+    def _jornadas_propias_ids(self):
+        # Precalculado por la vista (BancoMomentoViewSet.get_serializer_context) y pasado acá por
+        # context, para no hacer una query "¿soy propietario de esta jornada?" por cada item.
+        return self.context.get('jornadas_propias_ids', set())
+
+    def get_es_mio(self, obj):
+        return obj.jornada_id in self._jornadas_propias_ids()
+
+    def get_puedo_editar(self, obj):
+        # D4/D15: cualquier propietario de la jornada edita (igual que hoy); admin completo,
+        # siempre. Terceros nunca — ni siquiera sobre un público ajeno.
+        request = self.context.get('request')
+        if request is not None and not es_dependencia(request.user):
+            return True
+        return self.get_es_mio(obj)
+
+
+class BancoMomentoDetalleSerializer(BancoMomentoListaSerializer):
+    """Igual que el listado, pero con `contexto` completo (sin recortar) y el árbol de
+    preguntas — para previsualizar antes de usar/."""
+    preguntas = PreguntaAdminSerializer(many=True, read_only=True)
+
+    class Meta(BancoMomentoListaSerializer.Meta):
+        fields = BancoMomentoListaSerializer.Meta.fields + ['preguntas']
+
+    def get_contexto(self, obj):
+        return obj.contexto
+
+
+class UsarMomentoSerializer(serializers.Serializer):
+    """Body de `POST /banco-momentos/{id}/usar/`. La jornada se valida como PK simple acá (404
+    si no existe el id -> 400 'Objeto inválido' por DRF) y como "es mía" en la vista, vía
+    verificar_acceso_jornada — acá no hay usuario en contexto para aplicar ese scoping."""
+    jornada = serializers.PrimaryKeyRelatedField(queryset=Jornada.objects.all())
+    titulo = serializers.CharField(required=False, allow_blank=False, max_length=255)
+    orden = serializers.IntegerField(required=False, min_value=1)
+    visibilidad = serializers.ChoiceField(choices=Momento.VISIBILIDAD_CHOICES, required=False)
 
 
 class UsuarioAdminSerializer(serializers.ModelSerializer):

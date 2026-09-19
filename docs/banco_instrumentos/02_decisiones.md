@@ -140,9 +140,10 @@ destino esos roles pueden no existir (`RolJornada` es por jornada).
 ## D14 — Registro documental cuando el origen desaparece
 
 `momento_origen` va con `on_delete=SET_NULL`. Si borran el original, la copia pierde el rastro.
-- **A (recomendada).** Además de la FK, guardar `origen_info` (JSON) con `{id, titulo,
-  jornada_slug, jornada_nombre, creado_por_username, copiado_en}` en el momento copiado. Es lo que
-  hace que la relación sea *documental* de verdad: sobrevive al borrado.
+- **A (recomendada).** Además de la FK, guardar `origen_info` (JSON) con `{momento_id, titulo,
+  jornada_id, jornada_slug, jornada_nombre, creado_por, copiado_en, copiado_por}` en el momento
+  copiado (forma exacta en [03_modelo_de_datos.md](03_modelo_de_datos.md) §1). Es lo que hace que
+  la relación sea *documental* de verdad: sobrevive al borrado.
 
 ---
 

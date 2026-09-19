@@ -2013,3 +2013,129 @@ Como administrador quiero que el prompt por defecto imponga lo mínimo, para que
   - `INSTRUCCION_SERIE`: las 3 son llamadas independientes, sin ella no saben que pertenecen al mismo material y salen con paletas distintas.
   - `REGLA_DATOS`: innegociable, ver HU-65.
 - El criterio para futuras ediciones queda explícito en un comentario del módulo: si una instrucción no cambia si la salida **sirve o no**, y solo cambia cómo se ve, no va en el prompt base — va en el system design o en `instrucciones`.
+
+### HU-67 — Un momento sabe quién lo creó y si es público o privado (banco de instrumentos)
+Como administrador quiero que cada momento (`jornadas.Momento`) registre quién lo creó y si es público o privado, para poder decidir, al crearlo, si otros usuarios del panel pueden reutilizarlo como plantilla o si es solo mío.
+- **El momento mismo es la plantilla; no hay un modelo `PlantillaMomento` aparte (D1-A).** El banco de instrumentos es una vista filtrada sobre los `Momento` que ya existen (`visibilidad=publico` o "míos"), no una copia paralela del árbol de preguntas. Eso reutiliza tal cual `Pregunta`, `OpcionPregunta`, `FilaMatrizPregunta` y `ColumnaMatrizPregunta`, evita duplicar varios modelos, y hace que "publicar" sea cambiar un solo campo (`visibilidad`) en vez de correr una copia. El costo aceptado: lo que ven los demás en el banco es el momento "vivo" de su jornada — si el dueño lo edita, el banco lo refleja de inmediato (ver HU-70 para por qué eso no afecta a quien ya copió).
+- **Cuatro campos nuevos en `Momento`, ningún modelo nuevo**: `visibilidad` (`privado` | `publico`, default `privado`), `creado_por` (FK a `User`, `on_delete=SET_NULL`), `momento_origen` (FK a sí mismo, `on_delete=SET_NULL`, ver HU-70) y `origen_info` (JSON, ver HU-70). Migraciones `jornadas/0016_momento_banco.py` (esquema) y `jornadas/0017_momento_backfill_creado_por.py` (datos), separadas para poder revertir el backfill sin tocar el esquema.
+- **En código y en la API el feature se llama `banco-momentos`, no "instrumentos" (D2-A).** `instrumentos.Instrumento` ya es otro módulo del backend (aplicaciones restringidas por preregistro, con su propio login y su propio extractor), y nombrar esto igual habría colisionado en código, en URLs y en la cabeza de quien lee los logs. De cara al usuario el feature sigue llamándose "banco de instrumentos" — para quien opera el panel, un momento con su árbol de preguntas **es** un instrumento — pero esa es una cuestión de vocabulario en la interfaz, no de nombres en el backend.
+- **Nace `privado` por defecto (D6).** Nada se comparte sin una decisión explícita: si `visibilidad` no viene en el body de `POST /api/admin/momentos/`, queda `privado`. La migración de esquema no publica nada por sí sola — con el backfill (D7), todos los momentos existentes quedan `visibilidad=privado`, así que tras desplegar el banco público arranca vacío hasta que alguien publique algo a propósito.
+- **`creado_por` es solo atribución, no control de acceso.** El acceso a un momento lo sigue dando `jornada.propietarios`, igual que hoy; `creado_por` únicamente identifica quién lo creó para mostrarlo en el banco. Por eso el backfill le pone `creado_por = jornada.creada_por` cuando existe, o `null` si no (D7): no cambia a quién se le permite ver o editar nada, solo a quién se le atribuye.
+- **"Mío" es "de una jornada donde soy propietario", no "que yo creé" (D3-A).** `Jornada.propietarios` ya admite varios dueños; si un co-propietario ya ve y edita un momento dentro de su jornada, ocultárselo en el banco porque `creado_por` diga otro nombre no protegería nada — solo confundiría. `creado_por` se guarda de todas formas, para la atribución que muestra el banco.
+- **Quién edita: la regla de siempre, no una nueva (D4-A, D15).** Restringir la edición al estricto `creado_por` habría sido una regresión para jornadas con varios propietarios. Se mantiene: cualquier propietario de la jornada (el creador está entre ellos) más un administrador completo pueden editar el momento y cambiar su `visibilidad` con los mismos endpoints de siempre (`PATCH /api/admin/momentos/{id}/`). Un tercero no propietario nunca puede: el banco es de solo lectura para lo ajeno, y el `PATCH` le da `404` porque el momento ni siquiera entra en su queryset.
+- `creado_por`, `momento_origen` y `origen_info` viajan en `MomentoAdminSerializer` como **solo lectura**: si alguien los manda en el body, se ignoran — los fija el backend.
+
+<details><summary>Ejemplo — <code>POST /api/admin/momentos/</code> con visibilidad</summary>
+
+Request:
+```json
+{
+  "jornada": 9,
+  "orden": 1,
+  "titulo": "Reflexión inicial",
+  "tipo": "individual",
+  "contexto": "…",
+  "visibilidad": "publico"
+}
+```
+
+Response `201`:
+```json
+{
+  "id": 88,
+  "jornada": 9,
+  "orden": 1,
+  "titulo": "Reflexión inicial",
+  "slug": "reflexion-inicial",
+  "tipo": "individual",
+  "contexto": "…",
+  "visibilidad": "publico",
+  "creado_por": {"id": 5, "username": "mgarcia", "nombre": "María García"},
+  "momento_origen": null,
+  "origen_info": {},
+  "activo": true,
+  "preguntas": []
+}
+```
+</details>
+
+### HU-68 — Usar un instrumento del banco crea una copia aislada
+Como administrador quiero que, al usar un instrumento del banco en una jornada, se cree una copia completa e independiente en vez de referenciar el original, para poder adaptarlo a mi jornada sin arriesgar el instrumento de otro ni verme afectado si el dueño lo cambia después.
+- **Servicio único `copiar_momento(origen, jornada_destino, usuario, ...)`** en `jornadas/banco.py`, corrido dentro de una transacción (`transaction.atomic`): si algo falla a mitad de camino, no queda una copia a medias — la base vuelve a como estaba.
+- **Copia profunda, nunca una referencia.** El nuevo `Momento` no comparte ninguna fila con el original: se duplican también sus `Pregunta`, `OpcionPregunta`, `FilaMatrizPregunta` y `ColumnaMatrizPregunta`. Editar después el original no cambia la copia, y editar la copia no cambia el original — es la regla central del enunciado ("las copias quedan aisladas") y solo se cumple copiando de verdad, no apuntando al mismo árbol.
+- **Qué se copia**: título (salvo que se mande uno nuevo), contexto, tipo, `categorias_semilla`, `mesas_permitidas`, `roles_permitidos`, `permite_carga_archivo`, y el árbol completo de preguntas con sus opciones/filas/columnas. **Qué NO se copia**: nada de ejecución — ninguna `Respuesta`, ninguna extracción, ningún análisis de IA ni infografía. La copia nace como un momento nuevo, sin nadie habiéndolo respondido todavía.
+- **Se copian TODAS las preguntas, activas e inactivas, conservando su `activa` tal cual (D11-B)** — se decidió copiar el árbol completo en vez de solo lo visible para un participante. La consecuencia directa: cualquier `depende_de_opcion` que apunte a una opción **dentro** del mismo momento origen, aunque esa opción sea de una pregunta inactiva, siempre tiene su pregunta correspondiente en la copia y por lo tanto siempre se puede remapear — ya no queda un caso especial de "la pregunta de la que dependía no se copió". El único caso real de dependencia rota es el del punto siguiente: cuando apunta fuera del árbol copiado.
+- **`depende_de_opcion` hacia una opción de OTRO momento se pone en `NULL`, no se rechaza con 400 (D9-A).** Se resuelve en dos pasadas: primero se copian todas las preguntas (sin tocar `depende_de_opcion`), después se remapea cada dependencia con un mapa `id origen → id copia`. Si la opción de origen no está en ese mapa (porque pertenece a otro momento), la copia queda sin esa condición y se agrega una advertencia con el texto de la pregunta afectada. Se descartó responder `400` y bloquear la copia entera porque el resto del momento sigue siendo perfectamente usable; obligar a corregir la dependencia antes de poder copiar nada sería un bloqueo desproporcionado para un detalle que el usuario puede ni haber notado que existía.
+- **`mesas_permitidas` y `roles_permitidos` se copian tal cual, con advertencia si hace falta (D10-A)**, aunque son números de mesa y nombres de rol de la jornada de origen que pueden no existir en la jornada destino (`RolJornada` es por jornada). No se traducen ni se limpian porque son contenido, no una referencia técnica — `roles_permitidos` se compara contra `Participante.rol` como texto libre, así que nada se rompe aunque el rol no exista todavía. Si algún rol de la copia no existe como `RolJornada` en la jornada destino, se agrega una advertencia listándolo, para que el usuario decida si lo crea.
+- **`origen_info` sobrevive al borrado del original (D14).** Además de la FK `momento_origen` (`on_delete=SET_NULL`), la copia guarda un snapshot JSON (`momento_id`, `titulo`, `jornada_id`, `jornada_slug`, `jornada_nombre`, `creado_por`, `copiado_en`, `copiado_por`) que no depende de que la fila original siga existiendo. Es lo que hace que la relación sea documental *de verdad*: si borran el original o su jornada, la copia no pierde el rastro de dónde salió, solo pierde la posibilidad de navegar hasta él por id.
+- **`orden` se calcula como `max(orden) + 1` de la jornada destino, bloqueando la jornada con `select_for_update`** antes de calcularlo. Así dos copias simultáneas hacia la misma jornada no compiten por el mismo `orden`: la segunda transacción espera a la primera y calcula sobre el valor ya actualizado.
+- **La copia siempre nace `activo=True` y `visibilidad=privado`, salvo que el body diga otra cosa (D8).** `activo=True` porque es un momento nuevo en la jornada destino y el estado del original no debería decidir por el usuario. `visibilidad=privado` por defecto para que el banco público no se llene de duplicados de la misma plantilla cada vez que alguien la usa.
+- Duplicar un momento **dentro de la misma jornada** no es un caso aparte: es el mismo servicio con `jornada_destino == origen.jornada`; el `orden` va al final y el slug se resuelve con un sufijo (`-2`, `-3`, …) porque `Momento` sigue exigiendo `slug` único por jornada.
+
+### HU-69 — Explorar el banco y usar una plantilla desde la API
+Como administrador quiero poder explorar el banco de instrumentos con filtros, previsualizar un instrumento antes de usarlo, y crear una copia en mi jornada con un solo llamado, para armar una jornada nueva reutilizando lo que ya construí (o lo que otros compartieron) sin recrear preguntas desde cero.
+- **`GET /api/admin/banco-momentos/`** lista los momentos visibles para mí: públicos de cualquiera más los de mis jornadas (unión, sin duplicados) si soy usuario de dependencia; **todos**, incluidos los privados ajenos, si soy administrador completo (D5 — admin ve y edita todo, igual que ya ve todas las jornadas). Filtros:
+  - `alcance`: `publicos` | `mios` | `todos` (default `todos`).
+  - `q`: texto libre, `icontains` sobre `titulo` y `contexto`.
+  - `tipo`: `individual` | `mesa`.
+  - `jornada`: filtra por id de jornada — útil para "quiero reutilizar todo lo de mi jornada anterior"; si esa jornada no tiene nada visible para mí, la lista sale vacía, no da error.
+  - `solo_originales`: `1` para excluir los momentos que ya son copias de otro (`momento_origen` no nulo) — evita ver copias de copias al explorar.
+  - `incluir_inactivos`: `1` para incluir también momentos con `activo=False`. **Sin este flag el listado los excluye por defecto**, pero el queryset base nunca filtra por `activo` — el filtro lo aplica solo la acción de listar (D12-B). Por eso el detalle, `usar/` y `derivados/` funcionan igual sobre un momento inactivo aunque no se haya pedido `incluir_inactivos`: el momento sigue siendo perfectamente usable como plantilla, solo no aparece por defecto en el listado para no ensuciarlo con contenido que su dueño desactivó.
+  - `ordering`: `titulo` | `-actualizado_en` (default) | `-veces_usado`.
+  - Cada item trae `n_preguntas` (solo `activa=True`, lo que vería un participante) y `n_preguntas_inactivas` (las que también se copiarán, con `activa=False`), `veces_usado`, `es_mio`, `puedo_editar` (`es_mio or admin`) y los datos de `jornada` y `creado_por` anidados.
+- **`GET /api/admin/banco-momentos/{id}/`** trae el mismo item más el árbol completo `preguntas` (con `opciones`, `filas`, `columnas`), de **solo lectura** — sirve para previsualizar el contenido antes de decidir usarlo. `404` si el momento no está en mi banco visible (privado ajeno, o no existe): la convención del proyecto para lo ajeno filtrado por queryset es no revelar que el recurso existe, así que no hay `403` acá — a diferencia de "usar en una jornada que no es mía" (ver abajo), donde el problema no es el origen sino el destino.
+- **`POST /api/admin/banco-momentos/{id}/usar/`** crea la copia. Body: `jornada` (obligatorio, debe ser una jornada mía), `titulo` (opcional, default el del origen), `orden` (opcional, default `max+1`), `visibilidad` (opcional, default `privado`, ver HU-68). Respuesta `201` con `{"momento": {…}, "advertencias": [...]}`; `advertencias` siempre viene, aunque sea `[]` — es la única forma de que el usuario se entere de una dependencia que se anuló o de un rol que no existe en la jornada destino.
+- **Errores de `usar/`**: `404` si el `{id}` de origen no está en mi banco visible; `403` (mensaje `"Esta jornada no te pertenece."`) si `jornada` es válida pero no es mía; `400` si `jornada` no existe, si `orden` ya está ocupado en la jornada destino, o si `visibilidad` no es un valor válido.
+- **El banco es de solo lectura**: no hay `POST` en la raíz de `/banco-momentos/` ni `PATCH`/`DELETE` en el detalle — crear y editar el contenido de un momento se sigue haciendo por `/api/admin/momentos/` y los endpoints del árbol (`/preguntas/`, `/opciones/`, …) de siempre.
+- **Usar varias plantillas en una jornada es una llamada por plantilla, no un endpoint de lote (D13-A).** Se descartó un `POST` atómico con una lista de ids para esta fase por la semántica de "todo o nada" que habría que definir sin que el enunciado lo pidiera; el frontend encadena un `usar/` por cada instrumento elegido.
+
+<details><summary>Ejemplo — <code>POST /api/admin/banco-momentos/61/usar/</code></summary>
+
+Request:
+```json
+{ "jornada": 9 }
+```
+
+Response `201`:
+```json
+{
+  "momento": {
+    "id": 88,
+    "jornada": 9,
+    "orden": 3,
+    "titulo": "Diagnóstico de Articulación Académica",
+    "slug": "diagnostico-articulacion-2",
+    "tipo": "individual",
+    "visibilidad": "privado",
+    "creado_por": {"id": 12, "username": "jperez", "nombre": "Juan Pérez"},
+    "momento_origen": 61,
+    "origen_info": {
+      "momento_id": 61,
+      "titulo": "Diagnóstico de Articulación Académica",
+      "jornada_id": 4,
+      "jornada_slug": "jornada-agil-2026",
+      "jornada_nombre": "Jornada Ágil 2026",
+      "creado_por": "mgarcia",
+      "copiado_en": "2026-09-19T15:04:00Z",
+      "copiado_por": "jperez"
+    },
+    "activo": true,
+    "preguntas": [ "…árbol completo de la copia…" ]
+  },
+  "advertencias": [
+    "La pregunta «¿Cuál fue el principal obstáculo?» dependía de una opción de otro momento; la dependencia se quitó."
+  ]
+}
+```
+</details>
+
+### HU-70 — Trazabilidad entre original y copias
+Como administrador quiero poder ver de dónde salió un momento que se creó desde el banco, y qué copias salieron de un momento mío, para entender el alcance de mis instrumentos y de dónde vino cada copia que encuentro en una jornada.
+- **`GET /api/admin/momentos/{id}/`** de una copia trae `momento_origen` (id del momento del que se copió, o `null` si nació "desde cero") y `origen_info` (el snapshot con `momento_id`, `titulo`, `jornada_id`, `jornada_slug`, `jornada_nombre`, `creado_por`, `copiado_en` y `copiado_por`, o `{}` si no vino del banco).
+- **`GET /api/admin/banco-momentos/{id}/derivados/`** lista, en el mismo formato que el listado del banco (sin `preguntas`), los momentos que se copiaron de `{id}` **y que yo puedo ver**: mis jornadas si soy usuario de dependencia, todos si soy administrador completo. `200 []` si no hay ninguno visible para mí, aunque existan copias que no puedo ver.
+- **`veces_usado`** (en cada item del listado del banco) cuenta **todas** las copias derivadas de ese momento, sin filtrar por visibilidad — a diferencia de `derivados/`, que sí filtra por lo que puedo ver. Al dueño de la plantilla le interesa el número real de veces que se usó, no solo las copias que además puede abrir.
+- **La relación es puramente documental: no restringe editar ni borrar ninguno de los dos lados.** No hay ninguna regla que impida borrar un momento porque tenga copias, ni que impida editar una copia porque su origen siga existiendo. Es justo lo que hace posible cumplir "editar el original no afecta a las copias, ni al revés": si la relación bloqueara algo, dejaría de ser una simple constancia y empezaría a acoplar dos momentos que el enunciado pide aislados.
+- **Si se borra el momento origen** (`DELETE /api/admin/momentos/{id}/`, como siempre): la FK `momento_origen` de cada copia pasa a `null` (`on_delete=SET_NULL`), pero `origen_info` queda intacto porque es un snapshot independiente, no una consulta al original. La copia sigue sabiendo de dónde salió aunque ya no pueda navegar hasta ahí con un id.
+- **Si se borra la jornada origen** en vez del momento puntual: el `CASCADE` de `Jornada → Momento` borra el momento original igual que si lo hubieran borrado directamente, y el efecto sobre las copias es el mismo que el punto anterior — `momento_origen=null`, `origen_info` intacto.
+- **Copiar una copia (nieto) es un caso normal, no uno especial.** `momento_origen` de la copia nueva apunta a la copia intermedia, no al abuelo, y `origen_info` describe esa copia intermedia. La cadena completa no se reconstruye en ningún campo propio: si hace falta rastrear varios saltos, hay que seguir `momento_origen` de copia en copia.
+- Después de borrar una copia, el original **no se entera**: solo baja en uno el `veces_usado` de las copias restantes, porque `veces_usado` es un conteo, no una lista fija.

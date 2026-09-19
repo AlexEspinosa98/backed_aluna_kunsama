@@ -1,17 +1,26 @@
 from django.contrib.auth import get_user_model
-from rest_framework import status
+from django.db.models import Q
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
+from rest_framework import serializers, status
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
+from .banco import copiar_momento
 from .models import (
-    ColumnaMatrizPregunta, FilaMatrizPregunta, JornadaAsset, Momento, OpcionPregunta, Pregunta,
-    RolJornada,
+    ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, JornadaAsset, Momento, OpcionPregunta,
+    Pregunta, RolJornada,
 )
 from .permissions import EsAdminCompleto
-from .scoping import es_dependencia, filtrar_por_propietario, jornadas_visibles
+from .scoping import (
+    anotar_conteos_banco, es_dependencia, filtrar_por_propietario, jornadas_visibles,
+    momentos_del_banco, verificar_acceso_jornada,
+)
 from .serializers import (
+    BancoMomentoDetalleSerializer,
+    BancoMomentoListaSerializer,
     ColumnaMatrizPreguntaSerializer,
     FilaMatrizPreguntaSerializer,
     JornadaAdminSerializer,
@@ -21,6 +30,7 @@ from .serializers import (
     OpcionPreguntaSerializer,
     PreguntaAdminSerializer,
     RolJornadaSerializer,
+    UsarMomentoSerializer,
     UsuarioAdminSerializer,
 )
 
@@ -44,12 +54,17 @@ class ValidarPropietarioAlCrearMixin:
                 objeto = getattr(objeto, atributo)
         return objeto
 
-    def perform_create(self, serializer):
+    def _validar_jornada_propia(self, serializer):
+        """Separado de perform_create para que MomentoAdminViewSet pueda reusar la validación
+        y además pasar `creado_por` a serializer.save() (ver su propio perform_create)."""
         if es_dependencia(self.request.user):
             padre = serializer.validated_data[self.campo_padre]
             jornada = self._jornada_del_padre(padre)
             if not jornada.propietarios.filter(id=self.request.user.id).exists():
                 raise PermissionDenied('No puedes crear contenido bajo una jornada que no es tuya.')
+
+    def perform_create(self, serializer):
+        self._validar_jornada_propia(serializer)
         serializer.save()
 
 
@@ -132,7 +147,137 @@ class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
+        visibilidad = self.request.query_params.get('visibilidad')
+        if visibilidad:
+            queryset = queryset.filter(visibilidad=visibilidad)
         return queryset
+
+    def perform_create(self, serializer):
+        # Banco de instrumentos: quién lo creó es atribución, siempre desde la sesión — si viene
+        # en el body se ignora (C04), por eso ni se mira serializer.validated_data acá.
+        self._validar_jornada_propia(serializer)
+        serializer.save(creado_por=self.request.user)
+
+
+class BancoMomentoViewSet(ReadOnlyModelViewSet):
+    """Banco de instrumentos (D1-A/D2-A): explorar, previsualizar, usar como plantilla y
+    rastrear derivados de los `Momento` visibles para mí. De solo lectura a propósito — la
+    edición del contenido sigue siendo `/api/admin/momentos/` (D4/D15); acá solo se decide qué
+    entra en "mi banco visible" (públicos de cualquiera ∪ mis jornadas; admin ve todo, D5-A)."""
+    permission_classes = [IsAdminUser]
+    _ORDENAMIENTOS_VALIDOS = {'titulo', '-actualizado_en', '-veces_usado'}
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return BancoMomentoDetalleSerializer
+        return BancoMomentoListaSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Una sola query acá en vez de una por item en el serializer (es_mio/puedo_editar).
+        context['jornadas_propias_ids'] = set(
+            Jornada.objects.filter(propietarios=self.request.user).values_list('id', flat=True)
+        )
+        return context
+
+    def get_queryset(self):
+        queryset = momentos_del_banco(self.request.user)
+        params = self.request.query_params
+
+        alcance = params.get('alcance', 'todos')
+        if alcance == 'publicos':
+            queryset = queryset.filter(visibilidad=Momento.VISIBILIDAD_PUBLICO)
+        elif alcance == 'mios':
+            queryset = queryset.filter(jornada__propietarios=self.request.user)
+        # 'todos' (default): sin filtro extra — momentos_del_banco ya es públicos ∪ míos para
+        # dependencia, y todo para admin completo.
+
+        q = params.get('q')
+        if q:
+            queryset = queryset.filter(Q(titulo__icontains=q) | Q(contexto__icontains=q))
+
+        tipo = params.get('tipo')
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+
+        jornada_id = params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+
+        if params.get('solo_originales') == '1':
+            queryset = queryset.filter(momento_origen__isnull=True)
+
+        # D12-B: el filtro de `activo` SOLO aplica en `list` — detalle/usar/derivados trabajan
+        # sobre inactivos igual, porque siguen siendo plantillas usables.
+        if self.action == 'list' and params.get('incluir_inactivos') != '1':
+            queryset = queryset.filter(activo=True)
+
+        ordering = params.get('ordering', '-actualizado_en')
+        if ordering not in self._ORDENAMIENTOS_VALIDOS:
+            ordering = '-actualizado_en'
+        return queryset.order_by(ordering)
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('alcance', str, description='todos (default) | publicos | mios'),
+            OpenApiParameter('q', str, description='Búsqueda (icontains) en título y contexto'),
+            OpenApiParameter('tipo', str, description='individual | mesa'),
+            OpenApiParameter('jornada', int, description='Filtra por id de jornada'),
+            OpenApiParameter('solo_originales', str, description='1 = excluye copias (momento_origen no nulo)'),
+            OpenApiParameter('incluir_inactivos', str, description='1 = incluye momentos con activo=False'),
+            OpenApiParameter('ordering', str, description='titulo | -actualizado_en (default) | -veces_usado'),
+        ],
+    )
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
+    @extend_schema(
+        request=UsarMomentoSerializer,
+        responses={201: inline_serializer(
+            name='UsarMomentoRespuesta',
+            fields={
+                'momento': MomentoAdminSerializer(),
+                'advertencias': serializers.ListField(child=serializers.CharField()),
+            },
+        )},
+    )
+    @action(detail=True, methods=['post'])
+    def usar(self, request, pk=None):
+        # get_object() ya filtra por get_queryset(): un privado ajeno da 404 acá mismo, sin
+        # exponer que existe (misma convención que el resto del proyecto).
+        origen = self.get_object()
+
+        entrada = UsarMomentoSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada_destino = entrada.validated_data['jornada']
+        verificar_acceso_jornada(request.user, jornada_destino)
+
+        copia, advertencias = copiar_momento(
+            origen,
+            jornada_destino,
+            request.user,
+            orden=entrada.validated_data.get('orden'),
+            titulo=entrada.validated_data.get('titulo'),
+            visibilidad=entrada.validated_data.get('visibilidad', Momento.VISIBILIDAD_PRIVADO),
+        )
+        salida = MomentoAdminSerializer(copia, context=self.get_serializer_context())
+        return Response(
+            {'momento': salida.data, 'advertencias': advertencias},
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(responses={200: BancoMomentoListaSerializer(many=True)})
+    @action(detail=True, methods=['get'])
+    def derivados(self, request, pk=None):
+        origen = self.get_object()
+        queryset = filtrar_por_propietario(
+            origen.momentos_derivados.select_related('jornada', 'creado_por'),
+            request.user,
+            'jornada__propietarios',
+        )
+        queryset = anotar_conteos_banco(queryset)
+        salida = BancoMomentoListaSerializer(queryset, many=True, context=self.get_serializer_context())
+        return Response(salida.data)
 
 
 class PreguntaAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):

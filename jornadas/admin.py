@@ -39,8 +39,12 @@ class JornadaAdmin(admin.ModelAdmin):
 
 @admin.register(Momento)
 class MomentoAdmin(admin.ModelAdmin):
-    list_display = ['titulo', 'jornada', 'orden', 'tipo', 'mesas_permitidas', 'activo']
-    list_filter = ['jornada', 'tipo']
+    list_display = [
+        'titulo', 'jornada', 'orden', 'tipo', 'mesas_permitidas', 'activo', 'visibilidad',
+        'creado_por', 'momento_origen',
+    ]
+    list_filter = ['jornada', 'tipo', 'visibilidad', 'activo']
+    raw_id_fields = ['creado_por', 'momento_origen']
     inlines = [PreguntaInline]
 
 

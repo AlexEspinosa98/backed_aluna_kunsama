@@ -47,6 +47,15 @@ Ver [docs/USER_STORIES.md](docs/USER_STORIES.md) para el detalle funcional compl
 - `GET /api/admin/participantes/` (filtrable `?jornada=<id>`)
 - `GET /api/admin/respuestas/` (filtrable `?momento=<id>` o `?pregunta=<id>`)
 
+**Banco de instrumentos** (plantillas de momentos, `IsAdminUser`) — ver
+[docs/INTEGRACION_FRONTEND_BANCO_INSTRUMENTOS.md](docs/INTEGRACION_FRONTEND_BANCO_INSTRUMENTOS.md)
+y el plan en [docs/banco_instrumentos/](docs/banco_instrumentos/README.md):
+- `GET /api/admin/banco-momentos/` (filtros `?alcance=todos|publicos|mios`, `?q=`, `?tipo=`, `?jornada=<id>`, `?solo_originales=1`, `?incluir_inactivos=1`, `?ordering=`)
+- `GET /api/admin/banco-momentos/<id>/` — previsualización con el árbol de preguntas (solo lectura)
+- `POST /api/admin/banco-momentos/<id>/usar/` — crea una copia aislada en una jornada mía; responde `{momento, advertencias}`
+- `GET /api/admin/banco-momentos/<id>/derivados/` — momentos copiados desde ese origen (documental)
+- `visibilidad` (`privado`|`publico`) se define en `POST/PATCH /api/admin/momentos/`
+
 **Análisis con IA** (`IsAdminUser`) — ver [docs/REPORTE_ANALITICA_SCHEMA.html](docs/REPORTE_ANALITICA_SCHEMA.html) para el esquema completo del JSON de respuesta:
 - `GET/POST /api/admin/plantillas-analisis/`, `GET/PATCH/DELETE /api/admin/plantillas-analisis/<id>/`
 - `POST /api/admin/reportes/` — dispara un análisis (`jornada`, `momentos` opcional, `plantilla` opcional); responde de inmediato con el reporte en `procesando`
