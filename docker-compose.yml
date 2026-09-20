@@ -73,6 +73,38 @@ services:
       --access-logfile -
       --error-logfile -
 
+  # Auto-deploy: vigila `origin/develop` y, ante un commit nuevo, hace `git pull` + reconstruye
+  # `app` sola — automatiza lo que hasta ahora se corría a mano por SSH tras cada push. Detrás de
+  # un profile (`docker compose --profile auto-deploy up -d`, nunca con un `up -d` a secas) porque
+  # necesita el socket de Docker del HOST montado adentro: ese contenedor queda con la misma
+  # capacidad que cualquier proceso con acceso a ese socket — puede tocar CUALQUIER contenedor de
+  # este servidor, no solo los de este proyecto. No es algo que deba arrancar solo, sin que quien
+  # levante el stack lo haya pedido explícitamente. Ver docs/DOCKER.md antes de activarlo.
+  git-sync:
+    profiles: ["auto-deploy"]
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.redeploy-watcher
+    container_name: aluna_kunsama_git_sync
+    restart: unless-stopped
+    environment:
+      GIT_BRANCH: ${GIT_SYNC_BRANCH:-develop}
+      SYNC_PERIOD_SECONDS: ${GIT_SYNC_PERIOD_SECONDS:-30}
+      # Ruta ABSOLUTA de este proyecto en el HOST (no dentro del contenedor) — obligatoria, sin
+      # default. Docker-fuera-de-Docker: este contenedor le habla al daemon del HOST a través del
+      # socket, así que cualquier ruta que le pase a `docker compose` tiene que ser una ruta que
+      # ese daemon pueda resolver en el disco real — de ahí que el volumen de abajo monte el
+      # working directory en la MISMA ruta adentro y afuera, en vez de en `/repo` o similar.
+      REPO_DIR: ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
+    volumes:
+      - ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}:${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
+      # Llave SSH ya autorizada contra GitHub en este host (ver docs/DOCKER.md) — de solo lectura,
+      # git nunca necesita escribir ahí.
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # El socket de Docker del host — ver la nota de seguridad arriba, es la pieza que de verdad
+      # hace falta pesar antes de activar este profile.
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   aluna_kunsama_pg_data:
     name: aluna_kunsama_pg_data

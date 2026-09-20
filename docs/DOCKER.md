@@ -106,3 +106,64 @@ docker compose run --rm app python manage.py <comando>  # sin necesidad de que e
 docker compose logs -f app
 docker compose logs -f db
 ```
+
+## 8. Auto-deploy — redeploy automático al cambiar `develop`
+
+Servicio opcional `git-sync` (nombre por lo que hace, no el binario oficial — ver el comentario
+al inicio de `docker/redeploy-watcher.sh` de por qué esa imagen oficial no sirve acá sin
+agregarle herramientas: es deliberadamente mínima, sin shell ni CLI de Docker, así que no puede
+disparar un rebuild real por sí sola). Cada `${GIT_SYNC_PERIOD_SECONDS:-30}`s hace `git fetch` de
+`origin/${GIT_SYNC_BRANCH:-develop}` y, si hay un commit nuevo, `git pull --ff-only` +
+`docker compose up -d --build app` — automatiza lo que hasta ahora se corría a mano por SSH tras
+cada push.
+
+**⚠️ Antes de activarlo, pesar esto:** el contenedor necesita el socket de Docker del host
+montado (`/var/run/docker.sock`) para poder reconstruir `app` sin que nadie entre por SSH — eso
+le da la MISMA capacidad que cualquier proceso con acceso a ese socket, es decir, control total
+sobre **todo** Docker en ese servidor, no solo los contenedores de este proyecto. En un servidor
+compartido con otros proyectos (como el de casa), es una decisión real de seguridad, no un
+detalle — por eso está detrás de un profile y nunca arranca con un `up -d` a secas.
+
+**No está pensado para producción tal cual.** Este servicio asume acceso de escritura al repo por
+SSH y ningún gate de aprobación entre "hay un commit en `develop`" y "se reconstruye la app en
+este servidor" — perfecto para un servidor de pruebas donde quien empuja a `develop` ya tiene
+control del servidor de todos modos, mal encaje para un entorno donde el despliegue debería pasar
+por una revisión o un pipeline de CI antes de tocar producción.
+
+Requisitos antes de activarlo:
+
+```bash
+# En .env de ESE servidor:
+HOST_REPO_PATH=/ruta/absoluta/en/el/host/a/este/proyecto   # ej. /home/usuario/projects/kunsama
+GIT_SYNC_BRANCH=develop
+GIT_SYNC_PERIOD_SECONDS=30
+```
+
+`HOST_REPO_PATH` tiene que ser la ruta **tal como existe en el disco del host**, no una ruta
+dentro de un contenedor — el contenedor habla con el daemon de Docker del host a través del
+socket (docker-fuera-de-docker), así que cualquier ruta que le pase a `docker compose` tiene que
+poder resolverse en el disco real; por eso el volumen monta el working directory en la MISMA ruta
+adentro y afuera, en vez de en algo como `/repo`.
+
+También usa la llave SSH ya autorizada del usuario del sistema (`${HOME}/.ssh`, de solo lectura)
+para el `git fetch`/`pull` de un repo privado — la misma que se generó en
+`docs/migracion_servidor/` o al configurar este servidor, no una nueva.
+
+Activarlo:
+
+```bash
+docker compose --profile auto-deploy up -d
+```
+
+Desactivarlo (para todo lo demás sigue funcionando igual, sin el vigilante):
+
+```bash
+docker compose stop git-sync
+docker compose rm -f git-sync
+```
+
+Logs:
+
+```bash
+docker compose logs -f git-sync
+```
