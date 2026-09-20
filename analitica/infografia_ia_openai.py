@@ -188,18 +188,73 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
-def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momento=None, analisis_jornada=None):
+def _datos_desde_analisis_v2(jornada, analisis_v2):
+    """Traduce un resultado kunsamu.analisis/v2 al MISMO diccionario que las láminas ya consumen
+    para los análisis IA legacy (`resumen_ejecutivo` + `hallazgos[{titulo, descripcion,
+    tipo_grafica, datos[{etiqueta, valor, unidad}]}]`) — el prompt de imagen no cambia. La
+    descripción es `afirmacion` (+ `implicacion`); los datos salen de `metricas` y, si el
+    hallazgo no trae métricas pero sí una visualización categórica, de sus filas."""
+    from .models import AnalisisV2
+
+    if analisis_v2.estado != AnalisisV2.ESTADO_COMPLETO or not analisis_v2.resultado:
+        return None, (
+            f'El análisis v2 #{analisis_v2.id} no está completo o no tiene resultado. Espera a que '
+            'termine y vuelve a pedir la infografía.'
+        )
+    resultado = analisis_v2.resultado
+    if resultado.get('estado') == 'sin_datos':
+        return None, 'El análisis v2 no tiene datos (estado sin_datos): no hay nada que ilustrar.'
+
+    categoricas = ('barras', 'barras_agrupadas', 'barras_apiladas', 'barras_100', 'dona', 'radar')
+    visuales = {v['id']: v for v in resultado.get('visualizaciones', [])}
+    hallazgos = []
+    for informe in resultado.get('informes', []):
+        for h in informe.get('hallazgos', []):
+            datos = [
+                {'etiqueta': m['etiqueta'], 'valor': m['valor'], 'unidad': m['unidad']}
+                for m in h.get('metricas', [])
+            ]
+            tipo_grafica = None
+            for vid in h.get('visualizacion_ids', []):
+                visual = visuales.get(vid)
+                if visual and visual['tipo'] in categoricas:
+                    tipo_grafica = {'dona': 'pastel', 'radar': 'radar'}.get(visual['tipo'], 'barras')
+                    if not datos:
+                        datos = [
+                            {'etiqueta': f['categoria'], 'valor': f['valor'], 'unidad': visual['datos']['unidad']}
+                            for f in visual['datos']['filas'] if f['valor'] is not None
+                        ]
+                    break
+            descripcion = h['afirmacion'] + (f" {h['implicacion']}" if h.get('implicacion') else '')
+            hallazgos.append({'titulo': h['titulo'], 'descripcion': descripcion, 'tipo_grafica': tipo_grafica, 'datos': datos})
+
+    momentos = list(analisis_v2.momentos.all())
+    momento = momentos[0] if analisis_v2.modo == AnalisisV2.MODO_POR_MOMENTO and len(momentos) == 1 else None
+    return {
+        'fuente': 'analisis_v2',
+        'jornada': jornada.nombre,
+        'momento': momento.titulo if momento else None,
+        'tipo_momento': momento.tipo if momento else None,
+        'resumen_ejecutivo': ' '.join(i['resumen'] for i in resultado.get('informes', [])),
+        'hallazgos': hallazgos,
+    }, None
+
+
+def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     """(datos, error) — nunca lanza excepción. El alcance manda: con `momento` se usa el análisis
     integral de ESE momento y no se mira nada de la jornada, porque mezclar los dos produciría una
     infografía que dice ser de un momento mientras muestra cifras de toda la jornada.
 
-    `analisis_momento`/`analisis_jornada`/`reporte` FIJAN cuál análisis usar (un id concreto que
-    vino de `InfografiaJornada`, ver ese modelo) — una jornada o un momento puede tener VARIOS
-    análisis completos a la vez (HU-71: distintos métodos y enfoques), así que "el más reciente"
-    no es necesariamente el que el usuario está mirando cuando pide la infografía desde una
-    tarjeta concreta de la lista unificada. Sin uno explícito, se cae al más reciente completo de
-    ese alcance — comportamiento de siempre, para no romper una petición que solo manda
-    `jornada`/`momento`."""
+    `analisis_momento`/`analisis_jornada`/`reporte`/`analisis_v2` FIJAN cuál análisis usar (un id
+    concreto que vino de `InfografiaJornada`, ver ese modelo) — una jornada o un momento puede
+    tener VARIOS análisis completos a la vez (HU-71: distintos métodos y enfoques), así que "el
+    más reciente" no es necesariamente el que el usuario está mirando cuando pide la infografía
+    desde una tarjeta concreta de la lista unificada. Sin uno explícito, se cae al más reciente
+    completo de ese alcance — comportamiento de siempre, para no romper una petición que solo
+    manda `jornada`/`momento`."""
+    if analisis_v2 is not None:
+        return _datos_desde_analisis_v2(jornada, analisis_v2)
+
     if momento is not None:
         from .models import AnalisisMomentoIA
 
@@ -394,7 +449,7 @@ def generar_infografias(infografia_id):
     infografia = None
     try:
         infografia = InfografiaJornada.objects.select_related(
-            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada',
+            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2',
         ).get(pk=infografia_id)
         infografia.estado = InfografiaJornada.ESTADO_PROCESANDO
         infografia.save(update_fields=['estado'])
@@ -403,6 +458,7 @@ def generar_infografias(infografia_id):
         datos, error = _obtener_datos_analitica(
             jornada, infografia.reporte, infografia.momento,
             infografia.analisis_momento, infografia.analisis_jornada,
+            analisis_v2=infografia.analisis_v2,
         )
         if error:
             infografia.estado = InfografiaJornada.ESTADO_ERROR

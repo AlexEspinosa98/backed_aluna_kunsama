@@ -169,7 +169,7 @@ class InfografiaJornadaSerializer(serializers.ModelSerializer):
         model = InfografiaJornada
         fields = [
             'id', 'jornada', 'jornada_slug', 'momento', 'momento_titulo', 'reporte',
-            'analisis_momento', 'analisis_jornada', 'estado',
+            'analisis_momento', 'analisis_jornada', 'analisis_v2', 'estado',
             'instrucciones', 'prompt_usado', 'error_mensaje', 'modelo_usado', 'imagenes',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
@@ -178,14 +178,15 @@ class InfografiaJornadaSerializer(serializers.ModelSerializer):
 
 class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
     """HU-73: cada infografía queda ATADA a una versión EXACTA de análisis — manda
-    EXACTAMENTE uno de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento) o
-    `analisis_jornada` (lectura IA de jornada completa). `jornada`/`momento` se DERIVAN solos de
-    esa versión (read-only en la salida, ignorados si vienen en el POST) — nunca se aceptan
-    sueltos, porque desde HU-71 una jornada o un momento acumulan varias versiones de análisis a
-    la vez (distintos métodos y enfoques) y aceptar solo "la jornada"/"el momento" obligaba a
-    caer en el más reciente completo de ese alcance: dos versiones distintas podían terminar
-    compartiendo o confundiéndose de infografía, exactamente lo que esta HU prohíbe. Ver el
-    comentario en `InfografiaJornada` (models.py).
+    EXACTAMENTE uno de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento),
+    `analisis_jornada` (lectura IA de jornada completa) o `analisis_v2` (contrato
+    `kunsamu.analisis/v2`). `jornada`/`momento` se DERIVAN solos de esa versión (read-only en la
+    salida, ignorados si vienen en el POST) — nunca se aceptan sueltos, porque desde HU-71 una
+    jornada o un momento acumulan varias versiones de análisis a la vez (distintos métodos y
+    enfoques) y aceptar solo "la jornada"/"el momento" obligaba a caer en el más reciente completo
+    de ese alcance: dos versiones distintas podían terminar compartiendo o confundiéndose de
+    infografía, exactamente lo que esta HU prohíbe. Ver el comentario en `InfografiaJornada`
+    (models.py).
 
     `instrucciones` es texto libre que se integra al prompt con precedencia sobre el estilo y la
     estructura por defecto — ver `_construir_prompt` en infografia_ia_openai.py."""
@@ -194,7 +195,7 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
         model = InfografiaJornada
         fields = [
             'id', 'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada',
-            'instrucciones', 'estado', 'creado_en',
+            'analisis_v2', 'instrucciones', 'estado', 'creado_en',
         ]
         read_only_fields = ['id', 'jornada', 'momento', 'estado', 'creado_en']
 
@@ -202,16 +203,25 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
         reporte = attrs.get('reporte')
         analisis_momento = attrs.get('analisis_momento')
         analisis_jornada = attrs.get('analisis_jornada')
+        analisis_v2 = attrs.get('analisis_v2')
 
-        elegidos = [v for v in (reporte, analisis_momento, analisis_jornada) if v is not None]
+        elegidos = [v for v in (reporte, analisis_momento, analisis_jornada, analisis_v2) if v is not None]
         if len(elegidos) != 1:
             raise serializers.ValidationError(
-                'Manda EXACTAMENTE uno de "reporte", "analisis_momento" o "analisis_jornada" — '
-                'la infografía queda atada a esa versión exacta del análisis, nunca a "la '
-                'jornada" o "el momento" en general (ver HU-73).'
+                'Manda EXACTAMENTE uno de "reporte", "analisis_momento", "analisis_jornada" o '
+                '"analisis_v2" — la infografía queda atada a esa versión exacta del análisis, nunca '
+                'a "la jornada" o "el momento" en general (ver HU-73).'
             )
 
-        if analisis_momento is not None:
+        if analisis_v2 is not None:
+            momentos = list(analisis_v2.momentos.all())
+            # Un por_momento de UN momento es "de" ese momento (título de portada, filtros); un
+            # integral o un por_momento de varios es de la jornada.
+            attrs['momento'] = momentos[0] if (
+                analisis_v2.modo == analisis_v2.MODO_POR_MOMENTO and len(momentos) == 1
+            ) else None
+            attrs['jornada'] = analisis_v2.jornada
+        elif analisis_momento is not None:
             attrs['momento'] = analisis_momento.momento
             attrs['jornada'] = analisis_momento.momento.jornada
         elif analisis_jornada is not None:

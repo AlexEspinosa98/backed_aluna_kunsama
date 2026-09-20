@@ -263,7 +263,7 @@ class LlmEstructuradoTests(SimpleTestCase):
 
 from rest_framework.test import APITestCase
 
-from .models import AnalisisV2
+from .models import AnalisisV2, Reporte
 from .tests import crear_admin_completo, crear_dependencia, crear_jornada
 from .v2.procesar import procesar_analisis_v2
 
@@ -538,3 +538,60 @@ class BertopicAdaptadorTests(SimpleTestCase):
         del entrada['fuentes'][1]
         _, notas = anexar_bertopic(entrada)
         self.assertEqual(notas[0]['motivo'], 'insuficiente', notas)
+
+
+from .infografia_ia_openai import _obtener_datos_analitica
+from .models import InfografiaJornada
+
+
+class InfografiaDesdeAnalisisV2Tests(APITestCase):
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.d = crear_jornada_completa()
+        self.jornada = self.d['jornada']
+        self.resultado = _ejemplo('llm_por_momento.salida.json')
+        self.analisis = AnalisisV2.objects.create(
+            jornada=self.jornada, modo='por_momento', pipeline='llm', estado=AnalisisV2.ESTADO_COMPLETO,
+            resultado=self.resultado,
+        )
+        self.analisis.momentos.set([self.d['m1']])
+        self.client.force_authenticate(user=self.admin)
+
+    def test_traduce_resultado_v2_al_formato_de_las_laminas(self):
+        datos, error = _obtener_datos_analitica(self.jornada, analisis_v2=self.analisis)
+        self.assertIsNone(error)
+        self.assertEqual(datos['fuente'], 'analisis_v2')
+        self.assertEqual(datos['momento'], self.d['m1'].titulo)
+        self.assertEqual(len(datos['hallazgos']), 2)
+        primero = datos['hallazgos'][0]
+        self.assertEqual(primero['tipo_grafica'], 'barras')
+        self.assertEqual(primero['datos'][0]['etiqueta'], 'El horario no sirve')
+        self.assertIn('Conviene contrastar', primero['descripcion'])
+        self.assertIsNone(datos['hallazgos'][1]['tipo_grafica'])
+
+    def test_no_completo_o_sin_datos_da_error(self):
+        self.analisis.estado = AnalisisV2.ESTADO_PROCESANDO
+        self.analisis.save()
+        _, error = _obtener_datos_analitica(self.jornada, analisis_v2=self.analisis)
+        self.assertIn('no está completo', error)
+        self.analisis.estado = AnalisisV2.ESTADO_COMPLETO
+        self.analisis.resultado = _ejemplo('sin_datos.salida.json')
+        self.analisis.save()
+        _, error = _obtener_datos_analitica(self.jornada, analisis_v2=self.analisis)
+        self.assertIn('sin_datos', error)
+
+    def test_api_fija_analisis_v2_y_deriva_momento(self):
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/infografias/', {'analisis_v2': self.analisis.id}, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(pk=resp.data['id'])
+        self.assertEqual(infografia.analisis_v2, self.analisis)
+        self.assertEqual(infografia.momento, self.d['m1'])
+        self.assertEqual(infografia.jornada, self.jornada)
+        resp = self.client.get(f'/api/admin/infografias/?analisis_v2={self.analisis.id}')
+        self.assertEqual([i['id'] for i in resp.data], [infografia.id])
+
+    def test_dos_pines_a_la_vez_da_400(self):
+        reporte = Reporte.objects.create(jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO)
+        resp = self.client.post('/api/admin/infografias/', {'analisis_v2': self.analisis.id, 'reporte': reporte.id}, format='json')
+        self.assertEqual(resp.status_code, 400)

@@ -369,6 +369,10 @@ class InfografiaJornada(models.Model):
         help_text='Fija el AnalisisJornadaIA exacto del que salen los datos. Solo aplica con '
         'alcance de jornada (sin `momento`). Sin esto, se usa el más reciente completo.',
     )
+    analisis_v2 = models.ForeignKey(
+        'AnalisisV2', on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
+        help_text='Fija el AnalisisV2 (contrato kunsamu.analisis/v2) exacto del que salen los datos.',
+    )
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     instrucciones = models.TextField(blank=True, help_text=(
         'Instrucciones libres que se integran al prompt de esta corrida, con precedencia sobre el '

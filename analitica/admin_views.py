@@ -68,13 +68,15 @@ def _sin_respuestas(momentos):
     return not Respuesta.objects.filter(pregunta__momento__in=momentos).exists()
 
 
-def _filtro_fuente_infografia(reporte=None, analisis_momento=None, analisis_jornada=None):
-    """Cuál de los tres FK identifica la versión exacta de análisis de esta infografía —
+def _filtro_fuente_infografia(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
+    """Cuál de los cuatro FK identifica la versión exacta de análisis de esta infografía —
     EXACTAMENTE uno, garantizado por `InfografiaJornadaCrearSerializer.validate()` (HU-73). Se usa
     para acotar el guard de "ya hay una en curso"/huérfanas a esa versión puntual, nunca a la
     jornada o al momento en general: dos versiones de análisis del mismo momento/jornada
     (distintos métodos o enfoques, HU-71) son trabajos completamente independientes entre sí,
     generar la infografía de una nunca debe bloquear ni confundirse con la de la otra."""
+    if analisis_v2 is not None:
+        return {'analisis_v2': analisis_v2}
     if analisis_momento is not None:
         return {'analisis_momento': analisis_momento}
     if analisis_jornada is not None:
@@ -82,17 +84,17 @@ def _filtro_fuente_infografia(reporte=None, analisis_momento=None, analisis_jorn
     return {'reporte': reporte}
 
 
-def _infografias_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None):
+def _infografias_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     return InfografiaJornada.objects.filter(
         estado__in=[InfografiaJornada.ESTADO_PENDIENTE, InfografiaJornada.ESTADO_PROCESANDO],
-        **_filtro_fuente_infografia(reporte, analisis_momento, analisis_jornada),
+        **_filtro_fuente_infografia(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2),
     )
 
 
-def sanar_infografias_huerfanas(reporte=None, analisis_momento=None, analisis_jornada=None):
+def sanar_infografias_huerfanas(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     """Una infografía cuyo worker murió a mitad de generación (crash, redeploy) se queda en
     'procesando' para siempre y bloquearía pedir otra — pasado el umbral se marca error."""
-    _infografias_en_curso(reporte, analisis_momento, analisis_jornada).filter(
+    _infografias_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2).filter(
         actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_INFOGRAFIA,
     ).update(
         estado=InfografiaJornada.ESTADO_ERROR,
@@ -102,8 +104,8 @@ def sanar_infografias_huerfanas(reporte=None, analisis_momento=None, analisis_jo
     )
 
 
-def hay_infografia_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None):
-    return _infografias_en_curso(reporte, analisis_momento, analisis_jornada).exists()
+def hay_infografia_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
+    return _infografias_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2).exists()
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
@@ -714,20 +716,20 @@ class InfografiaJornadaViewSet(
     """Infografías: se piden acá (`POST`) y se consultan acá mismo por polling.
 
     HU-73: cada infografía queda ATADA a una versión exacta de análisis — manda EXACTAMENTE uno
-    de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento) o
-    `analisis_jornada` (lectura IA de jornada completa); `jornada`/`momento` se derivan solos de
-    esa versión y no se aceptan sueltos. Antes de esta HU, mandar solo `{"jornada": id}` o
-    `{"momento": id}` caía al análisis más reciente completo de ese alcance — con HU-71 una
-    jornada/momento acumula varias VERSIONES de análisis a la vez, y esa caída silenciosa a "la
-    más reciente" significaba que dos versiones podían terminar compartiendo la misma
-    infografía (o peor, una infografía generada para ver la versión A mostrando en realidad datos
-    de la versión B que se volvió "la más reciente" mientras tanto). Eso ya no puede pasar: sin
-    un id exacto de análisis, `400`."""
+    de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento),
+    `analisis_jornada` (lectura IA de jornada completa) o `analisis_v2` (contrato
+    `kunsamu.analisis/v2`); `jornada`/`momento` se derivan solos de esa versión y no se aceptan
+    sueltos. Antes de esta HU, mandar solo `{"jornada": id}` o `{"momento": id}` caía al análisis
+    más reciente completo de ese alcance — con HU-71 una jornada/momento acumula varias VERSIONES
+    de análisis a la vez, y esa caída silenciosa a "la más reciente" significaba que dos versiones
+    podían terminar compartiendo la misma infografía (o peor, una infografía generada para ver la
+    versión A mostrando en realidad datos de la versión B que se volvió "la más reciente" mientras
+    tanto). Eso ya no puede pasar: sin un id exacto de análisis, `400`."""
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         queryset = InfografiaJornada.objects.select_related(
-            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada',
+            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2',
         ).prefetch_related('imagenes')
         queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
         jornada_id = self.request.query_params.get('jornada')
@@ -745,6 +747,9 @@ class InfografiaJornadaViewSet(
         analisis_jornada_id = self.request.query_params.get('analisis_jornada')
         if analisis_jornada_id:
             queryset = queryset.filter(analisis_jornada_id=analisis_jornada_id)
+        analisis_v2_id = self.request.query_params.get('analisis_v2')
+        if analisis_v2_id:
+            queryset = queryset.filter(analisis_v2_id=analisis_v2_id)
         return queryset
 
     def get_serializer_class(self):
@@ -760,13 +765,14 @@ class InfografiaJornadaViewSet(
         reporte = entrada.validated_data.get('reporte')
         analisis_momento = entrada.validated_data.get('analisis_momento')
         analisis_jornada = entrada.validated_data.get('analisis_jornada')
+        analisis_v2 = entrada.validated_data.get('analisis_v2')
         verificar_acceso_jornada(request.user, jornada)
 
         # Acotado a la versión EXACTA (HU-73), no a la jornada/momento en general: generar la
         # infografía de una versión nunca debe bloquearse ni confundirse con la de otra versión
         # del mismo alcance.
-        sanar_infografias_huerfanas(reporte, analisis_momento, analisis_jornada)
-        if hay_infografia_en_curso(reporte, analisis_momento, analisis_jornada):
+        sanar_infografias_huerfanas(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2)
+        if hay_infografia_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2):
             return Response(
                 {'detail': 'Ya hay una infografía en proceso para esta versión del análisis — '
                            'espera a que termine (o falle) antes de pedir otra.'},
@@ -779,7 +785,9 @@ class InfografiaJornadaViewSet(
         # `analisis_momento`/`analisis_jornada`, así que el chequeo previo evaluaba "la más
         # reciente" mientras la generación real (`generar_infografias`) ya usaba la fijada —
         # podían no ser la misma.
-        _, error = _obtener_datos_analitica(jornada, reporte, momento, analisis_momento, analisis_jornada)
+        _, error = _obtener_datos_analitica(
+            jornada, reporte, momento, analisis_momento, analisis_jornada, analisis_v2=analisis_v2,
+        )
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
 
