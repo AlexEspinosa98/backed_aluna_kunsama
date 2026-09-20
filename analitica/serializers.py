@@ -1,11 +1,18 @@
 from rest_framework import serializers
 
-from jornadas.models import Momento
+from jornadas.models import Jornada, Momento
 
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, InfografiaImagen, InfografiaJornada, PlantillaAnalisis,
     Reporte,
 )
+from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+
+# Campos del análisis guiado (HU-57, ver docs/HU_BACKEND_ANALISIS_GUIADO.md §1) comunes a los
+# tres serializers de creación — un solo lugar para no repetir la lista tres veces y que agregar
+# un campo nuevo el día de mañana sea un cambio en un solo sitio.
+CAMPOS_ANALISIS_GUIADO = ['enfoque', 'contexto', 'instrucciones']
+CAMPOS_ANALISIS_GUIADO_MOMENTO = CAMPOS_ANALISIS_GUIADO + ['contexto_momento', 'instrucciones_momento']
 
 
 class PlantillaAnalisisSerializer(serializers.ModelSerializer):
@@ -28,17 +35,24 @@ class ReporteSerializer(serializers.ModelSerializer):
     jornada = serializers.SlugRelatedField(slug_field='slug', read_only=True)
     momentos = MomentoResumenSerializer(many=True, read_only=True)
     plantilla_nombre = serializers.CharField(source='plantilla.nombre', read_only=True, default=None)
+    # Constante por modelo, no una columna — el frontend la usa para no tener que deducir el
+    # método a partir del endpoint por el que llegó cada item (HU-57 §1).
+    metodo = serializers.SerializerMethodField()
 
     class Meta:
         model = Reporte
         fields = [
-            'id', 'slug', 'jornada', 'momentos', 'alcance', 'plantilla', 'plantilla_nombre',
-            'estado', 'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado',
+            'id', 'slug', 'jornada', 'momentos', 'alcance', 'metodo', 'plantilla', 'plantilla_nombre',
+            'enfoque', 'contexto', 'instrucciones', 'contexto_momento', 'instrucciones_momento',
+            'estado', 'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado', 'prompt_usado',
             'presentacion_html', 'presentacion_estado', 'presentacion_error',
             'presentacion_modelo', 'presentacion_generada_en',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
+
+    def get_metodo(self, obj):
+        return 'bertopic'
 
 
 class ReporteCrearSerializer(serializers.ModelSerializer):
@@ -49,10 +63,17 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Reporte
-        fields = ['id', 'jornada', 'momentos', 'plantilla', 'alcance', 'estado', 'creado_en']
+        fields = [
+            'id', 'jornada', 'momentos', 'plantilla', 'alcance', 'estado', 'creado_en',
+            *CAMPOS_ANALISIS_GUIADO_MOMENTO,
+        ]
         read_only_fields = ['id', 'alcance', 'estado', 'creado_en']
 
     def validate(self, attrs):
+        # El guard de "sin respuestas en el alcance" (HU-57 §5) vive en ReporteViewSet.create(),
+        # DESPUÉS de verificar_acceso_jornada — acá, dentro de is_valid(), correría antes que el
+        # 403 de jornada ajena y lo taparía con un 400 (un admin de otra dependencia sabría, solo
+        # por el código de estado, si esa jornada ajena tiene respuestas o no).
         jornada = attrs['jornada']
         for momento in attrs.get('momentos') or []:
             if momento.jornada_id != jornada.id:
@@ -81,40 +102,55 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
 
 class AnalisisMomentoIASerializer(serializers.ModelSerializer):
     momento_titulo = serializers.CharField(source='momento.titulo', read_only=True)
+    momento_orden = serializers.IntegerField(source='momento.orden', read_only=True)
+    metodo = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalisisMomentoIA
         fields = [
-            'id', 'momento', 'momento_titulo', 'estado', 'resultado', 'error_mensaje',
-            'modelo_usado', 'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
+            'id', 'momento', 'momento_titulo', 'momento_orden', 'metodo', 'estado', 'resultado',
+            'error_mensaje', 'modelo_usado', 'prompt_usado', *CAMPOS_ANALISIS_GUIADO_MOMENTO,
+            'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
+
+    def get_metodo(self, obj):
+        return 'openai'
 
 
 class AnalisisMomentoIACrearSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnalisisMomentoIA
-        fields = ['id', 'momento', 'estado', 'creado_en']
+        fields = ['id', 'momento', 'estado', 'creado_en', *CAMPOS_ANALISIS_GUIADO_MOMENTO]
         read_only_fields = ['id', 'estado', 'creado_en']
+        # El guard de "sin respuestas" (HU-57 §5) vive en AnalisisMomentoIAViewSet.create(),
+        # después de verificar_acceso_jornada — ver el comentario en ReporteCrearSerializer.
 
 
 class AnalisisJornadaIASerializer(serializers.ModelSerializer):
     jornada = serializers.SlugRelatedField(slug_field='slug', read_only=True)
+    metodo = serializers.SerializerMethodField()
 
     class Meta:
         model = AnalisisJornadaIA
         fields = [
-            'id', 'jornada', 'estado', 'resultado', 'error_mensaje',
-            'modelo_usado', 'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
+            'id', 'jornada', 'metodo', 'estado', 'resultado', 'error_mensaje', 'modelo_usado',
+            'prompt_usado', *CAMPOS_ANALISIS_GUIADO,
+            'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
+
+    def get_metodo(self, obj):
+        return 'openai'
 
 
 class AnalisisJornadaIACrearSerializer(serializers.ModelSerializer):
     class Meta:
         model = AnalisisJornadaIA
-        fields = ['id', 'jornada', 'estado', 'creado_en']
+        fields = ['id', 'jornada', 'estado', 'creado_en', *CAMPOS_ANALISIS_GUIADO]
         read_only_fields = ['id', 'estado', 'creado_en']
+        # El guard de "sin respuestas" (HU-57 §5) vive en AnalisisJornadaIAViewSet.create(),
+        # después de verificar_acceso_jornada — ver el comentario en ReporteCrearSerializer.
 
 
 class InfografiaImagenSerializer(serializers.ModelSerializer):
@@ -177,4 +213,33 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'reporte': 'Ese reporte no pertenece a la jornada seleccionada.'}
             )
+        return attrs
+
+
+class AnalisisSugerenciasSerializer(serializers.Serializer):
+    """Entrada de `POST /api/admin/analisis-sugerencias/` (HU-57 §3). No hay modelo detrás — nada
+    de esto se persiste, es un ayudante de un solo uso para llenar el formulario del asistente."""
+    METODO_CHOICES = [('bertopic', 'Pipeline local'), ('openai', 'Lectura integral con IA')]
+
+    jornada = serializers.PrimaryKeyRelatedField(queryset=Jornada.objects.all())
+    momentos = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Momento.objects.all(), required=False, default=list,
+        help_text='Vacío = alcance de toda la jornada.',
+    )
+    metodo = serializers.ChoiceField(choices=METODO_CHOICES)
+    enfoque = serializers.ChoiceField(choices=ENFOQUE_CHOICES, required=False, default=ENFOQUE_DEFAULT)
+    contexto = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+    )
+    instrucciones = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+    )
+
+    def validate(self, attrs):
+        jornada = attrs['jornada']
+        for momento in attrs.get('momentos') or []:
+            if momento.jornada_id != jornada.id:
+                raise serializers.ValidationError(
+                    {'momentos': f'El momento "{momento.titulo}" no pertenece a la jornada seleccionada.'}
+                )
         return attrs

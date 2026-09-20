@@ -4,6 +4,60 @@ from django.utils import timezone
 
 from jornadas.models import Jornada, Momento
 
+from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+
+
+# Campos del análisis guiado (HU-57 del frontend, ver docs/HU_BACKEND_ANALISIS_GUIADO.md) —
+# compartidos por `Reporte`, `AnalisisMomentoIA` y `AnalisisJornadaIA` porque el asistente del
+# panel es uno solo para los tres métodos y le pide lo mismo a cualquiera que elija: con qué
+# enfoque leer los datos, y contexto/instrucciones libres. Dos mixins abstractos (no una función
+# que devuelva campos — Django no permite `**dict` de `Field` en el cuerpo de una clase) para que
+# los tres modelos no se desalineen entre sí (help_text, choices, max_length) a medida que el
+# asistente evolucione.
+class AnalisisGuiadoMixin(models.Model):
+    enfoque = models.CharField(
+        max_length=15, choices=ENFOQUE_CHOICES, default=ENFOQUE_DEFAULT, help_text=(
+            'Con qué enfoque leer los datos: cualitativo (voces y matices), cuantitativo '
+            '(cifras y comparaciones) o mixto (ambos por igual, default).'
+        ),
+    )
+    contexto = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Contexto general que escribió quien pidió el análisis — puede coincidir con '
+            'Jornada.descripcion o no. Se guarda tal cual, sin normalizar.'
+        ),
+    )
+    instrucciones = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Instrucciones adicionales de quien pidió el análisis (tono, público, cantidad de '
+            'gráficos, idioma…) — mandan sobre el estilo y la estructura por defecto.'
+        ),
+    )
+
+    class Meta:
+        abstract = True
+
+
+class AnalisisGuiadoPorMomentoMixin(models.Model):
+    """Solo tiene sentido cuando el alcance es UN momento — un `Reporte` de la jornada completa
+    o de varios momentos combinados los deja vacíos (nada que lo impida a nivel de modelo; es el
+    serializer quien decide cuándo pedirlos, ver `ReporteCrearSerializer`)."""
+    contexto_momento = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Contexto propio de ESTE momento, además del contexto general de la jornada. Solo '
+            'aplica cuando el alcance es un único momento.'
+        ),
+    )
+    instrucciones_momento = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Instrucciones propias de ESTE momento, además de las generales. Solo aplica '
+            'cuando el alcance es un único momento.'
+        ),
+    )
+
+    class Meta:
+        abstract = True
+
 
 class PlantillaAnalisis(models.Model):
     # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
@@ -56,7 +110,7 @@ class PlantillaAnalisis(models.Model):
             )
 
 
-class Reporte(models.Model):
+class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
     ALCANCE_JORNADA = 'jornada'
     ALCANCE_MOMENTO = 'momento'
     ALCANCE_MOMENTOS = 'momentos'
@@ -97,6 +151,13 @@ class Reporte(models.Model):
     )
     texto_reporte = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=150, blank=True)
+    # Auditoría del análisis guiado (HU-57): el prompt de sistema con el que se generó la síntesis
+    # de jornada (`analysis.py::analizar_jornada`), ya con enfoque/contexto/instrucciones
+    # compuestos — mismo campo que ya tienen InfografiaJornada y, desde este mismo cambio, los dos
+    # `Analisis*IA`. No es "el" prompt del reporte completo (hay uno por pregunta y por momento,
+    # ver analysis.py) sino el representativo de más alto nivel, para mostrar en el detalle "con
+    # qué se generó" sin tener que guardar decenas de prompts por reporte.
+    prompt_usado = models.TextField(blank=True)
 
     # Presentación HTML generada por OpenAI a partir de `analisis` (ver analitica/presentacion.py)
     # — capa de presentación aparte del análisis en sí: se puede pedir, fallar o regenerar sin
@@ -148,7 +209,7 @@ class Reporte(models.Model):
         super().save(*args, **kwargs)
 
 
-class AnalisisMomentoIA(models.Model):
+class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
     """Vía de análisis alternativa a `Reporte`: en vez del pipeline local multiagente (una llamada
     de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
     instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
@@ -176,6 +237,10 @@ class AnalisisMomentoIA(models.Model):
     )
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
+    # Auditoría del análisis guiado (HU-57) — el system prompt compuesto (plantilla + enfoque +
+    # contexto + instrucciones + regla de datos, ver analitica/prompt_comun.py) con el que se
+    # generó ESTE análisis.
+    prompt_usado = models.TextField(blank=True)
     solicitado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='analisis_momento_ia_solicitados',
@@ -193,7 +258,7 @@ class AnalisisMomentoIA(models.Model):
         return f'Análisis IA {self.id} · {self.momento} · {self.estado}'
 
 
-class AnalisisJornadaIA(models.Model):
+class AnalisisJornadaIA(AnalisisGuiadoMixin, models.Model):
     """Mismo mecanismo que `AnalisisMomentoIA` (una sola llamada a OpenAI, sin pasar por
     `Reporte`), pero a escala de jornada completa: lee TODOS los momentos activos de la jornada
     (cada uno con su contexto, preguntas y respuestas reales) en una sola llamada, para encontrar
@@ -201,7 +266,8 @@ class AnalisisJornadaIA(models.Model):
     hace `AnalisisMomentoIA`. Pensado para jornadas tipo "Café del Mundo" con varios momentos
     cortos (uno por mesa/tema) donde el valor real está en ver el panorama completo de una vez,
     no mesa por mesa. Ver `analitica/analisis_ia_openai.py` (`analizar_jornada_ia`,
-    `SYSTEM_PROMPT_JORNADA`) para el detalle exacto de payload y formato de `resultado`."""
+    `SYSTEM_PROMPT_JORNADA`) para el detalle exacto de payload y formato de `resultado`. Sin
+    `AnalisisGuiadoPorMomentoMixin`: el alcance es siempre la jornada entera, nunca un momento."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -224,6 +290,8 @@ class AnalisisJornadaIA(models.Model):
     )
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
+    # Auditoría del análisis guiado (HU-57) — ver el comentario equivalente en AnalisisMomentoIA.
+    prompt_usado = models.TextField(blank=True)
     solicitado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='analisis_jornada_ia_solicitados',

@@ -12,6 +12,8 @@ import threading
 
 from django.utils import timezone
 
+from .prompt_comun import REGLA_DATOS_ANALISIS, ensamblar_system
+
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 # Los modelos de razonamiento (o1/o3/gpt-5+) aceptan un nivel de esfuerzo de razonamiento en vez
 # de temperature — se pasa solo si el modelo configurado lo soporta; si el modelo no es de
@@ -132,6 +134,12 @@ SYSTEM_PROMPT = (
     "Nunca inventes cifras, temas ni respuestas que no estén en los datos entregados a "
     "continuación."
 )
+# La frase de cierre de arriba ("Nunca inventes...") queda TAMBIÉN dentro de SYSTEM_PROMPT por
+# compatibilidad de lectura del texto completo, pero quien de verdad decide el orden final es
+# `ensamblar_system` (analitica/prompt_comun.py): compone plantilla → enfoque → contexto →
+# instrucciones → REGLA_DATOS_ANALISIS, así que la regla de no inventar cifras queda garantizada
+# al final del prompt incluso cuando el usuario mandó instrucciones (ver `analizar_momento_ia`/
+# `analizar_jornada_ia` más abajo) — HU-57, docs/HU_BACKEND_ANALISIS_GUIADO.md §2.
 
 
 SYSTEM_PROMPT_JORNADA = (
@@ -442,12 +450,21 @@ def analizar_momento_ia(analisis_id):
         plantilla = PlantillaAnalisis.objects.filter(
             tipo=PlantillaAnalisis.TIPO_GPT_MOMENTO, predeterminada=True
         ).first()
-        system = SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
+        # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md): enfoque/contexto/instrucciones vienen del
+        # asistente guiado del panel — `ensamblar_system` los intercala en el orden fijo (§2) y
+        # deja la regla de datos siempre al final, sin importar qué haya escrito el usuario.
+        system = ensamblar_system(
+            base=SYSTEM_PROMPT, plantilla_extra=_instrucciones_plantilla(plantilla),
+            enfoque=analisis.enfoque, contexto=analisis.contexto,
+            instrucciones=analisis.instrucciones, contexto_momento=analisis.contexto_momento,
+            instrucciones_momento=analisis.instrucciones_momento, regla_datos=REGLA_DATOS_ANALISIS,
+        )
         payload = _construir_payload_momento(analisis.momento)
         user = 'DATOS DEL MOMENTO (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
         modelo = DEFAULT_MODEL
         resultado, error = _llamar_openai_json(system, user, model=modelo)
 
+        analisis.prompt_usado = system
         if resultado:
             analisis.resultado = _validar_y_limpiar(resultado, analisis.momento)
             analisis.estado = AnalisisMomentoIA.ESTADO_COMPLETO
@@ -458,7 +475,7 @@ def analizar_momento_ia(analisis_id):
             analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
             analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
         analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
+            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en', 'prompt_usado',
         ])
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:
@@ -500,7 +517,13 @@ def analizar_jornada_ia(analisis_id):
         plantilla = PlantillaAnalisis.objects.filter(
             tipo=PlantillaAnalisis.TIPO_GPT_JORNADA, predeterminada=True
         ).first()
-        system = SYSTEM_PROMPT_JORNADA + _instrucciones_plantilla(plantilla)
+        # HU-57: mismo ensamblado que analizar_momento_ia, sin contexto_momento/instrucciones_
+        # momento — AnalisisJornadaIA es siempre de la jornada entera (ver AnalisisGuiadoMixin).
+        system = ensamblar_system(
+            base=SYSTEM_PROMPT_JORNADA, plantilla_extra=_instrucciones_plantilla(plantilla),
+            enfoque=analisis.enfoque, contexto=analisis.contexto,
+            instrucciones=analisis.instrucciones, regla_datos=REGLA_DATOS_ANALISIS,
+        )
         payload = _construir_payload_jornada(analisis.jornada)
         user = 'DATOS DE LA JORNADA (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
         resultado, error = _llamar_openai_json(
@@ -509,6 +532,7 @@ def analizar_jornada_ia(analisis_id):
             timeout_seconds=GENERATION_TIMEOUT_SECONDS_JORNADA,
         )
 
+        analisis.prompt_usado = system
         if resultado:
             analisis.resultado = _validar_y_limpiar_jornada(resultado, analisis.jornada)
             analisis.estado = AnalisisJornadaIA.ESTADO_COMPLETO
@@ -519,7 +543,7 @@ def analizar_jornada_ia(analisis_id):
             analisis.estado = AnalisisJornadaIA.ESTADO_ERROR
             analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
         analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
+            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en', 'prompt_usado',
         ])
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:

@@ -4,9 +4,9 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from jornadas.models import Jornada, PerfilUsuario
+from jornadas.models import Jornada, Momento, PerfilUsuario, Pregunta
 
-from .models import AnalisisJornadaIA, InfografiaJornada, PlantillaAnalisis, Reporte
+from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
 
 Usuario = get_user_model()
 
@@ -18,6 +18,18 @@ def crear_jornada(slug, propietario=None):
     if propietario:
         jornada.propietarios.set([propietario])
     return jornada
+
+
+def crear_momento_con_respuesta(jornada, orden=1, titulo='Momento con datos'):
+    """Un momento con una pregunta abierta y UNA respuesta real — lo mínimo para pasar el guard
+    de "sin respuestas en el alcance" (HU-57 §5, ver `_sin_respuestas` en admin_views.py) sin
+    tener que montar un instrumento completo en cada test."""
+    from participantes.models import Respuesta
+
+    momento = Momento.objects.create(jornada=jornada, orden=orden, titulo=titulo)
+    pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_ABIERTA, texto='¿Qué opinas?', orden=1)
+    Respuesta.objects.create(pregunta=pregunta, texto_libre='Una respuesta real de prueba.')
+    return momento
 
 
 def crear_dependencia(username):
@@ -314,3 +326,196 @@ class PayloadJornadaConTranscripcionesTests(APITestCase):
         transcripciones = self._payload()['transcripciones']
         self.assertEqual(len(transcripciones), 1)
         self.assertEqual(transcripciones[0]['resumen_ejecutivo'], 'Versión nueva')
+
+
+class AnalisisGuiadoCamposTests(APITestCase):
+    """HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md) §1: enfoque/contexto/instrucciones en las tres
+    solicitudes de análisis, persistidos y devueltos tal cual. No espera a que el hilo en
+    background termine (no hay OPENAI_API_KEY en el entorno de test): solo verifica la respuesta
+    síncrona del `create()`, que es donde vive el contrato que describe la HU."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.jornada = crear_jornada('jornada-guiada', propietario=self.admin)
+        self.momento = crear_momento_con_respuesta(self.jornada)
+        self.client.force_authenticate(user=self.admin)
+
+    def test_reporte_persiste_y_devuelve_los_campos_guiados(self):
+        resp = self.client.post('/api/admin/reportes/', {
+            'jornada': self.jornada.id,
+            'momentos': [self.momento.id],
+            'enfoque': 'cualitativo',
+            'contexto': 'Jornada de percepción sobre bienestar.',
+            'instrucciones': 'Tono cercano.',
+            'contexto_momento': 'Este momento se trabajó en mesas.',
+            'instrucciones_momento': 'Destaca tensiones.',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'bertopic')
+        self.assertEqual(resp.data['enfoque'], 'cualitativo')
+        self.assertEqual(resp.data['contexto'], 'Jornada de percepción sobre bienestar.')
+        self.assertEqual(resp.data['instrucciones'], 'Tono cercano.')
+        self.assertEqual(resp.data['contexto_momento'], 'Este momento se trabajó en mesas.')
+        self.assertEqual(resp.data['instrucciones_momento'], 'Destaca tensiones.')
+
+    def test_reporte_enfoque_por_defecto_es_mixto(self):
+        resp = self.client.post(
+            '/api/admin/reportes/', {'jornada': self.jornada.id, 'momentos': [self.momento.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['enfoque'], 'mixto')
+
+    def test_reporte_enfoque_invalido_da_400(self):
+        resp = self.client.post('/api/admin/reportes/', {
+            'jornada': self.jornada.id, 'momentos': [self.momento.id], 'enfoque': 'no-existe',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('enfoque', resp.data)
+
+    def test_reporte_sin_respuestas_en_el_alcance_da_400_explicito(self):
+        momento_vacio = Momento.objects.create(jornada=self.jornada, orden=99, titulo='Vacío')
+        resp = self.client.post(
+            '/api/admin/reportes/', {'jornada': self.jornada.id, 'momentos': [momento_vacio.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('no tiene respuestas', str(resp.data))
+        self.assertFalse(Reporte.objects.filter(jornada=self.jornada, momentos=momento_vacio).exists())
+
+    def test_analisis_momento_persiste_campos_guiados_y_metodo(self):
+        resp = self.client.post('/api/admin/analisis-momento-ia/', {
+            'momento': self.momento.id, 'enfoque': 'cuantitativo', 'contexto': 'Ctx',
+            'instrucciones': 'Instr', 'contexto_momento': 'CtxM', 'instrucciones_momento': 'InstrM',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'openai')
+        self.assertEqual(resp.data['enfoque'], 'cuantitativo')
+        self.assertEqual(resp.data['momento_orden'], self.momento.orden)
+        self.assertEqual(resp.data['contexto_momento'], 'CtxM')
+
+    def test_analisis_momento_sin_respuestas_da_400(self):
+        momento_vacio = Momento.objects.create(jornada=self.jornada, orden=99, titulo='Vacío')
+        resp = self.client.post('/api/admin/analisis-momento-ia/', {'momento': momento_vacio.id}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(AnalisisMomentoIA.objects.filter(momento=momento_vacio).exists())
+
+    def test_analisis_jornada_persiste_campos_guiados_y_metodo(self):
+        resp = self.client.post('/api/admin/analisis-jornada-ia/', {
+            'jornada': self.jornada.id, 'enfoque': 'mixto', 'contexto': 'Ctx', 'instrucciones': 'Instr',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'openai')
+        self.assertEqual(resp.data['contexto'], 'Ctx')
+
+    def test_analisis_jornada_sin_momentos_activos_con_respuestas_da_400(self):
+        jornada_vacia = crear_jornada('jornada-sin-datos', propietario=self.admin)
+        Momento.objects.create(jornada=jornada_vacia, orden=1, titulo='Sin respuestas')
+        resp = self.client.post('/api/admin/analisis-jornada-ia/', {'jornada': jornada_vacia.id}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
+class AnalisisSugerenciasViewTests(APITestCase):
+    """HU-57 §3. Sin OPENAI_API_KEY en el entorno de test, `generar_sugerencias` devuelve `[]`
+    determinísticamente (ver sugerencias_ia_openai.py) — alcanza para probar el contrato HTTP
+    (200 con la forma esperada, 400 de validación, 403 de scoping) sin mockear la llamada."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia')
+        self.jornada = crear_jornada('jornada-sug', propietario=self.dependencia)
+        self.jornada_ajena = crear_jornada('jornada-sug-ajena')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+
+    def test_responde_200_con_lista_de_sugerencias(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'momentos': [], 'metodo': 'openai', 'enfoque': 'mixto',
+            'contexto': '', 'instrucciones': '',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data, {'sugerencias': []})
+
+    def test_metodo_invalido_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'metodo': 'no-existe',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_dependencia_no_puede_pedir_sugerencias_de_jornada_ajena(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada_ajena.id, 'metodo': 'bertopic',
+        }, format='json')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_momento_de_otra_jornada_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        momento_ajeno = crear_momento_con_respuesta(self.jornada_ajena)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'momentos': [momento_ajeno.id], 'metodo': 'bertopic',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
+class AnalisisUnificadoViewTests(APITestCase):
+    """HU-57 §4: `GET /api/admin/analisis/` une Reporte + AnalisisMomentoIA + AnalisisJornadaIA de
+    una jornada en una sola lista."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia')
+        self.jornada = crear_jornada('jornada-unif', propietario=self.dependencia)
+        self.jornada_ajena = crear_jornada('jornada-unif-ajena')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+
+        self.reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        self.analisis_momento = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_PROCESANDO,
+        )
+        self.analisis_jornada = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+        )
+        # De otra jornada — no debe aparecer al filtrar por `self.jornada`.
+        Reporte.objects.create(jornada=self.jornada_ajena, alcance=Reporte.ALCANCE_JORNADA)
+
+    def test_sin_filtro_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/analisis/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_lista_los_tres_tipos_de_la_jornada(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 3)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'reporte', 'analisis_momento', 'analisis_jornada'})
+        por_tipo = {item['tipo']: item for item in resp.data}
+        self.assertEqual(por_tipo['reporte']['metodo'], 'bertopic')
+        self.assertEqual(por_tipo['analisis_momento']['metodo'], 'openai')
+        self.assertEqual(por_tipo['analisis_momento']['momento_titulo'], self.momento.titulo)
+        self.assertEqual(por_tipo['analisis_momento']['alcance'], 'momento')
+        self.assertIsNone(por_tipo['analisis_jornada']['momento'])
+
+    def test_filtro_por_momento_excluye_reporte_y_analisis_de_jornada_no_ligados_a_el(self):
+        # `self.reporte` es de alcance JORNADA (sin momentos en su M2M) — filtrar por momento no
+        # debe traerlo, solo lo que de verdad está ligado a ESE momento.
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(f'/api/admin/analisis/?momento={self.momento.id}')
+        self.assertEqual(resp.status_code, 200)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'analisis_momento'})
+
+    def test_filtro_por_momento_incluye_reporte_ligado_a_ese_momento(self):
+        self.client.force_authenticate(user=self.admin)
+        reporte_momento = Reporte.objects.create(jornada=self.jornada, alcance=Reporte.ALCANCE_MOMENTO)
+        reporte_momento.momentos.set([self.momento])
+        resp = self.client.get(f'/api/admin/analisis/?momento={self.momento.id}')
+        self.assertEqual(resp.status_code, 200)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'reporte', 'analisis_momento'})
+
+    def test_dependencia_solo_ve_su_jornada(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada_ajena.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, [])

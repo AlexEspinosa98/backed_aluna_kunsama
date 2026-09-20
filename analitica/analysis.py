@@ -46,6 +46,8 @@ from pathlib import Path
 from django.db import close_old_connections
 from django.utils import timezone
 
+from .prompt_comun import REGLA_DATOS_ANALISIS, bloque_contexto, bloque_enfoque, bloque_instrucciones
+
 MODELS_DIR = Path(__file__).resolve().parent / '.models'
 DEFAULT_MODEL_REPO = 'Qwen/Qwen2.5-3B-Instruct-GGUF'
 DEFAULT_MODEL_FILE = os.environ.get('KUNSAMU_LLM_MODEL_FILE', 'qwen2.5-3b-instruct-q4_k_m.gguf')
@@ -598,7 +600,10 @@ NIVELES_ACUERDO_VALIDOS = (
 )
 
 
-def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_valores, plantilla=None):
+def _agente_pregunta_abierta(
+    pregunta, estad, valores_caracteristicos, metodo_valores, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Devuelve (descripcion, tipo_grafica, nivel_acuerdo). `tipo_grafica` solo se decide cuando
     hay datos cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos,
     que salen de que el LLM haya clasificado las respuestas en los temas candidatos (método
@@ -696,6 +701,20 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         if pista_acuerdo:
             lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
 
+    # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md §2): enfoque, contexto e instrucciones del
+    # asistente guiado — se anexan AL FINAL, después de las instrucciones de formato de arriba
+    # (GRAFICA:/NIVEL_ACUERDO:), mismo punto donde ya vivía `_instrucciones_plantilla` antes de
+    # este cambio. La regla de datos se repite acá como refuerzo de texto; la garantía real sigue
+    # siendo de código (`_purgar_cifras_falsas`, arriba), no depende de que el modelo la respete.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=230, temperature=0.5)
 
     tipo_grafica = None
@@ -776,7 +795,10 @@ def _pista_nivel_acuerdo(valores_caracteristicos, num_mesas):
     return None
 
 
-def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
+def _agente_pregunta_cerrada(
+    pregunta, estad, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Para preguntas `unica`/`multiple`: además de la descripción, el propio LLM elige el tipo
     de gráfica que mejor muestre hacia dónde se inclina el público entre las opciones — pastel
     (pocas, mutuamente excluyentes), barras (comparación simple de conteos) o radar (varias
@@ -831,6 +853,17 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
+
+    # HU-57: mismo punto de inyección y mismo razonamiento que en _agente_pregunta_abierta.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=190, temperature=0.5)
 
     tipo_grafica = None
@@ -865,13 +898,21 @@ def _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva):
     return valores, 'bertopic_sin_clasificar'
 
 
-def analizar_pregunta(pregunta, plantilla=None):
+def analizar_pregunta(
+    pregunta, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Analiza una pregunta de forma aislada: estadísticas + (para abiertas) tópicos/frases +
     descripción del agente de pregunta. Nunca lanza excepción — una falla puntual del LLM solo
     deja un aviso corto en `descripcion`, no tumba el resto del análisis. `plantilla` (opcional,
     `PlantillaAnalisis` editable vía /api/admin/plantillas-analisis/) se reenvía a los agentes de
     redacción para que sus instrucciones de tono/profundidad apliquen también a nivel de
-    pregunta, no solo en la síntesis final de la jornada."""
+    pregunta, no solo en la síntesis final de la jornada. `enfoque`/`contexto`/`instrucciones` son
+    los del análisis guiado (HU-57) — se reenvían igual, salvo a la clasificación de tópicos
+    (`_clasificar_topicos`/`_etiquetar_y_clasificar`): ese prompt depende de un formato estricto
+    (`TEMAS:`/`CLASIFICACION:`) que un modelo de 3B ya es propenso a romper con instrucciones
+    libres de por medio, así que se deja intacto — el enfoque/contexto solo afecta la REDACCIÓN
+    de la descripción, no el descubrimiento/clasificación de temas en sí."""
     from jornadas.models import Pregunta
 
     estad = _estadisticas_pregunta(pregunta)
@@ -912,7 +953,10 @@ def analizar_pregunta(pregunta, plantilla=None):
             metodo = 'llm' if valores else 'insuficiente'
 
         descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(
-            pregunta, estad, valores, metodo, plantilla)
+            pregunta, estad, valores, metodo, plantilla,
+            enfoque=enfoque, contexto=contexto, instrucciones=instrucciones,
+            contexto_momento=contexto_momento, instrucciones_momento=instrucciones_momento,
+        )
         return {
             'pregunta_id': pregunta.id,
             'texto': pregunta.texto,
@@ -925,7 +969,11 @@ def analizar_pregunta(pregunta, plantilla=None):
             'metodo_valores': metodo,
         }
 
-    descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, plantilla)
+    descripcion, tipo_grafica = _agente_pregunta_cerrada(
+        pregunta, estad, plantilla,
+        enfoque=enfoque, contexto=contexto, instrucciones=instrucciones,
+        contexto_momento=contexto_momento, instrucciones_momento=instrucciones_momento,
+    )
     return {
         'pregunta_id': pregunta.id,
         'texto': pregunta.texto,
@@ -943,7 +991,10 @@ def analizar_pregunta(pregunta, plantilla=None):
 # Agente de momento.
 # ---------------------------------------------------------------------------
 
-def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
+def _sintetizar_momento(
+    momento, analisis_preguntas, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """La síntesis en sí (una llamada al LLM) — separada de analizar las preguntas del momento
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
@@ -974,6 +1025,18 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
         "estén en las descripciones dadas. Español." +
         _instrucciones_plantilla(plantilla)
     )
+    # HU-57: enfoque cambia el peso de cifras vs. lectura interpretativa también en la síntesis
+    # de momento — "redactar el resumen" es exactamente el paso que describe
+    # docs/HU_BACKEND_ANALISIS_GUIADO.md §2 para el pipeline local.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
     descripcion_general, error = _llamar_llm(system, user, max_tokens=220, temperature=0.5)
     descripcion_general = _purgar_etiquetas_estructura(descripcion_general)
@@ -990,8 +1053,20 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
 # Agente de jornada.
 # ---------------------------------------------------------------------------
 
-def analizar_jornada(plantilla, momentos_analisis, participacion):
+def analizar_jornada(plantilla, momentos_analisis, participacion, enfoque=None, contexto='', instrucciones=''):
+    """Devuelve (texto, error, system_usado) — el tercer valor es el prompt final ya compuesto,
+    que `procesar_reporte` guarda en `Reporte.prompt_usado` (HU-57): es la síntesis de más alto
+    nivel del reporte, así que es la más representativa de "con qué se generó" cuando hay decenas
+    de otros prompts (uno por pregunta y por momento) que sería excesivo guardar todos."""
     system = BASE_SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
 
     lineas = [
         f"Participantes totales: {participacion['total_participantes']}.",
@@ -1001,7 +1076,8 @@ def analizar_jornada(plantilla, momentos_analisis, participacion):
     ]
     for m in momentos_analisis:
         lineas.append(f"- {m['descripcion_general']}")
-    return _llamar_llm(system, '\n'.join(lineas), max_tokens=420, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=420, temperature=0.5)
+    return texto, error, system
 
 
 # ---------------------------------------------------------------------------
@@ -1047,12 +1123,25 @@ def procesar_reporte(reporte_id):
         preguntas_por_momento = {m.id: list(m.preguntas.all().order_by('orden')) for m in momentos}
         todas_las_preguntas = [p for m in momentos for p in preguntas_por_momento[m.id]]
 
+        # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md): `contexto_momento`/`instrucciones_momento`
+        # solo tienen sentido cuando el alcance de ESTE reporte es un único momento — con la
+        # jornada completa o varios momentos combinados no hay "el" momento al que referirse, así
+        # que se ignoran (siguen guardados en el modelo por si acaso, pero no viajan al prompt).
+        es_un_solo_momento = len(momentos) == 1
+        contexto_mom = reporte.contexto_momento if es_un_solo_momento else ''
+        instrucciones_mom = reporte.instrucciones_momento if es_un_solo_momento else ''
+
         def _analizar_pregunta_en_hilo(pregunta):
             # Cada pregunta corre en un hilo nuevo del pool de abajo — necesita su propia
             # conexión a la base de datos (Django abre una por hilo; esto la deja limpia si el
             # hilo se reutiliza) antes de tocar el ORM.
             close_old_connections()
-            return pregunta.id, analizar_pregunta(pregunta, reporte.plantilla)
+            resultado = analizar_pregunta(
+                pregunta, reporte.plantilla,
+                enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
+                contexto_momento=contexto_mom, instrucciones_momento=instrucciones_mom,
+            )
+            return pregunta.id, resultado
 
         resultados_pregunta = {}
         with ThreadPoolExecutor(max_workers=LLM_POOL_SIZE) as executor:
@@ -1062,17 +1151,25 @@ def procesar_reporte(reporte_id):
         def _sintetizar_momento_en_hilo(momento):
             close_old_connections()
             analisis_preguntas = [resultados_pregunta[p.id] for p in preguntas_por_momento[momento.id]]
-            return _sintetizar_momento(momento, analisis_preguntas, reporte.plantilla)
+            return _sintetizar_momento(
+                momento, analisis_preguntas, reporte.plantilla,
+                enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
+                contexto_momento=contexto_mom, instrucciones_momento=instrucciones_mom,
+            )
 
         with ThreadPoolExecutor(max_workers=min(LLM_POOL_SIZE, len(momentos))) as executor:
             momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))
 
-        texto, error_narrativa = analizar_jornada(reporte.plantilla, momentos_analisis, participacion)
+        texto, error_narrativa, system_jornada = analizar_jornada(
+            reporte.plantilla, momentos_analisis, participacion,
+            enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
+        )
 
         reporte.analisis = {'participacion': participacion, 'momentos': momentos_analisis}
         reporte.texto_reporte = texto or FALLBACK_TEXTO
         reporte.modelo_usado = DEFAULT_MODEL_FILE if texto else ''
         reporte.error_mensaje = '' if texto else f'Síntesis de jornada no generada: {error_narrativa}'
+        reporte.prompt_usado = system_jornada
         reporte.estado = Reporte.ESTADO_COMPLETO
         reporte.completado_en = timezone.now()
         reporte.save()
