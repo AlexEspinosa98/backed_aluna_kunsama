@@ -478,8 +478,8 @@ class AnalisisV2(models.Model):
 
     class Meta:
         ordering = ['-creado_en']
-        verbose_name = 'Análisis v2 (contrato kunsamu.analisis/v2)'
-        verbose_name_plural = 'Análisis v2 (contrato kunsamu.analisis/v2)'
+        verbose_name = 'Análisis v2'
+        verbose_name_plural = 'Análisis v2'
 
     def __str__(self):
         return f'Análisis v2 {self.id} · {self.jornada} · {self.modo} · {self.pipeline} · {self.estado}'

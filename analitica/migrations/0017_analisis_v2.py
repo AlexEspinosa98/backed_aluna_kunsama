@@ -40,8 +40,8 @@ class Migration(migrations.Migration):
                 ('solicitado_por', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='analisis_v2_solicitados', to=settings.AUTH_USER_MODEL)),
             ],
             options={
-                'verbose_name': 'Análisis v2 (contrato kunsamu.analisis/v2)',
-                'verbose_name_plural': 'Análisis v2 (contrato kunsamu.analisis/v2)',
+                'verbose_name': 'Análisis v2',
+                'verbose_name_plural': 'Análisis v2',
                 'ordering': ['-creado_en'],
             },
         ),
