@@ -595,3 +595,115 @@ class InfografiaDesdeAnalisisV2Tests(APITestCase):
         reporte = Reporte.objects.create(jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO)
         resp = self.client.post('/api/admin/infografias/', {'analisis_v2': self.analisis.id, 'reporte': reporte.id}, format='json')
         self.assertEqual(resp.status_code, 400)
+
+
+from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
+from .analysis import procesar_reporte
+from .models import AnalisisJornadaIA, AnalisisMomentoIA
+
+
+class EndpointsExistentesProducenV2Tests(TestCase):
+    """Rediseño: los tres puntos de entrada existentes (AnalisisJornadaIA, AnalisisMomentoIA,
+    Reporte) corren el pipeline v2 y guardan el contrato kunsamu.analisis/v2 en su campo de
+    siempre. La llamada a OpenAI se mockea con una salida que siempre valida (ver
+    ProcesarAnalisisV2Tests._salida_valida)."""
+
+    def setUp(self):
+        self.d = crear_jornada_completa()
+
+    @staticmethod
+    def _salida(pipeline):
+        def _fake(system, user, modelo=None, reparacion=None):
+            return construir_salida_sin_datos(json.loads(user), pipeline), None, {'finish_reason': 'stop'}
+        return _fake
+
+    def test_analisis_jornada_ia_usa_prompt_llm_integral(self):
+        a = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'], enfoque='cualitativo', contexto='C')
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('llm')) as llamada:
+            analizar_jornada_ia(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisJornadaIA.ESTADO_COMPLETO, a.error_mensaje)
+        self.assertEqual(a.resultado['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(a.resultado['alcance']['modo'], 'integral')
+        self.assertEqual(a.entrada['personalizacion']['contexto_usuario'], 'C')
+        self.assertEqual(a.version_esquema, 'v2.0')
+        self.assertTrue(a.prompt_usado.startswith('# System prompt Kunsamu — LLM'))
+        self.assertEqual(llamada.call_args.args[0], a.prompt_usado)  # system = archivo íntegro, sin anexos
+        self.assertNotIn('ENFOQUE', a.prompt_usado)
+
+    def test_analisis_momento_ia_usa_por_momento_con_personalizacion(self):
+        m = self.d['m1']
+        a = AnalisisMomentoIA.objects.create(momento=m, contexto_momento='CtxM', instrucciones_momento='InsM')
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('llm')):
+            analizar_momento_ia(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisMomentoIA.ESTADO_COMPLETO, a.error_mensaje)
+        self.assertEqual(a.resultado['alcance'], {'modo': 'por_momento', 'jornada_id': str(self.d['jornada'].id), 'momento_ids': [str(m.id)]})
+        self.assertEqual(a.entrada['personalizacion']['instrucciones_por_momento'],
+                         [{'momento_id': str(m.id), 'instrucciones': 'InsM', 'contexto': 'CtxM'}])
+
+    def test_reporte_usa_bertopic_llm_y_llena_texto_reporte(self):
+        reporte = Reporte.objects.create(jornada=self.d['jornada'], alcance=Reporte.ALCANCE_JORNADA)
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('bertopic_llm')):
+            procesar_reporte(reporte.id)
+        reporte.refresh_from_db()
+        self.assertEqual(reporte.estado, Reporte.ESTADO_COMPLETO, reporte.error_mensaje)
+        self.assertEqual(reporte.analisis['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(reporte.analisis['pipeline'], 'bertopic_llm')
+        self.assertTrue(reporte.prompt_usado.startswith('# System prompt Kunsamu — BERTopic + LLM'))
+        self.assertEqual(reporte.entrada['bertopic']['version_adaptador'], '1.0')
+        self.assertTrue(reporte.texto_reporte)
+        self.assertEqual(reporte.texto_reporte, reporte.analisis['informes'][0]['resumen'])
+
+    def test_reporte_por_momento_con_varios_momentos(self):
+        reporte = Reporte.objects.create(jornada=self.d['jornada'], alcance=Reporte.ALCANCE_MOMENTOS)
+        reporte.momentos.set([self.d['m1'], self.d['m2']])
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('bertopic_llm')):
+            procesar_reporte(reporte.id)
+        reporte.refresh_from_db()
+        self.assertEqual(reporte.estado, Reporte.ESTADO_COMPLETO, reporte.error_mensaje)
+        self.assertEqual(reporte.analisis['alcance']['modo'], 'por_momento')
+        self.assertEqual(len(reporte.analisis['informes']), 2)
+
+    def test_error_del_proveedor_deja_registro_en_error_con_diagnostico(self):
+        a = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'])
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', return_value=(None, 'boom', {})):
+            analizar_jornada_ia(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisJornadaIA.ESTADO_ERROR)
+        self.assertEqual(a.error_mensaje, 'boom')
+        self.assertEqual(a.resultado, {})
+        self.assertEqual(len(a.diagnostico['intentos']), 1)
+
+
+class ListaUnificadaYPresentacionV2Tests(APITestCase):
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.d = crear_jornada_completa()
+        self.client.force_authenticate(user=self.admin)
+
+    def test_items_legacy_traen_version_y_estado_analitico(self):
+        viejo = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'], estado='completo', resultado={'resumen_ejecutivo': 'x', 'hallazgos': []})
+        nuevo = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'], estado='completo', resultado={'version': 'kunsamu.analisis/v2', 'estado': 'parcial'})
+        resp = self.client.get(f"/api/admin/analisis/?jornada={self.d['jornada'].id}")
+        por_id = {i['id']: i for i in resp.data if i['tipo'] == 'analisis_jornada'}
+        self.assertIsNone(por_id[viejo.id]['version'])
+        self.assertEqual(por_id[nuevo.id]['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(por_id[nuevo.id]['estado_analitico'], 'parcial')
+
+    def test_presentacion_y_pdf_dan_400_para_reporte_v2(self):
+        reporte = Reporte.objects.create(
+            jornada=self.d['jornada'], alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+            analisis={'version': 'kunsamu.analisis/v2', 'estado': 'completo', 'informes': []},
+        )
+        resp = self.client.post(f'/api/admin/reportes/{reporte.id}/generar-presentacion/')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('v2', resp.data['detail'])
+        resp = self.client.get(f'/api/admin/reportes/{reporte.id}/pdf/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_detalle_legacy_expone_versiones_y_diagnostico(self):
+        a = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'], version_prompt='v2.0', diagnostico={'intentos': []})
+        resp = self.client.get(f'/api/admin/analisis-jornada-ia/{a.id}/')
+        self.assertEqual(resp.data['version_prompt'], 'v2.0')
+        self.assertEqual(resp.data['diagnostico'], {'intentos': []})

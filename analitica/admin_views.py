@@ -55,6 +55,22 @@ UMBRAL_HUERFANO_INFOGRAFIA = timedelta(minutes=10)
 UMBRAL_HUERFANO_ANALISIS_V2 = timedelta(minutes=45)
 
 
+def _es_resultado_v2(resultado):
+    return (resultado or {}).get('version') == VERSION_V2
+
+
+# La presentación HTML (analitica/presentacion.py) y el PDF (analitica/pdf_presentacion.py) leen el
+# formato jerárquico ANTERIOR de `Reporte.analisis` (participacion + momentos + preguntas). Desde
+# el rediseño los reportes nuevos traen el contrato kunsamu.analisis/v2, que el frontend renderiza
+# con su propio renderer; adaptar esas dos capas es una HU aparte — mientras tanto, un 400 claro en
+# vez de una página o un PDF vacíos.
+MENSAJE_SIN_PRESENTACION_V2 = (
+    'Este reporte está en el formato kunsamu.analisis/v2: la presentación HTML y el PDF del '
+    'servidor todavía no soportan ese formato (se renderiza en el panel). Sigue disponible para '
+    'los reportes generados antes del rediseño.'
+)
+
+
 def _sin_respuestas(momentos):
     """True si NINGUNA pregunta de estos momentos tiene una sola `Respuesta` real — el guard de
     HU-57 §5 (docs/HU_BACKEND_ANALISIS_GUIADO.md): "sin respuestas en el alcance → 400 al crear,
@@ -224,6 +240,8 @@ class ReporteViewSet(
                            'presentación se genera a partir de datos ya calculados.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _es_resultado_v2(reporte.analisis):
+            return Response({'detail': MENSAJE_SIN_PRESENTACION_V2}, status=status.HTTP_400_BAD_REQUEST)
         # Auto-sanación, mismo espíritu que en create(): si quedó 'procesando' hace más de
         # UMBRAL_HUERFANO_PRESENTACION, el worker que la generaba ya no existe (crash, redeploy) —
         # se marca error para no bloquear un reintento legítimo para siempre.
@@ -292,6 +310,8 @@ class ReporteViewSet(
                 {'detail': 'El análisis de este reporte todavía no está completo.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _es_resultado_v2(reporte.analisis):
+            return Response({'detail': MENSAJE_SIN_PRESENTACION_V2}, status=status.HTTP_400_BAD_REQUEST)
         return construir_pdf_response(reporte)
 
 
@@ -567,7 +587,16 @@ def _item_reporte(reporte):
         'error_mensaje': reporte.error_mensaje,
         'creado_en': reporte.creado_en,
         'completado_en': reporte.completado_en,
+        **_claves_v2(reporte.analisis),
     }
+
+
+def _claves_v2(resultado):
+    """`version` y `estado_analitico` del resultado, en TODOS los items de la lista unificada: es
+    lo que le dice al frontend qué renderer usar. Un registro anterior al rediseño (formato
+    jerárquico / hallazgos con tipo_grafica) no trae `version` y sale con `null` en ambas."""
+    resultado = resultado or {}
+    return {'version': resultado.get('version'), 'estado_analitico': resultado.get('estado')}
 
 
 def _item_analisis_momento(analisis):
@@ -585,6 +614,7 @@ def _item_analisis_momento(analisis):
         'error_mensaje': analisis.error_mensaje,
         'creado_en': analisis.creado_en,
         'completado_en': analisis.completado_en,
+        **_claves_v2(analisis.resultado),
     }
 
 
@@ -603,6 +633,7 @@ def _item_analisis_jornada(analisis):
         'error_mensaje': analisis.error_mensaje,
         'creado_en': analisis.creado_en,
         'completado_en': analisis.completado_en,
+        **_claves_v2(analisis.resultado),
     }
 
 

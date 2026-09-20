@@ -30,6 +30,8 @@ from django.utils import timezone
 
 from jornadas.models import JornadaAsset
 
+from .v2.contrato import VERSION as VERSION_V2
+
 DEFAULT_IMAGE_MODEL = os.environ.get('OPENAI_IMAGE_MODEL', 'gpt-image-2')
 GENERATION_TIMEOUT_SECONDS = 300
 # 16:9 real en píxeles. gpt-image-2 acepta resoluciones arbitrarias (no solo el enum que declara
@@ -188,12 +190,11 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
+def _es_resultado_v2(resultado):
+    return (resultado or {}).get('version') == VERSION_V2
+
+
 def _datos_desde_analisis_v2(jornada, analisis_v2):
-    """Traduce un resultado kunsamu.analisis/v2 al MISMO diccionario que las láminas ya consumen
-    para los análisis IA legacy (`resumen_ejecutivo` + `hallazgos[{titulo, descripcion,
-    tipo_grafica, datos[{etiqueta, valor, unidad}]}]`) — el prompt de imagen no cambia. La
-    descripción es `afirmacion` (+ `implicacion`); los datos salen de `metricas` y, si el
-    hallazgo no trae métricas pero sí una visualización categórica, de sus filas."""
     from .models import AnalisisV2
 
     if analisis_v2.estado != AnalisisV2.ESTADO_COMPLETO or not analisis_v2.resultado:
@@ -201,9 +202,21 @@ def _datos_desde_analisis_v2(jornada, analisis_v2):
             f'El análisis v2 #{analisis_v2.id} no está completo o no tiene resultado. Espera a que '
             'termine y vuelve a pedir la infografía.'
         )
-    resultado = analisis_v2.resultado
+    momentos = list(analisis_v2.momentos.all())
+    momento = momentos[0] if analisis_v2.modo == AnalisisV2.MODO_POR_MOMENTO and len(momentos) == 1 else None
+    return _datos_desde_resultado_v2(jornada, analisis_v2.resultado, momento=momento, fuente='analisis_v2')
+
+
+def _datos_desde_resultado_v2(jornada, resultado, momento=None, fuente='analisis_v2'):
+    """Traduce un resultado kunsamu.analisis/v2 al MISMO diccionario que las láminas ya consumen
+    para los análisis IA anteriores al rediseño (`resumen_ejecutivo` + `hallazgos[{titulo,
+    descripcion, tipo_grafica, datos[{etiqueta, valor, unidad}]}]`) — el prompt de imagen no
+    cambia. La descripción es `afirmacion` (+ `implicacion`); los datos salen de `metricas` y, si
+    el hallazgo no trae métricas pero sí una visualización categórica, de sus filas. Desde el
+    rediseño lo usan las cuatro vías (Reporte, AnalisisMomentoIA, AnalisisJornadaIA, AnalisisV2):
+    cualquier registro cuyo resultado traiga `version` v2 pasa por acá."""
     if resultado.get('estado') == 'sin_datos':
-        return None, 'El análisis v2 no tiene datos (estado sin_datos): no hay nada que ilustrar.'
+        return None, 'El análisis no tiene datos (estado sin_datos): no hay nada que ilustrar.'
 
     categoricas = ('barras', 'barras_agrupadas', 'barras_apiladas', 'barras_100', 'dona', 'radar')
     visuales = {v['id']: v for v in resultado.get('visualizaciones', [])}
@@ -228,10 +241,8 @@ def _datos_desde_analisis_v2(jornada, analisis_v2):
             descripcion = h['afirmacion'] + (f" {h['implicacion']}" if h.get('implicacion') else '')
             hallazgos.append({'titulo': h['titulo'], 'descripcion': descripcion, 'tipo_grafica': tipo_grafica, 'datos': datos})
 
-    momentos = list(analisis_v2.momentos.all())
-    momento = momentos[0] if analisis_v2.modo == AnalisisV2.MODO_POR_MOMENTO and len(momentos) == 1 else None
     return {
-        'fuente': 'analisis_v2',
+        'fuente': fuente,
         'jornada': jornada.nombre,
         'momento': momento.titulo if momento else None,
         'tipo_momento': momento.tipo if momento else None,
@@ -262,6 +273,8 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momen
             analisis_momento = AnalisisMomentoIA.objects.filter(
                 momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
             ).order_by('-creado_en').first()
+        if analisis_momento and _es_resultado_v2(analisis_momento.resultado):
+            return _datos_desde_resultado_v2(jornada, analisis_momento.resultado, momento=momento, fuente='analisis_momento')
         if analisis_momento and analisis_momento.resultado:
             return {
                 'fuente': 'analisis_momento',
@@ -276,6 +289,12 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momen
             'primero (POST /api/admin/analisis-momento-ia/) y vuelve a pedir la infografía.'
         )
 
+    if reporte is not None and _es_resultado_v2(reporte.analisis):
+        momentos_reporte = list(reporte.momentos.all())
+        return _datos_desde_resultado_v2(
+            jornada, reporte.analisis, momento=momentos_reporte[0] if len(momentos_reporte) == 1 else None,
+            fuente='reporte',
+        )
     if reporte is not None and reporte.analisis:
         return {
             'fuente': 'reporte',
@@ -291,6 +310,8 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momen
         analisis_jornada = AnalisisJornadaIA.objects.filter(
             jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
         ).order_by('-creado_en').first()
+    if analisis_jornada and _es_resultado_v2(analisis_jornada.resultado):
+        return _datos_desde_resultado_v2(jornada, analisis_jornada.resultado, fuente='analisis_jornada_ia')
     if analisis_jornada and analisis_jornada.resultado:
         return {
             'fuente': 'analisis_jornada_ia',
@@ -304,6 +325,8 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momen
     reporte_completo = Reporte.objects.filter(
         jornada=jornada, estado=Reporte.ESTADO_COMPLETO,
     ).exclude(analisis={}).order_by('-creado_en').first()
+    if reporte_completo and _es_resultado_v2(reporte_completo.analisis):
+        return _datos_desde_resultado_v2(jornada, reporte_completo.analisis, fuente='reporte')
     if reporte_completo:
         return {
             'fuente': 'reporte',

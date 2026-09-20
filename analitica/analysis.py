@@ -1061,94 +1061,47 @@ def analizar_jornada(plantilla, momentos_analisis, participacion, enfoque=None, 
 # ---------------------------------------------------------------------------
 
 def procesar_reporte(reporte_id):
+    """REDISEÑO (2026-09-20, contrato `kunsamu.analisis/v2`, docs/mejora_promps/): el reporte ya no
+    corre el pipeline multiagente de este módulo (`analizar_pregunta`/`_sintetizar_momento`/
+    `analizar_jornada`, que se conservan como referencia del comportamiento anterior) sino
+    `analitica/v2/procesar.py::ejecutar_analisis_v2` con el pipeline `bertopic_llm`: BERTopic por
+    pregunta de texto (mismo clustering de siempre, exportado como fuente verificable) + UNA
+    llamada a OpenAI con el prompt íntegro de la entrega y salida estructurada validada. El JSON
+    v2 queda en `analisis`; `texto_reporte` lleva los resúmenes de sus informes. Alcance: `momentos`
+    vacío = `integral` (toda la jornada), uno o varios = `por_momento` (un informe por cada uno).
+    `enfoque` y `plantilla` se siguen guardando por compatibilidad pero ya no influyen."""
     close_old_connections()
     from .models import Reporte
+    from .v2.contrato import MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_BERTOPIC_LLM
+    from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada, resumen_de_salida
 
     reporte = None
     try:
-        reporte = Reporte.objects.select_related('jornada', 'plantilla').get(pk=reporte_id)
+        reporte = Reporte.objects.select_related('jornada').get(pk=reporte_id)
         reporte.estado = Reporte.ESTADO_PROCESANDO
         reporte.save(update_fields=['estado'])
 
-        momentos = list(reporte.momentos.all()) or list(reporte.jornada.momentos.all())
-        if not momentos:
+        momentos = list(reporte.momentos.all())
+        modo = MODO_POR_MOMENTO if momentos else MODO_INTEGRAL
+        if modo == MODO_INTEGRAL and not reporte.jornada.momentos.exists():
             raise ValueError('La jornada no tiene momentos para analizar.')
-        momentos.sort(key=lambda m: m.orden)
-
-        from participantes.models import Participante, Respuesta
-
-        from jornadas.models import Pregunta
-
-        total_participantes = Participante.objects.filter(jornada=reporte.jornada).count()
-        preguntas_scope = Pregunta.objects.filter(momento__in=momentos)
-        participantes_respondieron = set(
-            Respuesta.objects.filter(pregunta__in=preguntas_scope, participante__isnull=False)
-            .values_list('participante_id', flat=True)
-            .distinct()
+        # contexto_momento/instrucciones_momento solo tienen sentido con un único momento (HU-57).
+        personalizacion = []
+        if len(momentos) == 1 and (reporte.contexto_momento or reporte.instrucciones_momento):
+            personalizacion = [{
+                'momento': momentos[0].id, 'contexto': reporte.contexto_momento,
+                'instrucciones': reporte.instrucciones_momento,
+            }]
+        r = ejecutar_analisis_v2(
+            reporte.jornada, modo, momentos, PIPELINE_BERTOPIC_LLM,
+            contexto=reporte.contexto, instrucciones=reporte.instrucciones,
+            personalizacion_momentos=personalizacion, referencia=f'reporte-{reporte.id}',
+            al_guardar_entrada=guardador_de_entrada(reporte),
         )
-        tasa = (
-            round(len(participantes_respondieron) / total_participantes * 100, 1)
-            if total_participantes else 0.0
+        aplicar_resultado(
+            reporte, r, campo_resultado='analisis',
+            extra={'texto_reporte': resumen_de_salida(r['salida']) or FALLBACK_TEXTO},
         )
-        participacion = {
-            'total_participantes': total_participantes,
-            'participantes_que_respondieron': len(participantes_respondieron),
-            'tasa_participacion': tasa,
-        }
-
-        preguntas_por_momento = {m.id: list(m.preguntas.all().order_by('orden')) for m in momentos}
-        todas_las_preguntas = [p for m in momentos for p in preguntas_por_momento[m.id]]
-
-        # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md): `contexto_momento`/`instrucciones_momento`
-        # solo tienen sentido cuando el alcance de ESTE reporte es un único momento — con la
-        # jornada completa o varios momentos combinados no hay "el" momento al que referirse, así
-        # que se ignoran (siguen guardados en el modelo por si acaso, pero no viajan al prompt).
-        es_un_solo_momento = len(momentos) == 1
-        contexto_mom = reporte.contexto_momento if es_un_solo_momento else ''
-        instrucciones_mom = reporte.instrucciones_momento if es_un_solo_momento else ''
-
-        def _analizar_pregunta_en_hilo(pregunta):
-            # Cada pregunta corre en un hilo nuevo del pool de abajo — necesita su propia
-            # conexión a la base de datos (Django abre una por hilo; esto la deja limpia si el
-            # hilo se reutiliza) antes de tocar el ORM.
-            close_old_connections()
-            resultado = analizar_pregunta(
-                pregunta, reporte.plantilla,
-                enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
-                contexto_momento=contexto_mom, instrucciones_momento=instrucciones_mom,
-            )
-            return pregunta.id, resultado
-
-        resultados_pregunta = {}
-        with ThreadPoolExecutor(max_workers=OPENAI_CONCURRENCIA_MAXIMA) as executor:
-            for pregunta_id, resultado in executor.map(_analizar_pregunta_en_hilo, todas_las_preguntas):
-                resultados_pregunta[pregunta_id] = resultado
-
-        def _sintetizar_momento_en_hilo(momento):
-            close_old_connections()
-            analisis_preguntas = [resultados_pregunta[p.id] for p in preguntas_por_momento[momento.id]]
-            return _sintetizar_momento(
-                momento, analisis_preguntas, reporte.plantilla,
-                enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
-                contexto_momento=contexto_mom, instrucciones_momento=instrucciones_mom,
-            )
-
-        with ThreadPoolExecutor(max_workers=min(OPENAI_CONCURRENCIA_MAXIMA, len(momentos))) as executor:
-            momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))
-
-        texto, error_narrativa, system_jornada = analizar_jornada(
-            reporte.plantilla, momentos_analisis, participacion,
-            enfoque=reporte.enfoque, contexto=reporte.contexto, instrucciones=reporte.instrucciones,
-        )
-
-        reporte.analisis = {'participacion': participacion, 'momentos': momentos_analisis}
-        reporte.texto_reporte = texto or FALLBACK_TEXTO
-        reporte.modelo_usado = MODELO_USADO_LABEL if texto else ''
-        reporte.error_mensaje = '' if texto else f'Síntesis de jornada no generada: {error_narrativa}'
-        reporte.prompt_usado = system_jornada
-        reporte.estado = Reporte.ESTADO_COMPLETO
-        reporte.completado_en = timezone.now()
-        reporte.save()
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if reporte is not None:
             reporte.estado = Reporte.ESTADO_ERROR

@@ -63,6 +63,23 @@ class AnalisisGuiadoPorMomentoMixin(models.Model):
         abstract = True
 
 
+class ResultadoV2Mixin(models.Model):
+    """Auditoría del contrato `kunsamu.analisis/v2` (docs/mejora_promps/) en los tres análisis
+    existentes, que desde el rediseño producen ese contrato en `resultado`/`analisis` (ver
+    `analitica/v2/procesar.py::ejecutar_analisis_v2`). `entrada` es el sobre normalizado EXACTO
+    que se le mandó al modelo, guardado antes de llamar y nunca recalculado: los JSON Pointers de
+    citas y documentos BERTopic del resultado apuntan a índices de sus arrays. `diagnostico`
+    conserva lo descartado (salidas inválidas, errores, metadatos de las llamadas, notas del
+    adaptador BERTopic). Un registro anterior al rediseño tiene los cuatro campos vacíos."""
+    entrada = models.JSONField(default=dict, blank=True)
+    diagnostico = models.JSONField(default=dict, blank=True)
+    version_prompt = models.CharField(max_length=40, blank=True)
+    version_esquema = models.CharField(max_length=40, blank=True)
+
+    class Meta:
+        abstract = True
+
+
 class PlantillaAnalisis(models.Model):
     # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
     # aplican a cada pregunta, momento y jornada, ver _instrucciones_plantilla.
@@ -114,7 +131,7 @@ class PlantillaAnalisis(models.Model):
             )
 
 
-class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
+class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, ResultadoV2Mixin, models.Model):
     ALCANCE_JORNADA = 'jornada'
     ALCANCE_MOMENTO = 'momento'
     ALCANCE_MOMENTOS = 'momentos'
@@ -213,7 +230,7 @@ class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
         super().save(*args, **kwargs)
 
 
-class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
+class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, ResultadoV2Mixin, models.Model):
     """Vía de análisis alternativa a `Reporte`: en vez del pipeline multiagente de `analysis.py`
     (una llamada a OpenAI por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI
     lee el instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
@@ -262,7 +279,7 @@ class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, mode
         return f'Análisis IA {self.id} · {self.momento} · {self.estado}'
 
 
-class AnalisisJornadaIA(AnalisisGuiadoMixin, models.Model):
+class AnalisisJornadaIA(AnalisisGuiadoMixin, ResultadoV2Mixin, models.Model):
     """Mismo mecanismo que `AnalisisMomentoIA` (una sola llamada a OpenAI, sin pasar por
     `Reporte`), pero a escala de jornada completa: lee TODOS los momentos activos de la jornada
     (cada uno con su contexto, preguntas y respuestas reales) en una sola llamada, para encontrar

@@ -1,18 +1,21 @@
-"""Vía de análisis alternativa a `analysis.py`: en vez del pipeline multiagente de ese módulo (una
-llamada a OpenAI por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
-INSTRUMENTO completo (de un momento, o de la jornada entera) y redacta un reporte general — no
-una lista mecánica de "pregunta 1 dice X, pregunta 2 dice Y". El objetivo es que GPT deduzca
-hallazgos que cruzan varias preguntas (o varios momentos, a escala de jornada) a la vez, igual
-que lo haría un analista humano leyendo todo el material de corrido. Ninguna de las dos vías
-depende de un `Reporte` — `analizar_momento_ia` se dispara directo desde un `Momento`
-(AnalisisMomentoIA) y `analizar_jornada_ia` desde una `Jornada` completa (AnalisisJornadaIA)."""
+"""Análisis con IA de un momento (`analizar_momento_ia`, AnalisisMomentoIA) o de una jornada
+completa (`analizar_jornada_ia`, AnalisisJornadaIA).
+
+REDISEÑO (2026-09-20, contrato `kunsamu.analisis/v2`, docs/mejora_promps/): las dos funciones de
+entrada ya NO usan los prompts de este archivo — delegan en `analitica/v2/procesar.py::
+ejecutar_analisis_v2` (pipeline `llm`, prompt íntegro de la entrega del frontend, salida
+estructurada validada) y guardan el JSON v2 en `resultado`. `SYSTEM_PROMPT`, `SYSTEM_PROMPT_JORNADA`,
+`_construir_payload_*`, `_llamar_openai_json` y `_validar_y_limpiar*` se conservan como referencia
+del comportamiento anterior (y porque los registros históricos se generaron con ellos), pero
+ningún análisis nuevo pasa por ahí."""
 import json
 import os
 import threading
 
 from django.utils import timezone
 
-from .prompt_comun import REGLA_DATOS_ANALISIS, ensamblar_system
+from .prompt_comun import REGLA_DATOS_ANALISIS, ensamblar_system  # noqa: F401 — usados por el flujo legacy conservado abajo
+from .v2.contrato import MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_LLM
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 # Los modelos de razonamiento (o1/o3/gpt-5+) aceptan un nivel de esfuerzo de razonamiento en vez
@@ -458,40 +461,28 @@ def analizar_momento_ia(analisis_id):
 
     analisis = None
     try:
-        analisis = AnalisisMomentoIA.objects.select_related('momento').get(pk=analisis_id)
+        analisis = AnalisisMomentoIA.objects.select_related('momento', 'momento__jornada').get(pk=analisis_id)
         analisis.estado = AnalisisMomentoIA.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
-        plantilla = PlantillaAnalisis.objects.filter(
-            tipo=PlantillaAnalisis.TIPO_GPT_MOMENTO, predeterminada=True
-        ).first()
-        # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md): enfoque/contexto/instrucciones vienen del
-        # asistente guiado del panel — `ensamblar_system` los intercala en el orden fijo (§2) y
-        # deja la regla de datos siempre al final, sin importar qué haya escrito el usuario.
-        system = ensamblar_system(
-            base=SYSTEM_PROMPT, plantilla_extra=_instrucciones_plantilla(plantilla),
-            enfoque=analisis.enfoque, contexto=analisis.contexto,
-            instrucciones=analisis.instrucciones, contexto_momento=analisis.contexto_momento,
-            instrucciones_momento=analisis.instrucciones_momento, regla_datos=REGLA_DATOS_ANALISIS,
-        )
-        payload = _construir_payload_momento(analisis.momento)
-        user = 'DATOS DEL MOMENTO (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
-        modelo = DEFAULT_MODEL
-        resultado, error = _llamar_openai_json(system, user, model=modelo)
+        # Rediseño (contrato kunsamu.analisis/v2, docs/mejora_promps/): este endpoint produce el
+        # contrato v2 con el pipeline `llm` en modo `por_momento` sobre ESTE momento. El prompt es
+        # el archivo íntegro de la entrega (analitica/v2/recursos/), sin plantilla, sin bloque de
+        # enfoque ni regla anexada; contexto/instrucciones viajan como datos en `personalizacion`.
+        # `enfoque` se sigue guardando por compatibilidad pero ya no influye en nada.
+        from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 
-        analisis.prompt_usado = system
-        if resultado:
-            analisis.resultado = _validar_y_limpiar(resultado, analisis.momento, analisis.enfoque)
-            analisis.estado = AnalisisMomentoIA.ESTADO_COMPLETO
-            analisis.error_mensaje = ''
-            analisis.modelo_usado = MODELO_USADO_LABEL
-            analisis.completado_en = timezone.now()
-        else:
-            analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
-            analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
-        analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en', 'prompt_usado',
-        ])
+        momento = analisis.momento
+        r = ejecutar_analisis_v2(
+            momento.jornada, MODO_POR_MOMENTO, [momento], PIPELINE_LLM,
+            contexto=analisis.contexto, instrucciones=analisis.instrucciones,
+            personalizacion_momentos=[{
+                'momento': momento.id, 'contexto': analisis.contexto_momento,
+                'instrucciones': analisis.instrucciones_momento,
+            }],
+            referencia=f'analisis-momento-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+        )
+        aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:
             analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
@@ -536,37 +527,18 @@ def analizar_jornada_ia(analisis_id):
         analisis.estado = AnalisisJornadaIA.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
-        plantilla = PlantillaAnalisis.objects.filter(
-            tipo=PlantillaAnalisis.TIPO_GPT_JORNADA, predeterminada=True
-        ).first()
-        # HU-57: mismo ensamblado que analizar_momento_ia, sin contexto_momento/instrucciones_
-        # momento — AnalisisJornadaIA es siempre de la jornada entera (ver AnalisisGuiadoMixin).
-        system = ensamblar_system(
-            base=SYSTEM_PROMPT_JORNADA, plantilla_extra=_instrucciones_plantilla(plantilla),
-            enfoque=analisis.enfoque, contexto=analisis.contexto,
-            instrucciones=analisis.instrucciones, regla_datos=REGLA_DATOS_ANALISIS,
-        )
-        payload = _construir_payload_jornada(analisis.jornada)
-        user = 'DATOS DE LA JORNADA (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
-        resultado, error = _llamar_openai_json(
-            system, user, model=DEFAULT_MODEL,
-            max_output_tokens=MAX_OUTPUT_TOKENS_JORNADA,
-            timeout_seconds=GENERATION_TIMEOUT_SECONDS_JORNADA,
-        )
+        # Rediseño (contrato kunsamu.analisis/v2): pipeline `llm` en modo `integral` — todos los
+        # momentos de la jornada, un solo informe. Ver el comentario en analizar_momento_ia. Las
+        # transcripciones vinculadas (`_transcripciones_payload`) todavía no entran como fuente
+        # del contrato v2 (HU aparte).
+        from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 
-        analisis.prompt_usado = system
-        if resultado:
-            analisis.resultado = _validar_y_limpiar_jornada(resultado, analisis.jornada, analisis.enfoque)
-            analisis.estado = AnalisisJornadaIA.ESTADO_COMPLETO
-            analisis.error_mensaje = ''
-            analisis.modelo_usado = MODELO_USADO_LABEL
-            analisis.completado_en = timezone.now()
-        else:
-            analisis.estado = AnalisisJornadaIA.ESTADO_ERROR
-            analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
-        analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en', 'prompt_usado',
-        ])
+        r = ejecutar_analisis_v2(
+            analisis.jornada, MODO_INTEGRAL, [], PIPELINE_LLM,
+            contexto=analisis.contexto, instrucciones=analisis.instrucciones,
+            referencia=f'analisis-jornada-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+        )
+        aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:
             analisis.estado = AnalisisJornadaIA.ESTADO_ERROR

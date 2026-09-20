@@ -46,6 +46,7 @@ class ReporteSerializer(serializers.ModelSerializer):
             'id', 'slug', 'jornada', 'momentos', 'alcance', 'metodo', 'plantilla', 'plantilla_nombre',
             'enfoque', 'contexto', 'instrucciones', 'contexto_momento', 'instrucciones_momento',
             'estado', 'error_mensaje', 'analisis', 'texto_reporte', 'modelo_usado', 'prompt_usado',
+            'diagnostico', 'version_prompt', 'version_esquema',
             'presentacion_html', 'presentacion_estado', 'presentacion_error',
             'presentacion_modelo', 'presentacion_generada_en',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
@@ -110,7 +111,8 @@ class AnalisisMomentoIASerializer(serializers.ModelSerializer):
         model = AnalisisMomentoIA
         fields = [
             'id', 'momento', 'momento_titulo', 'momento_orden', 'metodo', 'estado', 'resultado',
-            'error_mensaje', 'modelo_usado', 'prompt_usado', *CAMPOS_ANALISIS_GUIADO_MOMENTO,
+            'error_mensaje', 'modelo_usado', 'prompt_usado', 'diagnostico', 'version_prompt',
+            'version_esquema', *CAMPOS_ANALISIS_GUIADO_MOMENTO,
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
@@ -136,7 +138,7 @@ class AnalisisJornadaIASerializer(serializers.ModelSerializer):
         model = AnalisisJornadaIA
         fields = [
             'id', 'jornada', 'metodo', 'estado', 'resultado', 'error_mensaje', 'modelo_usado',
-            'prompt_usado', *CAMPOS_ANALISIS_GUIADO,
+            'prompt_usado', 'diagnostico', 'version_prompt', 'version_esquema', *CAMPOS_ANALISIS_GUIADO,
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
