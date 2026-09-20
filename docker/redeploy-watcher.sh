@@ -24,6 +24,18 @@ INTERVALO="${SYNC_PERIOD_SECONDS:-30}"
 # este contenedor corre como root, el checkout en el host es de un usuario normal.
 git config --global --add safe.directory "$REPO_DIR"
 
+# OpenSSH rechaza un ~/.ssh/config (o una llave) que no sea dueño del usuario que corre ssh (acá,
+# root) ni de root mismo — "Bad owner or permissions". El bind mount de solo lectura conserva el
+# uid del HOST (un usuario normal, no root), así que ssh los rechaza tal cual quedan montados. En
+# vez de pelear con permisos de un mount de solo lectura, se copian a una ruta propia del
+# contenedor (efímera, se repuebla en cada arranque) donde sí se les puede fijar dueño/permisos.
+if [ -d /ssh-host ]; then
+    mkdir -p /root/.ssh
+    cp -a /ssh-host/. /root/.ssh/
+    chmod 700 /root/.ssh
+    find /root/.ssh -type f -exec chmod 600 {} \;
+fi
+
 cd "$REPO_DIR"
 
 echo "[redeploy-watcher] Vigilando origin/$RAMA en $REPO_DIR cada ${INTERVALO}s..."

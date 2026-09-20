@@ -98,9 +98,12 @@ services:
       REPO_DIR: ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
     volumes:
       - ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}:${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
-      # Llave SSH ya autorizada contra GitHub en este host (ver docs/DOCKER.md) — de solo lectura,
-      # git nunca necesita escribir ahí.
-      - ${HOME}/.ssh:/root/.ssh:ro
+      # Llave SSH ya autorizada contra GitHub en este host (ver docs/DOCKER.md), montada de solo
+      # lectura en una ruta APARTE (no directo en /root/.ssh): openssh rechaza un config/llave que
+      # no sea dueño de root o de quien lo ejecuta, y un bind mount de solo lectura conserva el
+      # uid del host (un usuario normal) — `redeploy-watcher.sh` copia estos archivos a
+      # /root/.ssh en cada arranque, donde sí puede fijarles el dueño y los permisos correctos.
+      - ${HOME}/.ssh:/ssh-host:ro
       # El socket de Docker del host — ver la nota de seguridad arriba, es la pieza que de verdad
       # hace falta pesar antes de activar este profile.
       - /var/run/docker.sock:/var/run/docker.sock
