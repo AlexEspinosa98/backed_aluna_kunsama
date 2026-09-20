@@ -319,7 +319,14 @@ class InfografiaJornada(models.Model):
     del módulo —el pipeline local (`Reporte`), el reporte integral de jornada (`AnalisisJornadaIA`)
     o el de un momento (`AnalisisMomentoIA`)— y exigir un `Reporte` dejaba sin salida a quien usara
     las otras: tenía que crear y esperar un reporte que no necesitaba solo para desbloquear el
-    botón. `reporte` y `momento` quedan como referencia opcional de sobre qué se disparó.
+    botón. `reporte`, `analisis_momento` y `analisis_jornada` quedan como referencia opcional de
+    sobre qué se disparó — y, desde que una jornada/momento puede acumular VARIOS análisis
+    completos a la vez (HU-71, distintos métodos y enfoques), son la forma de fijar exactamente
+    CUÁL usar. Sin uno explícito, `infografia_ia_openai._obtener_datos_analitica` sigue cayendo al
+    más reciente completo de ese alcance (comportamiento de siempre, para no romper una petición
+    que solo manda `jornada`/`momento`) — pero un panel que ya sabe qué tarjeta de la lista
+    unificada (`GET /api/admin/analisis/`) generó el clic debe mandar el id explícito, no confiar
+    en que "el más reciente" siga siendo el que el usuario está mirando.
 
     `jornada` sigue siendo obligatoria incluso cuando la infografía es de un momento (se deriva de
     `momento.jornada`): es lo que sostiene el scoping por propietario sin duplicar reglas, y evita
@@ -342,7 +349,20 @@ class InfografiaJornada(models.Model):
     )
     reporte = models.ForeignKey(
         Reporte, on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
-        help_text='Solo si se disparó desde un reporte concreto. Borrarlo no borra la infografía.',
+        help_text='Fija el Reporte (pipeline local) exacto del que salen los datos. Solo aplica '
+        'con alcance de jornada (sin `momento`). Sin esto, se usa el más reciente completo.',
+    )
+    analisis_momento = models.ForeignKey(
+        'AnalisisMomentoIA', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='infografias',
+        help_text='Fija el AnalisisMomentoIA exacto del que salen los datos. Solo aplica con '
+        '`momento`. Sin esto, se usa el más reciente completo de ese momento.',
+    )
+    analisis_jornada = models.ForeignKey(
+        'AnalisisJornadaIA', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='infografias',
+        help_text='Fija el AnalisisJornadaIA exacto del que salen los datos. Solo aplica con '
+        'alcance de jornada (sin `momento`). Sin esto, se usa el más reciente completo.',
     )
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     instrucciones = models.TextField(blank=True, help_text=(

@@ -226,6 +226,147 @@ class InfografiaSinReporteTests(APITestCase):
         self.assertEqual(infografia.reporte, reporte)
 
 
+class InfografiaFijaAnalisisExactoTests(APITestCase):
+    """Una jornada o un momento pueden tener VARIOS análisis completos a la vez (HU-71: distintos
+    métodos y enfoques) — la infografía debe poder fijar exactamente cuál usar, no caer siempre
+    en "el más reciente" (que puede no ser el que la persona está mirando cuando pide la
+    infografía desde una tarjeta concreta de la lista unificada)."""
+
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.jornada = crear_jornada('jornada-fijar-analisis')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+        self.otra_jornada = crear_jornada('jornada-fijar-analisis-otra')
+        self.client.force_authenticate(user=self.admin)
+
+    # --- Nivel función pura: _obtener_datos_analitica usa el fijado, no el más reciente ---
+
+    def test_momento_sin_fijar_usa_el_mas_reciente(self):
+        from .infografia_ia_openai import _obtener_datos_analitica
+
+        AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Viejo', 'hallazgos': []},
+        )
+        nuevo = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Nuevo', 'hallazgos': []},
+        )
+        datos, error = _obtener_datos_analitica(self.jornada, momento=self.momento)
+        self.assertIsNone(error)
+        self.assertEqual(datos['resumen_ejecutivo'], 'Nuevo')
+        self.assertEqual(nuevo.resultado['resumen_ejecutivo'], 'Nuevo')  # sanity
+
+    def test_momento_fijando_el_mas_viejo_lo_usa_pese_a_que_hay_uno_mas_reciente(self):
+        from .infografia_ia_openai import _obtener_datos_analitica
+
+        viejo = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Viejo', 'hallazgos': []},
+        )
+        AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Nuevo', 'hallazgos': []},
+        )
+        datos, error = _obtener_datos_analitica(self.jornada, momento=self.momento, analisis_momento=viejo)
+        self.assertIsNone(error)
+        self.assertEqual(datos['resumen_ejecutivo'], 'Viejo')
+
+    def test_jornada_fijando_el_mas_viejo_lo_usa_pese_a_que_hay_uno_mas_reciente(self):
+        from .infografia_ia_openai import _obtener_datos_analitica
+
+        viejo = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Viejo cualitativo', 'hallazgos': []},
+        )
+        AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Nuevo cuantitativo', 'hallazgos': []},
+        )
+        datos, error = _obtener_datos_analitica(self.jornada, analisis_jornada=viejo)
+        self.assertIsNone(error)
+        self.assertEqual(datos['resumen_ejecutivo'], 'Viejo cualitativo')
+
+    # --- Nivel API: se guarda el id fijado y se validan las combinaciones incoherentes ---
+
+    def test_api_guarda_analisis_momento_fijado(self):
+        analisis = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/infografias/', {
+                'momento': self.momento.id, 'analisis_momento': analisis.id,
+            }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.analisis_momento_id, analisis.id)
+
+    def test_api_guarda_analisis_jornada_fijado(self):
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/infografias/', {
+                'jornada': self.jornada.id, 'analisis_jornada': analisis.id,
+            }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.analisis_jornada_id, analisis.id)
+
+    def test_analisis_momento_de_otra_jornada_da_400(self):
+        momento_ajeno = crear_momento_con_respuesta(self.otra_jornada)
+        analisis_ajeno = AnalisisMomentoIA.objects.create(
+            momento=momento_ajeno, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'momento': self.momento.id, 'analisis_momento': analisis_ajeno.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('analisis_momento', resp.data)
+
+    def test_analisis_jornada_de_otra_jornada_da_400(self):
+        analisis_ajeno = AnalisisJornadaIA.objects.create(
+            jornada=self.otra_jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'jornada': self.jornada.id, 'analisis_jornada': analisis_ajeno.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('analisis_jornada', resp.data)
+
+    def test_analisis_jornada_combinado_con_momento_da_400(self):
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'momento': self.momento.id, 'analisis_jornada': analisis.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('analisis_jornada', resp.data)
+
+    def test_analisis_momento_combinado_con_jornada_da_400(self):
+        analisis = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'jornada': self.jornada.id, 'analisis_momento': analisis.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('analisis_momento', resp.data)
+
+    def test_reporte_y_analisis_jornada_a_la_vez_da_400(self):
+        reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'jornada': self.jornada.id, 'reporte': reporte.id, 'analisis_jornada': analisis.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
 class PlantillaAnalisisPermisosTests(APITestCase):
     def setUp(self):
         self.admin = crear_admin_completo('admin')

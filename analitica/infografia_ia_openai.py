@@ -178,18 +178,25 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
-def _obtener_datos_analitica(jornada, reporte=None, momento=None):
+def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momento=None, analisis_jornada=None):
     """(datos, error) — nunca lanza excepción. El alcance manda: con `momento` se usa el análisis
     integral de ESE momento y no se mira nada de la jornada, porque mezclar los dos produciría una
-    infografía que dice ser de un momento mientras muestra cifras de toda la jornada. Sin momento:
-    el `Reporte` explícito si trae análisis, si no el reporte integral de jornada, y como último
-    recurso cualquier `Reporte` completo."""
+    infografía que dice ser de un momento mientras muestra cifras de toda la jornada.
+
+    `analisis_momento`/`analisis_jornada`/`reporte` FIJAN cuál análisis usar (un id concreto que
+    vino de `InfografiaJornada`, ver ese modelo) — una jornada o un momento puede tener VARIOS
+    análisis completos a la vez (HU-71: distintos métodos y enfoques), así que "el más reciente"
+    no es necesariamente el que el usuario está mirando cuando pide la infografía desde una
+    tarjeta concreta de la lista unificada. Sin uno explícito, se cae al más reciente completo de
+    ese alcance — comportamiento de siempre, para no romper una petición que solo manda
+    `jornada`/`momento`."""
     if momento is not None:
         from .models import AnalisisMomentoIA
 
-        analisis_momento = AnalisisMomentoIA.objects.filter(
-            momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
-        ).order_by('-creado_en').first()
+        if analisis_momento is None:
+            analisis_momento = AnalisisMomentoIA.objects.filter(
+                momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            ).order_by('-creado_en').first()
         if analisis_momento and analisis_momento.resultado:
             return {
                 'fuente': 'analisis_momento',
@@ -215,15 +222,16 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
 
     from .models import AnalisisJornadaIA, Reporte
 
-    analisis_ia = AnalisisJornadaIA.objects.filter(
-        jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
-    ).order_by('-creado_en').first()
-    if analisis_ia and analisis_ia.resultado:
+    if analisis_jornada is None:
+        analisis_jornada = AnalisisJornadaIA.objects.filter(
+            jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+        ).order_by('-creado_en').first()
+    if analisis_jornada and analisis_jornada.resultado:
         return {
             'fuente': 'analisis_jornada_ia',
             'jornada': jornada.nombre,
-            'resumen_ejecutivo': analisis_ia.resultado.get('resumen_ejecutivo'),
-            'hallazgos': analisis_ia.resultado.get('hallazgos'),
+            'resumen_ejecutivo': analisis_jornada.resultado.get('resumen_ejecutivo'),
+            'hallazgos': analisis_jornada.resultado.get('hallazgos'),
         }, None
 
     # Último recurso: cualquier reporte local ya completo de esta jornada. Cubre el caso de pedir
@@ -366,13 +374,16 @@ def generar_infografias(infografia_id):
     infografia = None
     try:
         infografia = InfografiaJornada.objects.select_related(
-            'jornada', 'momento', 'reporte',
+            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada',
         ).get(pk=infografia_id)
         infografia.estado = InfografiaJornada.ESTADO_PROCESANDO
         infografia.save(update_fields=['estado'])
 
         jornada = infografia.jornada
-        datos, error = _obtener_datos_analitica(jornada, infografia.reporte, infografia.momento)
+        datos, error = _obtener_datos_analitica(
+            jornada, infografia.reporte, infografia.momento,
+            infografia.analisis_momento, infografia.analisis_jornada,
+        )
         if error:
             infografia.estado = InfografiaJornada.ESTADO_ERROR
             infografia.error_mensaje = error
