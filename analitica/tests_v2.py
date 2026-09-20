@@ -448,3 +448,93 @@ class ProcesarAnalisisV2Tests(TestCase):
         a.refresh_from_db()
         self.assertEqual(a.estado, AnalisisV2.ESTADO_ERROR)
         self.assertEqual(a.error_mensaje, 'boom')
+
+    def test_bertopic_llm_guarda_ejecuciones_en_la_entrada(self):
+        q = self.d['q_abierta']
+        for i in range(10):
+            Respuesta.objects.create(pregunta=q, texto_libre=f'Texto de prueba número {i}')
+        a = AnalisisV2.objects.create(jornada=self.d['jornada'], modo='por_momento', pipeline='bertopic_llm')
+        a.momentos.set([self.d['m1']])
+
+        class Doble:
+            topics_ = [0] * 6 + [-1] * 5
+            def get_topic_info(self):
+                import pandas as pd
+                return pd.DataFrame({'Topic': [-1, 0], 'Count': [5, 6], 'Name': ['-1_x', '0_prueba']})
+            def get_topic(self, t):
+                return [('prueba', 0.4)]
+            def get_representative_docs(self, t):
+                return []
+
+        def salida(system, user, modelo=None, reparacion=None):
+            entrada = json.loads(user)
+            return construir_salida_sin_datos(entrada, 'bertopic_llm'), None, {}
+
+        with patch('analitica.v2.bertopic_adaptador._ajustar_modelo', return_value=Doble()), \
+             patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=salida):
+            procesar_analisis_v2(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisV2.ESTADO_COMPLETO, a.error_mensaje)
+        self.assertEqual(len(a.entrada['bertopic']['ejecuciones']), 1)
+        self.assertEqual(a.entrada['bertopic']['ejecuciones'][0]['ejecucion_id'], f'run-p{q.id}')
+        self.assertIn(f'fbt-p{q.id}', [f['id'] for f in a.entrada['fuentes']])
+        self.assertEqual(a.diagnostico['bertopic'][0]['motivo'], 'ok')
+        self.assertTrue(a.prompt_usado.startswith('# System prompt Kunsamu — BERTopic + LLM'))
+
+
+from .v2.bertopic_adaptador import anexar_bertopic, exportar_ejecucion, id_topico
+
+
+class BertopicAdaptadorTests(SimpleTestCase):
+    """El adaptador con un doble de BERTopic (sin descargar el modelo de embeddings): mapeo de
+    tópicos/documentos/agregados y el filtro de preguntas con corpus insuficiente."""
+
+    class Doble:
+        topics_ = [0, 0, 0, 1, 1, 1, -1, -1]
+
+        def get_topic_info(self):
+            import pandas as pd
+            return pd.DataFrame({'Topic': [-1, 0, 1], 'Count': [2, 3, 3], 'Name': ['-1_x', '0_horario', '1_turno']})
+
+        def get_topic(self, t):
+            return [('horario', 0.5), ('turno', 0.2)]
+
+        def get_representative_docs(self, t):
+            return ['t0'] if t == 0 else ['t3']
+
+    def test_exportar_ejecucion_mapea_topicos_documentos_y_agregados(self):
+        docs = [(i + 10, {'id': f'r{i}', 'pregunta_id': 'q2', 'sujeto_id': None, 'valor': f't{i}'}) for i in range(8)]
+        fuente, ejecucion = exportar_ejecucion(
+            self.Doble(), docs, 'run-pq2', 'f-m1', 'm1', 'q2', '¿Por qué?', 'analisis-1',
+        )
+        self.assertEqual(fuente['id'], 'fbt-pq2')
+        self.assertEqual(fuente['datos']['documentos'][0]['localizador'], '/respuestas/10/valor')
+        self.assertEqual(fuente['datos']['documentos'][6]['topico_final_id'], id_topico('run-pq2', -1))
+        self.assertEqual(id_topico('run-pq2', -1), 'run-pq2::-1')
+        self.assertTrue(fuente['datos']['documentos'][0]['es_representativo'])
+        self.assertFalse(fuente['datos']['documentos'][1]['es_representativo'])
+        self.assertEqual([t['conteo_documentos'] for t in fuente['datos']['topicos']], [2, 3, 3])
+        self.assertEqual(
+            fuente['datos']['agregados'][0]['conteos'],
+            [{'topico_id': 'run-pq2::-1', 'n': 2}, {'topico_id': 'run-pq2::0', 'n': 3}, {'topico_id': 'run-pq2::1', 'n': 3}],
+        )
+        self.assertEqual(ejecucion['corpus']['outliers_finales_n'], 2)
+        self.assertEqual(ejecucion['fuente_resultados_id'], 'fbt-pq2')
+
+    def test_anexar_bertopic_omite_preguntas_insuficientes(self):
+        docs = [(i + 10, {'id': f'r{i}', 'pregunta_id': 'q2', 'sujeto_id': None, 'valor': f't{i}'}) for i in range(8)]
+        entrada = {
+            'momentos': [{'id': 'm1', 'preguntas': [
+                {'id': 'q2', 'tipo': 'abierta', 'texto': '¿?'}, {'id': 'q1', 'tipo': 'unica', 'texto': 'x'},
+            ]}],
+            'fuentes': [{'id': 'f-m1', 'tipo': 'respuestas', 'momento_ids': ['m1'], 'datos': {'respuestas': [d for _, d in docs]}}],
+        }
+        with patch('analitica.v2.bertopic_adaptador._ajustar_modelo', return_value=self.Doble()):
+            entrada, notas = anexar_bertopic(entrada, analisis_id=1)
+        self.assertEqual(len(entrada['bertopic']['ejecuciones']), 1)
+        self.assertEqual(notas[0]['motivo'], 'ok', notas)
+
+        entrada['fuentes'][0]['datos']['respuestas'] = entrada['fuentes'][0]['datos']['respuestas'][:3]
+        del entrada['fuentes'][1]
+        _, notas = anexar_bertopic(entrada)
+        self.assertEqual(notas[0]['motivo'], 'insuficiente', notas)
