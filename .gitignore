@@ -9,3 +9,5 @@ venv/
 staticfiles/
 gunicorn-*.log
 media/
+.claude/
+tmp/
