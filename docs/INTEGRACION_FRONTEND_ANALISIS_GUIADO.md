@@ -58,6 +58,15 @@ Una jornada o un momento acumulan **varios** análisis a la vez, de cualquier co
 método/enfoque — no hay un límite de "uno vigente". Por eso la lista unificada (§4) existe y por
 eso la infografía necesita poder fijar cuál usar (§5).
 
+**El análisis de jornada completa (`bertopic` y `openai`) incluye TODOS los momentos, estén o no
+`activo`.** `Momento.activo` es solo una bandera de visibilidad para participantes (si todavía
+pueden responder ese momento) — no dice nada sobre si tiene respuestas reales que valga la pena
+analizar. Corregido el 2026-09-20: antes, la vía `openai` (y sus sugerencias, §5) excluía
+silenciosamente cualquier momento desactivado, aunque tuviera respuestas reales — un momento que
+se desactiva después de cerrar la jornada sigue siendo parte real de lo que se vivió. Si el
+panel en algún punto filtraba u ocultaba momentos inactivos pensando que "no cuentan" para el
+análisis, hay que quitar ese supuesto.
+
 ---
 
 ## 2. Campos del análisis guiado
