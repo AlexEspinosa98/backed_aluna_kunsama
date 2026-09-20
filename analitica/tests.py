@@ -6,6 +6,7 @@ from rest_framework.test import APITestCase
 
 from jornadas.models import Jornada, Momento, PerfilUsuario, Pregunta
 
+from .analisis_ia_openai import _validar_y_limpiar, _validar_y_limpiar_jornada
 from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
 
 Usuario = get_user_model()
@@ -519,3 +520,103 @@ class AnalisisUnificadoViewTests(APITestCase):
         resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada_ajena.id}')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data, [])
+
+
+class EnfoqueCualitativoSinGraficasTests(APITestCase):
+    """Regresión de un bug real de producción (AnalisisJornadaIA #4, 2026-09-20): un análisis
+    `cualitativo` salió con los 6 hallazgos graficados porque el prompt base tenía una sección
+    incondicional ("casi ningún hallazgo debería quedar sin datos graficables") que pesaba más
+    que el párrafo de enfoque anexado aparte. La corrección tiene dos capas — acá se prueban las
+    dos: el prompt ya no lo pide (movido a `prompt_comun.py::bloque_enfoque`, no verificable con
+    un test unitario sin llamar a un LLM real) y el CÓDIGO fuerza `tipo_grafica=None`/`datos=[]`
+    sin importar qué haya devuelto el modelo — eso sí es lo que prueban estos tests."""
+
+    def test_validar_y_limpiar_momento_borra_graficas_en_cualitativo(self):
+        jornada = crear_jornada('jornada-cualitativa-momento')
+        momento = crear_momento_con_respuesta(jornada)
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D1', 'tipo_grafica': 'radar',
+                 'datos': [{'etiqueta': 'x', 'valor': 3, 'unidad': 'conteo'}]},
+                {'titulo': 'H2', 'descripcion': 'D2', 'tipo_grafica': None, 'datos': []},
+            ],
+        }
+        limpio = _validar_y_limpiar(resultado, momento, enfoque='cualitativo')
+        for hallazgo in limpio['hallazgos']:
+            self.assertIsNone(hallazgo['tipo_grafica'])
+            self.assertEqual(hallazgo['datos'], [])
+
+    def test_validar_y_limpiar_momento_conserva_graficas_en_cuantitativo(self):
+        jornada = crear_jornada('jornada-cuantitativa-momento')
+        momento = crear_momento_con_respuesta(jornada)
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D1', 'tipo_grafica': 'radar',
+                 'datos': [{'etiqueta': 'x', 'valor': 3, 'unidad': 'conteo'}]},
+            ],
+        }
+        limpio = _validar_y_limpiar(resultado, momento, enfoque='cuantitativo')
+        self.assertEqual(limpio['hallazgos'][0]['tipo_grafica'], 'radar')
+        self.assertEqual(len(limpio['hallazgos'][0]['datos']), 1)
+
+    def test_validar_y_limpiar_jornada_borra_graficas_en_cualitativo(self):
+        # Reproduce exactamente el caso real: AnalisisJornadaIA con enfoque cualitativo y
+        # hallazgos ya graficados en `resultado` (como los devolvió el modelo antes del fix).
+        jornada = crear_jornada('jornada-cualitativa')
+        resultado = {
+            'hallazgos': [
+                {'titulo': h, 'descripcion': 'D', 'tipo_grafica': 'barras',
+                 'datos': [{'etiqueta': 'a', 'valor': 4, 'unidad': 'conteo'}]}
+                for h in ('H1', 'H2', 'H3')
+            ],
+        }
+        limpio = _validar_y_limpiar_jornada(resultado, jornada, enfoque='cualitativo')
+        self.assertTrue(all(h['tipo_grafica'] is None and h['datos'] == [] for h in limpio['hallazgos']))
+
+    def test_validar_y_limpiar_jornada_default_mixto_conserva_graficas(self):
+        # `enfoque=None` (dato viejo, de antes de HU-71) se normaliza a "mixto" — comportamiento
+        # de siempre, nunca borra nada.
+        jornada = crear_jornada('jornada-sin-enfoque-guardado')
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D', 'tipo_grafica': 'pastel', 'datos': [{'etiqueta': 'a', 'valor': 1}]},
+            ],
+        }
+        limpio = _validar_y_limpiar_jornada(resultado, jornada, enfoque=None)
+        self.assertEqual(limpio['hallazgos'][0]['tipo_grafica'], 'pastel')
+
+    def test_agente_pregunta_cerrada_sin_grafica_en_cualitativo(self):
+        from .analysis import _agente_pregunta_cerrada, _estadisticas_pregunta
+
+        jornada = crear_jornada('jornada-cerrada-cualitativa')
+        momento = Momento.objects.create(jornada=jornada, orden=1, titulo='M')
+        pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_UNICA, texto='¿Cuál?', orden=1)
+        from jornadas.models import OpcionPregunta
+        from participantes.models import Respuesta
+
+        opcion = OpcionPregunta.objects.create(pregunta=pregunta, texto='Sí', orden=1)
+        respuesta = Respuesta.objects.create(pregunta=pregunta)
+        respuesta.opciones.set([opcion])
+        estad = _estadisticas_pregunta(pregunta)
+
+        with patch('analitica.analysis._llamar_llm', return_value=('Domina "Sí".\nGRAFICA: barras', None)):
+            _descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, enfoque='cualitativo')
+        self.assertIsNone(tipo_grafica)
+
+    def test_agente_pregunta_cerrada_con_grafica_en_mixto(self):
+        from .analysis import _agente_pregunta_cerrada, _estadisticas_pregunta
+
+        jornada = crear_jornada('jornada-cerrada-mixta')
+        momento = Momento.objects.create(jornada=jornada, orden=1, titulo='M')
+        pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_UNICA, texto='¿Cuál?', orden=1)
+        from jornadas.models import OpcionPregunta
+        from participantes.models import Respuesta
+
+        opcion = OpcionPregunta.objects.create(pregunta=pregunta, texto='Sí', orden=1)
+        respuesta = Respuesta.objects.create(pregunta=pregunta)
+        respuesta.opciones.set([opcion])
+        estad = _estadisticas_pregunta(pregunta)
+
+        with patch('analitica.analysis._llamar_llm', return_value=('Domina "Sí".\nGRAFICA: barras', None)):
+            _descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, enfoque='mixto')
+        self.assertEqual(tipo_grafica, 'barras')

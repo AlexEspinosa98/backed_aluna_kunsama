@@ -67,13 +67,16 @@ SYSTEM_PROMPT = (
     "debe dejar claro, con las cifras que lo sustentan, en qué concuerdan los participantes y en "
     "qué no (consenso amplio, opinión dividida, una minoría con una postura relevante, etc.).\n\n"
 
-    "=== TRANSFORMAR LO CUALITATIVO EN GRAFICABLE (obligatorio) ===\n"
-    "Casi ningún hallazgo debería quedar sin datos graficables — incluso uno que nazca de "
-    "respuestas de texto se puede cuantificar: extrae las palabras clave o categorías temáticas "
-    "que mejor resuman el patrón en las respuestas abiertas relevantes (de una pregunta o de "
-    "varias combinadas, si el hallazgo las une) y CUENTA cuántas respuestas reales tocan cada "
-    "una — eso es tu `datos`. Deja `datos` vacío solo en el caso raro de un hallazgo puramente "
-    "contextual sin ningún conteo posible detrás.\n\n"
+    # La sección "TRANSFORMAR LO CUALITATIVO EN GRAFICABLE" vivía acá, fija e incondicional —
+    # HU-71 la movió a `prompt_comun.py::bloque_enfoque` porque es EXACTAMENTE lo contrario de lo
+    # que pide `enfoque=cualitativo`: forzaba gráfica en "casi ningún hallazgo" sin importar qué
+    # eligiera quien pidió el análisis. Bug real detectado en producción (AnalisisJornadaIA #4,
+    # 2026-09-20): un análisis cualitativo salió con los 6 hallazgos graficados porque esta regla,
+    # incondicional, pesaba más que el párrafo de enfoque que se anexaba aparte. Ahora la decisión
+    # de graficar o no vive en el bloque de enfoque, antes del formato — y además se refuerza en
+    # código (`_validar_y_limpiar`/`_validar_y_limpiar_jornada`, más abajo) por si el modelo la
+    # ignora: mismo principio que `_purgar_cifras_falsas` en analysis.py, no confiar solo en que
+    # el prompt se respete.
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin "
@@ -186,13 +189,8 @@ SYSTEM_PROMPT_JORNADA = (
     "sustentan, en qué concuerdan los participantes y en qué no (consenso amplio, opinión "
     "dividida, una minoría con una postura relevante, etc.).\n\n"
 
-    "=== TRANSFORMAR LO CUALITATIVO EN GRAFICABLE (obligatorio) ===\n"
-    "Casi ningún hallazgo debería quedar sin datos graficables — incluso uno que nazca de "
-    "respuestas de texto se puede cuantificar: extrae las palabras clave o categorías temáticas "
-    "que mejor resuman el patrón en las respuestas abiertas relevantes (de un momento o de "
-    "varios combinados, si el hallazgo los une) y CUENTA cuántas respuestas reales tocan cada "
-    "una — eso es tu `datos`. Deja `datos` vacío solo en el caso raro de un hallazgo puramente "
-    "contextual sin ningún conteo posible detrás.\n\n"
+    # Ver el comentario equivalente en SYSTEM_PROMPT (arriba en este mismo archivo): la sección
+    # "TRANSFORMAR LO CUALITATIVO EN GRAFICABLE" se movió a `prompt_comun.py::bloque_enfoque`.
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin "
@@ -413,21 +411,30 @@ def _llamar_openai_json(system, user, model=None, max_output_tokens=None, timeou
         return None, f'OpenAI devolvió JSON inválido: {exc}'
 
 
-def _validar_y_limpiar(resultado, momento):
+def _validar_y_limpiar(resultado, momento, enfoque=None):
     """Defensa mínima contra un JSON bien formado pero con detalles que no cuadran: fuerza
-    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), y limpia
+    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), limpia
     determinísticamente cualquier etiqueta de estructura ('(1)', 'Hallazgo:', etc.) o mención
-    suelta de qué gráfica usar que se haya colado en el texto — mismo principio ya validado en el
-    pipeline local (`analysis._purgar_etiquetas_estructura`): no confiar en que el modelo respete
-    una instrucción de formato solo porque se le pidió con palabras."""
+    suelta de qué gráfica usar que se haya colado en el texto, y en enfoque `cualitativo` fuerza
+    `tipo_grafica=None`/`datos=[]` en todos los hallazgos — mismo principio ya validado en el
+    pipeline local (`analysis._purgar_etiquetas_estructura`/`_purgar_cifras_falsas`): no confiar
+    en que el modelo respete una instrucción de prompt solo porque se le pidió con palabras. Bug
+    real detectado en producción (AnalisisJornadaIA #4, 2026-09-20, ver prompt_comun.py): un
+    análisis cualitativo salió con gráficas en los 6 hallazgos pese al prompt — desde ese
+    incidente esto ya no depende solo del prompt."""
     from .analysis import _purgar_etiquetas_estructura
+    from .prompt_comun import ENFOQUE_CUALITATIVO, normalizar_enfoque
 
     resultado['momento_id'] = momento.id
     resultado['tipo'] = momento.tipo
     resultado['resumen_ejecutivo'] = _purgar_etiquetas_estructura(resultado.get('resumen_ejecutivo'))
+    es_cualitativo = normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO
     for hallazgo in resultado.get('hallazgos') or []:
         hallazgo['titulo'] = _purgar_etiquetas_estructura(hallazgo.get('titulo'))
         hallazgo['descripcion'] = _purgar_etiquetas_estructura(hallazgo.get('descripcion'))
+        if es_cualitativo:
+            hallazgo['tipo_grafica'] = None
+            hallazgo['datos'] = []
     return resultado
 
 
@@ -466,7 +473,7 @@ def analizar_momento_ia(analisis_id):
 
         analisis.prompt_usado = system
         if resultado:
-            analisis.resultado = _validar_y_limpiar(resultado, analisis.momento)
+            analisis.resultado = _validar_y_limpiar(resultado, analisis.momento, analisis.enfoque)
             analisis.estado = AnalisisMomentoIA.ESTADO_COMPLETO
             analisis.error_mensaje = ''
             analisis.modelo_usado = MODELO_USADO_LABEL
@@ -486,16 +493,23 @@ def analizar_momento_ia(analisis_id):
         close_old_connections()
 
 
-def _validar_y_limpiar_jornada(resultado, jornada):
-    """Misma defensa que `_validar_y_limpiar`, a escala de jornada: fuerza `jornada_id` al real
-    y limpia etiquetas de estructura que se hayan colado en el texto."""
+def _validar_y_limpiar_jornada(resultado, jornada, enfoque=None):
+    """Misma defensa que `_validar_y_limpiar`, a escala de jornada: fuerza `jornada_id` al real,
+    limpia etiquetas de estructura y, en enfoque `cualitativo`, fuerza `tipo_grafica=None`/
+    `datos=[]` en todos los hallazgos (ver el comentario en `_validar_y_limpiar` — este es
+    exactamente el caso que falló en producción, AnalisisJornadaIA #4)."""
     from .analysis import _purgar_etiquetas_estructura
+    from .prompt_comun import ENFOQUE_CUALITATIVO, normalizar_enfoque
 
     resultado['jornada_id'] = jornada.id
     resultado['resumen_ejecutivo'] = _purgar_etiquetas_estructura(resultado.get('resumen_ejecutivo'))
+    es_cualitativo = normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO
     for hallazgo in resultado.get('hallazgos') or []:
         hallazgo['titulo'] = _purgar_etiquetas_estructura(hallazgo.get('titulo'))
         hallazgo['descripcion'] = _purgar_etiquetas_estructura(hallazgo.get('descripcion'))
+        if es_cualitativo:
+            hallazgo['tipo_grafica'] = None
+            hallazgo['datos'] = []
     return resultado
 
 
@@ -534,7 +548,7 @@ def analizar_jornada_ia(analisis_id):
 
         analisis.prompt_usado = system
         if resultado:
-            analisis.resultado = _validar_y_limpiar_jornada(resultado, analisis.jornada)
+            analisis.resultado = _validar_y_limpiar_jornada(resultado, analisis.jornada, analisis.enfoque)
             analisis.estado = AnalisisJornadaIA.ESTADO_COMPLETO
             analisis.error_mensaje = ''
             analisis.modelo_usado = MODELO_USADO_LABEL

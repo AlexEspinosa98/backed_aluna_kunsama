@@ -46,7 +46,10 @@ from pathlib import Path
 from django.db import close_old_connections
 from django.utils import timezone
 
-from .prompt_comun import REGLA_DATOS_ANALISIS, bloque_contexto, bloque_enfoque, bloque_instrucciones
+from .prompt_comun import (
+    ENFOQUE_CUALITATIVO, REGLA_DATOS_ANALISIS, bloque_contexto, bloque_enfoque, bloque_instrucciones,
+    normalizar_enfoque,
+)
 
 MODELS_DIR = Path(__file__).resolve().parent / '.models'
 DEFAULT_MODEL_REPO = 'Qwen/Qwen2.5-3B-Instruct-GGUF'
@@ -737,6 +740,12 @@ def _agente_pregunta_abierta(
             texto = _purgar_cifras_falsas(texto)
         texto = _purgar_etiquetas_estructura(texto)
 
+    if normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO:
+        # Refuerzo de código, no solo de prompt (ver el comentario junto a `bloque_enfoque` en
+        # prompt_comun.py): un análisis cualitativo nunca lleva gráfica, sin importar si el
+        # modelo devolvió un tag GRAFICA: válido.
+        tipo_grafica = None
+
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica, nivel_acuerdo
 
@@ -873,6 +882,12 @@ def _agente_pregunta_cerrada(
 
     if tipo_grafica not in ('pastel', 'barras', 'radar'):
         tipo_grafica = _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
+    if normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO:
+        # Refuerzo de código — ver el comentario equivalente en _agente_pregunta_abierta. Una
+        # pregunta cerrada SIEMPRE tiene con qué graficar (son opciones con conteo), así que sin
+        # este override el fallback de arriba le pondría gráfica a cualquier análisis cualitativo
+        # que incluya alguna pregunta cerrada.
+        tipo_grafica = None
 
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica

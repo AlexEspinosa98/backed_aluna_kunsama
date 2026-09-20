@@ -38,26 +38,51 @@ REGLA_DATOS_ANALISIS = (
     'estimes ni completes algo que no esté ahí.'
 )
 
+# Además del tono narrativo, cada bloque decide algo estructural: si `tipo_grafica`/`datos`
+# (analisis_ia_openai.py) o `tipo_grafica` (analysis.py, pipeline local) se llenan o quedan en
+# null/[]. Esto NO puede ser solo un párrafo de tono al lado de una instrucción incondicional —
+# fue exactamente el bug detectado en producción el 2026-09-20 (AnalisisJornadaIA #4: un análisis
+# `cualitativo` salió con los 6 hallazgos graficados porque el prompt base, en otra sección, decía
+# "casi ningún hallazgo debería quedar sin datos graficables" SIN importar el enfoque, y esa regla
+# incondicional pesó más que el párrafo de tono). Por eso cada bloque es explícito sobre qué hacer
+# con la gráfica, no solo sobre cómo redactar — y además se refuerza en código
+# (`_validar_y_limpiar`/`_validar_y_limpiar_jornada` en analisis_ia_openai.py,
+# `_agente_pregunta_abierta`/`_agente_pregunta_cerrada` en analysis.py) por si el modelo la
+# ignora, mismo principio que `_purgar_cifras_falsas`: no confiar en que un prompt solo baste.
 _BLOQUES_ENFOQUE = {
     ENFOQUE_CUALITATIVO: (
         '=== ENFOQUE: CUALITATIVO ===\n'
         'Prioriza el sentido, los matices, las tensiones y las voces representativas por encima '
         'de los números — usa citas o frases textuales de las respuestas cuando ayuden a mostrar '
-        'un patrón. Menciona porcentajes o conteos solo cuando de verdad aporten a la lectura, '
-        'nunca como el eje del texto.'
+        'un patrón. Menciona porcentajes o conteos en la prosa solo cuando de verdad aporten a '
+        'la lectura, nunca como el eje del texto.\n'
+        'SIN GRÁFICAS: en este enfoque NUNCA generes una gráfica. `tipo_grafica` va SIEMPRE en '
+        '`null` y `datos` SIEMPRE en `[]` (lista vacía), en TODOS los hallazgos, sin excepción — '
+        'ni siquiera cuando una pregunta cerrada tenga una distribución clara y "sería fácil '
+        'graficarla". La evidencia de este análisis son las palabras, no los números.'
     ),
     ENFOQUE_CUANTITATIVO: (
         '=== ENFOQUE: CUANTITATIVO ===\n'
         'Prioriza las frecuencias, los porcentajes y las comparaciones entre grupos, mesas u '
         'opciones — el texto en prosa es para explicar esos datos, no para reemplazarlos. '
         'Apóyate en cifras exactas y en las gráficas; el detalle narrativo queda en segundo '
-        'plano.'
+        'plano.\n'
+        'GRÁFICA POR HALLAZGO (obligatorio): casi ningún hallazgo debería quedar sin `datos` '
+        'graficables — incluso uno que nazca de respuestas de texto se puede cuantificar: extrae '
+        'las palabras clave o categorías temáticas que mejor resuman el patrón y CUENTA cuántas '
+        'respuestas reales tocan cada una. Deja `datos` vacío solo en el caso raro de un hallazgo '
+        'puramente contextual sin ningún conteo posible detrás.'
     ),
     ENFOQUE_MIXTO: (
         '=== ENFOQUE: MIXTO ===\n'
         'Da el mismo peso a las cifras y a la lectura interpretativa: cada hallazgo debe traer '
         'su dato exacto Y la explicación de qué revela, sin que ninguno de los dos domine el '
-        'texto.'
+        'texto.\n'
+        'GRÁFICA POR HALLAZGO (obligatorio): casi ningún hallazgo debería quedar sin `datos` '
+        'graficables — incluso uno que nazca de respuestas de texto se puede cuantificar: extrae '
+        'las palabras clave o categorías temáticas que mejor resuman el patrón y CUENTA cuántas '
+        'respuestas reales tocan cada una. Deja `datos` vacío solo en el caso raro de un hallazgo '
+        'puramente contextual sin ningún conteo posible detrás.'
     ),
 }
 
