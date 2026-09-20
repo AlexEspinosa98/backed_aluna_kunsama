@@ -259,3 +259,192 @@ class LlmEstructuradoTests(SimpleTestCase):
         salida, error, meta = llamar_openai_estructurado('s', 'u')
         self.assertIsNone(salida)
         self.assertIn('OPENAI_API_KEY', error)
+
+
+from rest_framework.test import APITestCase
+
+from .models import AnalisisV2
+from .tests import crear_admin_completo, crear_dependencia, crear_jornada
+from .v2.procesar import procesar_analisis_v2
+
+
+class AnalisisV2ApiTests(APITestCase):
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia')
+        self.d = crear_jornada_completa()
+        self.jornada = self.d['jornada']
+        self.jornada.propietarios.set([self.dependencia])
+        self.jornada_ajena = crear_jornada('ajena')
+        self.momento_ajeno = Momento.objects.create(jornada=self.jornada_ajena, orden=1, titulo='Ajeno')
+        self.client.force_authenticate(user=self.admin)
+
+    def _post(self, cuerpo):
+        with patch('analitica.admin_views.threading.Thread') as hilo:
+            resp = self.client.post('/api/admin/analisis-v2/', cuerpo, format='json')
+        return resp, hilo
+
+    def test_integral_crea_pendiente_y_lanza_hilo(self):
+        resp, hilo = self._post({'jornada': self.jornada.id, 'modo': 'integral', 'pipeline': 'llm', 'contexto': 'C'})
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['estado'], 'pendiente')
+        self.assertEqual(resp.data['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(resp.data['metodo'], 'openai')
+        self.assertEqual(resp.data['momentos'], [])
+        self.assertEqual(resp.data['contexto'], 'C')
+        hilo.return_value.start.assert_called_once()
+        self.assertEqual(AnalisisV2.objects.get(pk=resp.data['id']).solicitado_por, self.admin)
+
+    def test_por_momento_con_personalizacion(self):
+        m1 = self.d['m1']
+        resp, _ = self._post({
+            'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'bertopic_llm', 'momentos': [m1.id],
+            'personalizacion_momentos': [{'momento': m1.id, 'contexto': 'ctx', 'instrucciones': 'ins'}],
+        })
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'bertopic')
+        self.assertEqual([m['id'] for m in resp.data['momentos']], [m1.id])
+        self.assertEqual(resp.data['personalizacion_momentos'], [{'momento': m1.id, 'contexto': 'ctx', 'instrucciones': 'ins'}])
+
+    def test_integral_con_momentos_da_400(self):
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'integral', 'pipeline': 'llm', 'momentos': [self.d['m1'].id]})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('momentos', resp.data)
+
+    def test_por_momento_sin_momentos_da_400(self):
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'llm'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('momentos', resp.data)
+
+    def test_momento_de_otra_jornada_da_400(self):
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'llm', 'momentos': [self.momento_ajeno.id]})
+        self.assertEqual(resp.status_code, 400)
+
+    def test_personalizacion_fuera_del_alcance_da_400(self):
+        resp, _ = self._post({
+            'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'llm', 'momentos': [self.d['m1'].id],
+            'personalizacion_momentos': [{'momento': self.d['m2'].id, 'contexto': 'x'}],
+        })
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('personalizacion_momentos', resp.data)
+
+    def test_pipeline_invalido_da_400(self):
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'integral', 'pipeline': 'otro'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('pipeline', resp.data)
+
+    def test_dependencia_no_puede_pedir_de_jornada_ajena(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp, _ = self._post({'jornada': self.jornada_ajena.id, 'modo': 'integral', 'pipeline': 'llm'})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(AnalisisV2.objects.filter(jornada=self.jornada_ajena).exists())
+
+    def test_409_solo_para_el_mismo_alcance(self):
+        AnalisisV2.objects.create(jornada=self.jornada, modo='integral', estado=AnalisisV2.ESTADO_PROCESANDO)
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'integral', 'pipeline': 'llm'})
+        self.assertEqual(resp.status_code, 409)
+        resp, _ = self._post({'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'llm', 'momentos': [self.d['m1'].id]})
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_jornada_sin_momentos_da_400_en_integral(self):
+        vacia = crear_jornada('vacia', propietario=self.admin)
+        resp, _ = self._post({'jornada': vacia.id, 'modo': 'integral', 'pipeline': 'llm'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('jornada', resp.data)
+
+    def test_lista_detalle_y_scoping(self):
+        a = AnalisisV2.objects.create(jornada=self.jornada, modo='integral', estado=AnalisisV2.ESTADO_COMPLETO,
+                                      resultado={'estado': 'parcial'}, entrada={'x': 1})
+        AnalisisV2.objects.create(jornada=self.jornada_ajena, modo='integral')
+        resp = self.client.get(f'/api/admin/analisis-v2/?jornada={self.jornada.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([i['id'] for i in resp.data], [a.id])
+        self.assertNotIn('entrada', resp.data[0])
+        self.assertEqual(resp.data[0]['estado_analitico'], 'parcial')
+        resp = self.client.get(f'/api/admin/analisis-v2/{a.id}/')
+        self.assertEqual(resp.data['entrada'], {'x': 1})
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get('/api/admin/analisis-v2/')
+        self.assertEqual([i['id'] for i in resp.data], [a.id])
+
+    def test_lista_unificada_incluye_v2(self):
+        a = AnalisisV2.objects.create(jornada=self.jornada, modo='por_momento', pipeline='bertopic_llm')
+        a.momentos.set([self.d['m1']])
+        resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada.id}')
+        item = next(i for i in resp.data if i['tipo'] == 'analisis_v2')
+        self.assertEqual(item['id'], a.id)
+        self.assertEqual(item['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(item['metodo'], 'bertopic')
+        self.assertEqual(item['alcance'], 'momento')
+        self.assertEqual(item['momento_titulo'], self.d['m1'].titulo)
+        self.assertIsNone(item['enfoque'])
+        resp = self.client.get(f"/api/admin/analisis/?momento={self.d['m1'].id}")
+        self.assertIn(a.id, [i['id'] for i in resp.data if i['tipo'] == 'analisis_v2'])
+        resp = self.client.get(f"/api/admin/analisis/?momento={self.d['m2'].id}")
+        self.assertNotIn(a.id, [i['id'] for i in resp.data if i['tipo'] == 'analisis_v2'])
+
+
+class ProcesarAnalisisV2Tests(TestCase):
+    """El orquestador con la llamada a OpenAI mockeada: lo que se guarda, en qué estado y qué
+    queda en diagnostico."""
+
+    def setUp(self):
+        self.d = crear_jornada_completa()
+
+    def _salida_valida(self, system, user, modelo=None, reparacion=None):
+        # Una salida que SIEMPRE valida contra la entrada: la forma sin_datos construida a partir
+        # del propio `user` (no importa que la entrada sí tenga respuestas — eso no lo comprueba
+        # el validador de negocio).
+        entrada = json.loads(user)
+        return construir_salida_sin_datos(entrada, 'llm'), None, {'finish_reason': 'stop', 'modo_salida': 'json_schema'}
+
+    def test_completo_con_salida_valida(self):
+        a = AnalisisV2.objects.create(jornada=self.d['jornada'], modo='integral', pipeline='llm')
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida_valida) as llamada:
+            procesar_analisis_v2(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisV2.ESTADO_COMPLETO, a.error_mensaje)
+        self.assertEqual(a.resultado['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(a.modelo_usado, 'Generado con IA')
+        self.assertEqual(a.version_esquema, 'v2.0')
+        self.assertTrue(a.prompt_usado.startswith('# System prompt Kunsamu — LLM'))
+        self.assertEqual(a.entrada['solicitud']['modo'], 'integral')
+        self.assertEqual(len(a.diagnostico['intentos']), 1)
+        self.assertEqual(llamada.call_count, 1)
+
+    def test_sin_datos_no_llama_a_openai(self):
+        vacia = Jornada.objects.create(slug='v', nombre='V', fecha_inicio=datetime.date(2026, 9, 1), fecha_fin=datetime.date(2026, 9, 1))
+        m = Momento.objects.create(jornada=vacia, orden=1, titulo='M')
+        Pregunta.objects.create(momento=m, tipo='abierta', texto='¿?', orden=1)
+        a = AnalisisV2.objects.create(jornada=vacia, modo='integral', pipeline='bertopic_llm')
+        with patch('analitica.v2.procesar.llamar_openai_estructurado') as llamada:
+            procesar_analisis_v2(a.id)
+        a.refresh_from_db()
+        llamada.assert_not_called()
+        self.assertEqual(a.estado, AnalisisV2.ESTADO_COMPLETO, a.error_mensaje)
+        self.assertEqual(a.resultado['estado'], 'sin_datos')
+        self.assertEqual(a.resultado['pipeline'], 'bertopic_llm')
+        self.assertEqual(a.prompt_usado, '')
+        self.assertEqual(a.entrada['bertopic'], {'version_adaptador': '1.0', 'ejecuciones': []})
+
+    def test_invalida_dos_veces_termina_en_error_con_diagnostico(self):
+        a = AnalisisV2.objects.create(jornada=self.d['jornada'], modo='integral', pipeline='llm')
+        invalida = ({'version': 'kunsamu.analisis/v2'}, None, {'finish_reason': 'stop'})
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', return_value=invalida) as llamada:
+            procesar_analisis_v2(a.id)
+        a.refresh_from_db()
+        self.assertEqual(llamada.call_count, 2)
+        self.assertIsNotNone(llamada.call_args_list[1].kwargs.get('reparacion'))
+        self.assertEqual(a.estado, AnalisisV2.ESTADO_ERROR)
+        self.assertIn('no pasó la validación', a.error_mensaje)
+        self.assertEqual(a.resultado, {})
+        self.assertEqual(len(a.diagnostico['intentos']), 2)
+        self.assertTrue(a.diagnostico['intentos'][0]['errores_validacion'])
+
+    def test_error_del_proveedor_termina_en_error(self):
+        a = AnalisisV2.objects.create(jornada=self.d['jornada'], modo='integral', pipeline='llm')
+        with patch('analitica.v2.procesar.llamar_openai_estructurado', return_value=(None, 'boom', {})):
+            procesar_analisis_v2(a.id)
+        a.refresh_from_db()
+        self.assertEqual(a.estado, AnalisisV2.ESTADO_ERROR)
+        self.assertEqual(a.error_mensaje, 'boom')

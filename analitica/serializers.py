@@ -3,10 +3,11 @@ from rest_framework import serializers
 from jornadas.models import Jornada, Momento
 
 from .models import (
-    AnalisisJornadaIA, AnalisisMomentoIA, InfografiaImagen, InfografiaJornada, PlantillaAnalisis,
-    Reporte,
+    AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaImagen, InfografiaJornada,
+    PlantillaAnalisis, Reporte,
 )
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+from .v2.contrato import VERSION
 
 # Campos del análisis guiado (HU-57, ver docs/HU_BACKEND_ANALISIS_GUIADO.md §1) comunes a los
 # tres serializers de creación — un solo lugar para no repetir la lista tres veces y que agregar
@@ -249,3 +250,122 @@ class AnalisisSugerenciasSerializer(serializers.Serializer):
                     {'momentos': f'El momento "{momento.titulo}" no pertenece a la jornada seleccionada.'}
                 )
         return attrs
+
+
+class PersonalizacionMomentoSerializer(serializers.Serializer):
+    momento = serializers.PrimaryKeyRelatedField(queryset=Momento.objects.all())
+    contexto = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+    )
+    instrucciones = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+    )
+
+
+class _AnalisisV2CamposDerivados(serializers.ModelSerializer):
+    """Campos derivados comunes a la lectura de lista y de detalle."""
+    jornada = serializers.SlugRelatedField(slug_field='slug', read_only=True)
+    jornada_id = serializers.IntegerField(read_only=True)
+    momentos = MomentoResumenSerializer(many=True, read_only=True)
+    version = serializers.SerializerMethodField()
+    metodo = serializers.SerializerMethodField()
+    estado_analitico = serializers.SerializerMethodField()
+
+    def get_version(self, obj):
+        return VERSION
+
+    def get_metodo(self, obj):
+        # Para que la agrupación actual del panel (bertopic / openai) siga funcionando sin cambios.
+        return 'bertopic' if obj.pipeline == AnalisisV2.PIPELINE_BERTOPIC_LLM else 'openai'
+
+    def get_estado_analitico(self, obj):
+        return (obj.resultado or {}).get('estado')
+
+
+class AnalisisV2ListaSerializer(_AnalisisV2CamposDerivados):
+    """Sin `entrada`, `resultado`, `diagnostico` ni `prompt_usado`: la entrada contiene el corpus
+    completo y el resultado puede pesar cientos de KB — en un listado que el panel consulta cada
+    pocos segundos sería un desperdicio. El detalle (`retrieve`) sí trae todo."""
+    class Meta:
+        model = AnalisisV2
+        fields = [
+            'id', 'version', 'jornada', 'jornada_id', 'momentos', 'modo', 'pipeline', 'metodo',
+            'contexto', 'instrucciones', 'personalizacion_momentos', 'estado', 'estado_analitico',
+            'error_mensaje', 'version_prompt', 'version_esquema', 'modelo_usado', 'solicitado_por',
+            'creado_en', 'actualizado_en', 'completado_en',
+        ]
+        read_only_fields = fields
+
+
+class AnalisisV2Serializer(_AnalisisV2CamposDerivados):
+    class Meta:
+        model = AnalisisV2
+        fields = AnalisisV2ListaSerializer.Meta.fields + ['resultado', 'entrada', 'diagnostico', 'prompt_usado']
+        read_only_fields = fields
+
+
+class AnalisisV2CrearSerializer(serializers.ModelSerializer):
+    momentos = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Momento.objects.all(), required=False,
+        help_text='Obligatorio y no vacío en por_momento; no se acepta en integral.',
+    )
+    personalizacion_momentos = PersonalizacionMomentoSerializer(many=True, required=False)
+
+    class Meta:
+        model = AnalisisV2
+        fields = [
+            'id', 'jornada', 'modo', 'pipeline', 'momentos', 'contexto', 'instrucciones',
+            'personalizacion_momentos', 'estado', 'creado_en',
+        ]
+        read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate(self, attrs):
+        jornada = attrs['jornada']
+        modo = attrs['modo']
+        momentos = attrs.get('momentos') or []
+        for momento in momentos:
+            if momento.jornada_id != jornada.id:
+                raise serializers.ValidationError(
+                    {'momentos': f'El momento "{momento.titulo}" no pertenece a la jornada seleccionada.'}
+                )
+        if modo == AnalisisV2.MODO_INTEGRAL and momentos:
+            raise serializers.ValidationError(
+                {'momentos': 'En modo integral no se mandan momentos: el alcance es toda la jornada.'}
+            )
+        if modo == AnalisisV2.MODO_POR_MOMENTO:
+            if not momentos:
+                raise serializers.ValidationError({'momentos': 'En modo por_momento hay que indicar al menos un momento.'})
+            if len({m.id for m in momentos}) != len(momentos):
+                raise serializers.ValidationError({'momentos': 'Hay momentos repetidos.'})
+
+        if modo == AnalisisV2.MODO_POR_MOMENTO:
+            alcance_ids = {m.id for m in momentos}
+        else:
+            alcance_ids = set(jornada.momentos.values_list('id', flat=True))
+        vistos = set()
+        for item in attrs.get('personalizacion_momentos') or []:
+            momento = item['momento']
+            if momento.id not in alcance_ids:
+                raise serializers.ValidationError(
+                    {'personalizacion_momentos': f'El momento "{momento.titulo}" no está en el alcance del análisis.'}
+                )
+            if momento.id in vistos:
+                raise serializers.ValidationError({'personalizacion_momentos': 'Un momento aparece más de una vez.'})
+            vistos.add(momento.id)
+        return attrs
+
+    def create(self, validated_data):
+        momentos = validated_data.pop('momentos', [])
+        personalizacion = validated_data.pop('personalizacion_momentos', [])
+        validated_data['personalizacion_momentos'] = [
+            {
+                'momento': item['momento'].id,
+                'contexto': item.get('contexto') or '',
+                'instrucciones': item.get('instrucciones') or '',
+            }
+            for item in personalizacion
+        ]
+        analisis = AnalisisV2.objects.create(**validated_data)
+        if momentos:
+            analisis.momentos.set(momentos)
+        return analisis

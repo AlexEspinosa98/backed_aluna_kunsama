@@ -14,16 +14,21 @@ from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
 from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
-from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
+from .models import (
+    AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis, Reporte,
+)
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
     AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
-    AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, InfografiaJornadaCrearSerializer,
+    AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
+    AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
     InfografiaJornadaSerializer, PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
 )
 from .sugerencias_ia_openai import generar_sugerencias
+from .v2.contrato import VERSION as VERSION_V2
+from .v2.procesar import procesar_analisis_v2
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
 # 'procesando' para siempre — nada vuelve a tocarlo. Sin este umbral, el guard de abajo lo
@@ -44,6 +49,10 @@ UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
 # analitica/infografia_ia_openai.py) es independiente del pipeline local, así que un umbral corto
 # alcanza para no bloquear reintentos legítimos tras un redeploy a mitad de generación.
 UMBRAL_HUERFANO_INFOGRAFIA = timedelta(minutes=10)
+# La llamada v2 es una sola pero grande (salida de hasta ~24k tokens con un modelo de razonamiento)
+# y en bertopic_llm va precedida de embeddings + clustering por pregunta — más margen que las vías
+# legacy antes de dar por muerto al worker.
+UMBRAL_HUERFANO_ANALISIS_V2 = timedelta(minutes=45)
 
 
 def _sin_respuestas(momentos):
@@ -433,6 +442,85 @@ class AnalisisJornadaIAViewSet(
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
+class AnalisisV2ViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Análisis bajo el contrato kunsamu.analisis/v2 (ver `AnalisisV2` en models.py y el plan en
+    docs/mejora_promps/plan_implementacion/). Orden de guards en `create` (D4 del plan): 400 de
+    forma → 403 de jornada ajena → sanar huérfanos → 409 si hay otro en curso con el MISMO alcance
+    (jornada + modo + conjunto de momentos) → 400 si la jornada no tiene momentos. Sin guard de
+    "sin respuestas": `sin_datos` es un estado analítico válido del contrato y lo produce el
+    backend sin gastar una llamada (D11)."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = AnalisisV2.objects.select_related('jornada').prefetch_related('momentos')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        momento_id = self.request.query_params.get('momento')
+        if momento_id:
+            queryset = queryset.filter(momentos__id=momento_id).distinct()
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return AnalisisV2CrearSerializer
+        if self.action == 'list':
+            return AnalisisV2ListaSerializer
+        return AnalisisV2Serializer
+
+    def create(self, request, *args, **kwargs):
+        entrada = AnalisisV2CrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada = entrada.validated_data['jornada']
+        verificar_acceso_jornada(request.user, jornada)
+        modo = entrada.validated_data['modo']
+        momentos = entrada.validated_data.get('momentos') or []
+
+        AnalisisV2.objects.filter(
+            jornada=jornada,
+            estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
+            actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_V2,
+        ).update(
+            estado=AnalisisV2.ESTADO_ERROR,
+            error_mensaje='El análisis quedó procesando más de 45 minutos sin completarse '
+                          '(probablemente el worker se reinició o falló) y se marcó como error '
+                          'automáticamente.',
+        )
+
+        ids_alcance = {m.id for m in momentos}
+        en_curso = AnalisisV2.objects.filter(
+            jornada=jornada, modo=modo,
+            estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
+        ).prefetch_related('momentos')
+        for otro in en_curso:
+            if {m.id for m in otro.momentos.all()} == ids_alcance:
+                return Response(
+                    {'detail': 'Ya hay un análisis v2 en proceso para este mismo alcance — espera a '
+                               'que termine (o falle) antes de pedir otro.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        if modo == AnalisisV2.MODO_INTEGRAL and not jornada.momentos.exists():
+            return Response(
+                {'jornada': ['La jornada no tiene momentos: no hay nada que analizar.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        analisis = entrada.save(solicitado_por=request.user)
+        threading.Thread(target=procesar_analisis_v2, args=(analisis.id,), daemon=True).start()
+
+        salida = AnalisisV2Serializer(analisis)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
 class AnalisisSugerenciasView(APIView):
     """`POST /api/admin/analisis-sugerencias/` — HU-57 §3 (docs/HU_BACKEND_ANALISIS_GUIADO.md).
     Sin modelo detrás: nada de esto se persiste. Valida la entrada, confirma acceso a la jornada
@@ -516,13 +604,43 @@ def _item_analisis_jornada(analisis):
     }
 
 
+def _item_analisis_v2(analisis):
+    momentos = list(analisis.momentos.all())
+    momento = momentos[0] if len(momentos) == 1 else None
+    if analisis.modo == AnalisisV2.MODO_INTEGRAL:
+        alcance = 'jornada'
+    else:
+        alcance = 'momento' if len(momentos) == 1 else 'momentos'
+    return {
+        'tipo': 'analisis_v2',
+        'id': analisis.id,
+        'jornada': analisis.jornada_id,
+        'momento': momento.id if momento else None,
+        'momento_titulo': momento.titulo if momento else None,
+        'momento_orden': momento.orden if momento else None,
+        # Derivado del pipeline para que la agrupación actual del panel siga funcionando.
+        'metodo': 'bertopic' if analisis.pipeline == AnalisisV2.PIPELINE_BERTOPIC_LLM else 'openai',
+        'enfoque': None,
+        'alcance': alcance,
+        'estado': analisis.estado,
+        'error_mensaje': analisis.error_mensaje,
+        'creado_en': analisis.creado_en,
+        'completado_en': analisis.completado_en,
+        # Solo los items v2 traen estas cuatro claves: es lo que le dice al frontend qué renderer usar.
+        'version': VERSION_V2,
+        'modo': analisis.modo,
+        'pipeline': analisis.pipeline,
+        'estado_analitico': (analisis.resultado or {}).get('estado'),
+    }
+
+
 class AnalisisUnificadoView(APIView):
     """`GET /api/admin/analisis/?jornada=<id>` o `?momento=<id>` — HU-57 §4. Une `Reporte` +
-    `AnalisisMomentoIA` + `AnalisisJornadaIA` de una jornada (o de un momento) en una sola lista,
-    para que el panel arme la pestaña Analítica con una consulta en vez de tres repetidas cada
-    pocos segundos mientras algo procesa. Solo lectura: abrir, borrar y el detalle siguen en los
-    endpoints propios de cada tipo (`ReporteViewSet`, `AnalisisMomentoIAViewSet`,
-    `AnalisisJornadaIAViewSet`) — acá no hay ni `get_object` ni acción por id.
+    `AnalisisMomentoIA` + `AnalisisJornadaIA` + `AnalisisV2` de una jornada (o de un momento) en
+    una sola lista, para que el panel arme la pestaña Analítica con una consulta en vez de varias
+    repetidas cada pocos segundos mientras algo procesa. Solo lectura: abrir, borrar y el detalle
+    siguen en los endpoints propios de cada tipo (`ReporteViewSet`, `AnalisisMomentoIAViewSet`,
+    `AnalisisJornadaIAViewSet`, `AnalisisV2ViewSet`) — acá no hay ni `get_object` ni acción por id.
 
     Sin paginación (mismo criterio que el resto del módulo): no se espera que una sola jornada
     acumule más de unos cientos de análisis."""
@@ -569,6 +687,18 @@ class AnalisisUnificadoView(APIView):
             if jornada_id:
                 analisis_jornada = analisis_jornada.filter(jornada_id=jornada_id)
             items.extend(_item_analisis_jornada(a) for a in analisis_jornada)
+
+        analisis_v2 = filtrar_por_propietario(
+            AnalisisV2.objects.select_related('jornada').prefetch_related('momentos'),
+            request.user, 'jornada__propietarios',
+        )
+        if jornada_id:
+            analisis_v2 = analisis_v2.filter(jornada_id=jornada_id)
+        if momento_id:
+            # Un v2 integral abarca todos los momentos pero no es "de" uno puntual — mismo criterio
+            # que analisis_jornada: con ?momento= solo entran los por_momento que lo incluyen.
+            analisis_v2 = analisis_v2.filter(momentos__id=momento_id).distinct()
+        items.extend(_item_analisis_v2(a) for a in analisis_v2)
 
         items.sort(key=lambda item: item['creado_en'], reverse=True)
         return Response(items)

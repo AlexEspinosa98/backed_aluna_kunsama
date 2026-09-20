@@ -5,6 +5,10 @@ from django.utils import timezone
 from jornadas.models import Jornada, Momento
 
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+from .v2.contrato import (
+    MODO_CHOICES, MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_BERTOPIC_LLM, PIPELINE_CHOICES,
+    PIPELINE_LLM,
+)
 
 
 # Campos del análisis guiado (HU-57 del frontend, ver docs/HU_BACKEND_ANALISIS_GUIADO.md) —
@@ -404,3 +408,78 @@ class InfografiaImagen(models.Model):
 
     def __str__(self):
         return f'Imagen {self.orden} · infografía {self.infografia_id}'
+
+
+class AnalisisV2(models.Model):
+    """Análisis con IA bajo el contrato `kunsamu.analisis/v2` (docs/mejora_promps/, plan en
+    docs/mejora_promps/plan_implementacion/). Un modelo aparte de `Reporte`/`AnalisisMomentoIA`/
+    `AnalisisJornadaIA` a propósito (D1 del plan): el frontend elige renderer por la `version` del
+    resultado y conserva los visores históricos, y el contrato rompe la partición por alcance de
+    los tres modelos legacy (un `por_momento` con varios momentos produce varios informes en UNA
+    solicitud). Sin `enfoque`: el contrato lo elimina — el modelo decide el método por pregunta y
+    lo declara en `naturaleza`/`metodos` de cada hallazgo.
+
+    `entrada` es el sobre normalizado EXACTO que se le mandó al modelo, guardado antes de llamar y
+    nunca recalculado: los JSON Pointers de citas y documentos BERTopic de `resultado` apuntan a
+    índices de sus arrays. `resultado` solo se llena con una salida que pasó las dos capas de
+    validación; lo descartado (salidas inválidas, errores, metadatos de las llamadas, notas del
+    adaptador BERTopic) queda en `diagnostico` para auditoría."""
+    MODO_INTEGRAL = MODO_INTEGRAL
+    MODO_POR_MOMENTO = MODO_POR_MOMENTO
+    PIPELINE_LLM = PIPELINE_LLM
+    PIPELINE_BERTOPIC_LLM = PIPELINE_BERTOPIC_LLM
+
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='analisis_v2')
+    momentos = models.ManyToManyField(Momento, blank=True, related_name='analisis_v2', help_text=(
+        'Vacío en modo integral (el alcance es toda la jornada). En por_momento, los momentos '
+        'elegidos — el orden efectivo es por Momento.orden.'
+    ))
+    modo = models.CharField(max_length=12, choices=MODO_CHOICES)
+    pipeline = models.CharField(max_length=15, choices=PIPELINE_CHOICES, default=PIPELINE_LLM)
+    contexto = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        'Contexto general escrito por quien pide el análisis. Viaja como dato en '
+        '`personalizacion.contexto_usuario`, nunca dentro del system prompt.'
+    ))
+    instrucciones = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        'Instrucciones de quien pide el análisis (`personalizacion.instrucciones_usuario`). '
+        'Ajustan énfasis y tono; el formato del informe es fijo por contrato.'
+    ))
+    personalizacion_momentos = models.JSONField(default=list, blank=True, help_text=(
+        'Lista de {"momento": <id>, "contexto": "…", "instrucciones": "…"} — como máximo una '
+        'entrada por momento del alcance.'
+    ))
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    error_mensaje = models.TextField(blank=True)
+    entrada = models.JSONField(default=dict, blank=True)
+    resultado = models.JSONField(default=dict, blank=True, help_text='Salida kunsamu.analisis/v2 validada.')
+    diagnostico = models.JSONField(default=dict, blank=True)
+    version_prompt = models.CharField(max_length=40, blank=True)
+    version_esquema = models.CharField(max_length=40, blank=True)
+    prompt_usado = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='analisis_v2_solicitados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Análisis v2 (contrato kunsamu.analisis/v2)'
+        verbose_name_plural = 'Análisis v2 (contrato kunsamu.analisis/v2)'
+
+    def __str__(self):
+        return f'Análisis v2 {self.id} · {self.jornada} · {self.modo} · {self.pipeline} · {self.estado}'
