@@ -74,12 +74,22 @@ REGLA_DATOS = (
 # VARIACIONES del mismo contenido, no tres láminas que se complementen. Cada una tiene su papel y
 # su recorte de los datos, y todas comparten la instrucción de estilo para que se lean como una
 # serie y no como tres piezas sueltas.
+# El `{titulo}` de la portada se resuelve en Python (`_titulo_lamina`, más abajo) y se inyecta ya
+# como texto literal — NUNCA se le describe al modelo de imagen "toma el campo X del JSON si
+# viene, si no el campo Y": un modelo de imagen no es un modelo de texto/JSON, está entrenado
+# también para DIBUJAR el texto que se le describe, y confunde con facilidad "esto es una regla
+# de qué campo mirar" con "esto es el texto que va en la lámina". Pasó en producción real
+# (InfografiaJornada #12, 2026-09-20): la portada salió literalmente con el título "el campo
+# `momento` del JSON si viene, o si no el de `jornada`." en vez de resolverlo. El mismo patrón en
+# otros módulos del proyecto (analisis_ia_openai.py, presentacion.py) es seguro porque ahí el
+# modelo es de texto/JSON explicando su propio esquema de salida, no uno de imagen.
 SLIDES = (
     {
         'clave': 'portada',
         'instruccion': (
-            "LÁMINA 1 de 3 — PORTADA. Título: el campo `momento` del JSON si viene, o si no el de "
-            "`jornada`. Debajo, las cifras de participación. Nada más."
+            'LÁMINA 1 de 3 — PORTADA. Título, en texto grande: "{titulo}" — exactamente esas '
+            'palabras, ni una más ni una menos, sin comillas visibles. Debajo, las cifras de '
+            'participación. Nada más.'
         ),
     },
     {
@@ -255,6 +265,13 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momen
     )
 
 
+def _titulo_lamina(datos_analitica):
+    """El título de la portada: el `momento` si la infografía es de uno, si no el `jornada` —
+    resuelto acá, en Python, y nunca descrito como regla dentro del prompt de imagen (ver el
+    comentario junto a `SLIDES`)."""
+    return datos_analitica.get('momento') or datos_analitica.get('jornada') or ''
+
+
 def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instrucciones=''):
     """El orden importa: lo que va después pesa más. Las instrucciones personalizadas se colocan
     al final, justo antes de la regla de datos, para que puedan contradecir el estilo, la
@@ -262,7 +279,10 @@ def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instr
     que queda después, y por lo tanto fuera de su alcance, es `REGLA_DATOS`."""
     partes = [SYSTEM_PROMPT_PREFIJO]
     if slide is not None:
-        partes.append(slide['instruccion'])
+        instruccion = slide['instruccion']
+        if slide['clave'] == 'portada':
+            instruccion = instruccion.format(titulo=_titulo_lamina(datos_analitica))
+        partes.append(instruccion)
         partes.append(INSTRUCCION_SERIE)
     if texto_system_design:
         partes.append(

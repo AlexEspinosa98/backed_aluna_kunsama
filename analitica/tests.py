@@ -2,6 +2,7 @@ import datetime
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
 from jornadas.models import Jornada, Momento, PerfilUsuario, Pregunta
@@ -761,3 +762,41 @@ class EnfoqueCualitativoSinGraficasTests(APITestCase):
         with patch('analitica.analysis._llamar_llm', return_value=('Domina "Sí".\nGRAFICA: barras', None)):
             _descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, enfoque='mixto')
         self.assertEqual(tipo_grafica, 'barras')
+
+
+class InfografiaTituloResueltoEnCodigoTests(SimpleTestCase):
+    """Regresión de un bug real de producción (InfografiaJornada #12, 2026-09-20): la lámina de
+    portada salió con el título literal "el campo `momento` del JSON si viene, o si no el de
+    `jornada`." — el modelo de IMAGEN dibujó la regla en vez de resolverla. El título ahora se
+    resuelve en Python antes de armar el prompt (`_titulo_lamina`), nunca describiéndole al
+    modelo de imagen qué campo del JSON mirar."""
+
+    def test_titulo_usa_momento_si_viene(self):
+        from .infografia_ia_openai import _titulo_lamina
+
+        datos = {'momento': 'Diálogos mesas', 'jornada': 'Mujeres al Mar'}
+        self.assertEqual(_titulo_lamina(datos), 'Diálogos mesas')
+
+    def test_titulo_cae_a_jornada_sin_momento(self):
+        from .infografia_ia_openai import _titulo_lamina
+
+        datos = {'jornada': 'Mujeres al Mar - Mesas'}
+        self.assertEqual(_titulo_lamina(datos), 'Mujeres al Mar - Mesas')
+
+    def test_prompt_de_portada_no_menciona_json_ni_campos(self):
+        from .infografia_ia_openai import SLIDES, _construir_prompt
+
+        # Caso exacto del bug: análisis de JORNADA, sin `momento` en los datos.
+        datos = {'jornada': 'Mujeres al Mar - Mesas', 'resumen_ejecutivo': '…', 'hallazgos': []}
+        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        self.assertIn('"Mujeres al Mar - Mesas"', prompt)
+        self.assertNotIn('el campo', prompt.lower())
+        self.assertNotIn('`momento`', prompt)
+        self.assertNotIn('`jornada`', prompt)
+
+    def test_prompt_de_portada_usa_el_momento_cuando_hay(self):
+        from .infografia_ia_openai import SLIDES, _construir_prompt
+
+        datos = {'momento': 'Diálogos mesas', 'jornada': 'Mujeres al Mar', 'hallazgos': []}
+        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        self.assertIn('"Diálogos mesas"', prompt)
