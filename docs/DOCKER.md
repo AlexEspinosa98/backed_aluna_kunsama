@@ -24,14 +24,11 @@ cp .env.example .env   # y completar SECRET_KEY, POSTGRES_PASSWORD, OPENAI_API_K
 docker compose up -d --build
 ```
 
-El modelo LLM local (2 GB, `analitica/.models/*.gguf`) **no** se descarga solo — se monta desde
-`./analitica/.models` (bind mount, ver `docker-compose.yml`). Si el servidor no lo tiene todavía:
-
-```bash
-docker compose run --rm app python manage.py download_llm_model
-```
-
-(usa el `entrypoint.sh`, así que de paso corre `migrate`; es normal que tarde por la descarga).
+Todo el análisis con IA (minería de textos/BERTopic incluida, ver `analitica/analysis.py`) usa
+OpenAI — no hay ningún modelo local que descargar. `OPENAI_API_KEY` en `.env` es obligatoria para
+que ese análisis funcione; `./.hf_cache` (ver `docker-compose.yml`) solo cachea los embeddings de
+sentence-transformers que usa BERTopic para el clustering (determinístico, sin LLM), se puebla
+solo la primera vez que corre un análisis.
 
 ## 3. Variables de `.env` propias de Docker
 

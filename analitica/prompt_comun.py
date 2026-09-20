@@ -1,14 +1,16 @@
 """Piezas de prompt compartidas por las tres vías de análisis con IA — `analisis_ia_openai.py`
-(momento y jornada vía OpenAI) y `analysis.py` (pipeline local BERTopic + LLM) — para el análisis
+(momento y jornada, una sola llamada) y `analysis.py` (BERTopic local + varios agentes chicos,
+también contra OpenAI) — para el análisis
 guiado del panel: método, **enfoque**, **contexto** e **instrucciones** que escribe quien pide el
 análisis (ver `docs/HU_BACKEND_ANALISIS_GUIADO.md`, HU-57 del frontend).
 
-Un solo lugar para esta redacción evita que dos pipelines completamente distintos (uno llama a
-OpenAI, el otro a un modelo local de 3B) terminen con dos versiones del mismo texto que se
-desalinean con el tiempo — el mismo espíritu que ya usa el proyecto para `_purgar_etiquetas_
-estructura` o el patrón de `_llamar_openai_json` copiado-no-importado entre módulos, pero acá SÍ
-se comparte porque no hay razón de independencia entre analisis_ia_openai.py y analysis.py (los
-dos ya viven en la misma app y ya se leen mutuamente en otros puntos)."""
+Un solo lugar para esta redacción evita que dos pipelines completamente distintos (uno UNA sola
+llamada a OpenAI con todo el instrumento, el otro varios agentes chicos también contra OpenAI)
+terminen con dos versiones del mismo texto que se desalinean con el tiempo — el mismo espíritu que
+ya usa el proyecto para `_purgar_etiquetas_estructura` o el patrón de `_llamar_openai_json`
+copiado-no-importado entre módulos, pero acá SÍ se comparte porque no hay razón de independencia
+entre analisis_ia_openai.py y analysis.py (los dos ya viven en la misma app y ya se leen
+mutuamente en otros puntos)."""
 
 ENFOQUE_CUALITATIVO = 'cualitativo'
 ENFOQUE_CUANTITATIVO = 'cuantitativo'
@@ -135,7 +137,7 @@ def ensamblar_system(base, plantilla_extra, enfoque, contexto, instrucciones, re
     docs/HU_BACKEND_ANALISIS_GUIADO.md §2): plantilla base (con sus instrucciones de equipo) →
     bloque de enfoque → contexto → instrucciones del usuario (con precedencia sobre todo lo
     anterior) → regla de datos, siempre al final y no negociable. Un mismo orden para las dos vías
-    de análisis (OpenAI y pipeline local), cada una con su propio `base`/`regla_datos`."""
+    de análisis (analisis_ia_openai.py y analysis.py), cada una con su propio `base`/`regla_datos`."""
     partes = [base + plantilla_extra, bloque_enfoque(normalizar_enfoque(enfoque))]
     ctx = bloque_contexto(contexto, contexto_momento)
     if ctx:

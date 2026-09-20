@@ -225,7 +225,7 @@ Igual forma que `AnalisisMomentoIA`, sin `momento`/`momento_titulo`/`momento_ord
 
 ### 3.4 `Reporte.analisis` — formato jerárquico del pipeline local
 
-No cambió con esta HU (es el formato de siempre del pipeline BERTopic + LLM local), documentado
+No cambió con esta HU (es el formato de siempre del pipeline BERTopic + OpenAI), documentado
 acá porque `ReporteSerializer` lo expone tal cual:
 
 ```json

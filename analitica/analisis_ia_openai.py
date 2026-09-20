@@ -1,5 +1,5 @@
-"""Vía de análisis alternativa a `analysis.py`: en vez del pipeline local multiagente (una llamada
-de LLM local por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
+"""Vía de análisis alternativa a `analysis.py`: en vez del pipeline multiagente de ese módulo (una
+llamada a OpenAI por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
 INSTRUMENTO completo (de un momento, o de la jornada entera) y redacta un reporte general — no
 una lista mecánica de "pregunta 1 dice X, pregunta 2 dice Y". El objetivo es que GPT deduzca
 hallazgos que cruzan varias preguntas (o varios momentos, a escala de jornada) a la vez, igual

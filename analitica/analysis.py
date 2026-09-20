@@ -1,12 +1,14 @@
-"""Análisis jerárquico de una jornada: jornada → momento → pregunta, con un LLM local
-(`Qwen2.5-3B-Instruct`, cuantizado GGUF, servido con `llama-cpp-python` — sin GPU, sin `torch`;
-mismo enfoque ya probado en el repo hermano `aluna_propositos_backend/backend/catalog/ai_analysis.py`)
-actuando como varios agentes chicos en vez de uno solo con todo el contexto encima.
+"""Análisis jerárquico de una jornada: jornada → momento → pregunta, con OpenAI actuando como
+varios agentes chicos en vez de uno solo con todo el contexto encima (hasta 2026-09-20 esto corría
+contra un LLM local — `Qwen2.5-3B-Instruct` cuantizado GGUF, servido con `llama-cpp-python`, sin
+GPU — reemplazado por OpenAI para no mantener infraestructura de inferencia local que no hace
+falta; ver `_llamar_llm` más abajo).
 
-Decisión de diseño central, igual que en el repo hermano: **los números nunca dependen del LLM**.
-Las estadísticas y los tópicos (BERTopic) son 100% determinísticos; el modelo solo redacta prosa
-sobre esos datos ya calculados. Cada agente además solo ve los datos de **su propio nivel** — nunca
-el detalle completo de la jornada — así que el tamaño del contexto no escala con la cantidad de
+Decisión de diseño central: **los números nunca dependen del LLM**. Las estadísticas y los tópicos
+(BERTopic + embeddings de sentence-transformers) son 100% determinísticos y siguen corriendo
+localmente — nada de esto es un LLM, es clustering; el modelo de lenguaje solo redacta prosa sobre
+esos datos ya calculados. Cada agente además solo ve los datos de **su propio nivel** — nunca el
+detalle completo de la jornada — así que el tamaño del contexto no escala con la cantidad de
 preguntas/momentos de la jornada (a diferencia de la versión anterior de una sola llamada, que
 llegó a superar la ventana de contexto del modelo con una jornada real de 34 preguntas).
 
@@ -18,13 +20,12 @@ llegó a superar la ventana de contexto del modelo con una jornada real de 34 pr
 
     Total: N (preguntas) + M (momentos) + 1 llamadas al LLM. Como cada agente solo ve los datos de
     su propio nivel, las N preguntas de TODA la jornada son independientes entre sí (igual que,
-    después, las M síntesis de momento) — así que corren en paralelo sobre un pool de
-    `LLM_POOL_SIZE` instancias de `Llama` (una sola instancia solo puede atender una inferencia a
-    la vez; instancias distintas sí pueden hacerlo en simultáneo). Solo la síntesis final de
-    jornada, que necesita las M síntesis de momento ya listas, sigue siendo una llamada aislada al
-    final. Cada agente falla de forma aislada (nunca tumba el reporte completo): si una llamada
-    falla o se pasa del tiempo, esa pieza queda con un aviso corto en vez de descripción generada,
-    y el resto del análisis sigue su curso.
+    después, las M síntesis de momento) — así que corren en paralelo, hasta
+    `OPENAI_CONCURRENCIA_MAXIMA` llamadas a la vez. Solo la síntesis final de jornada, que necesita
+    las M síntesis de momento ya listas, sigue siendo una llamada aislada al final. Cada agente
+    falla de forma aislada (nunca tumba el reporte completo): si una llamada falla o se pasa del
+    tiempo, esa pieza queda con un aviso corto en vez de descripción generada, y el resto del
+    análisis sigue su curso.
 
 Metodología de codificación temática del equipo: un `Momento` puede traer `categorias_semilla`
 (lista de categorías predefinidas por eje temático, ej. EIBIC o Innovación y Emprendimiento). Si
@@ -37,11 +38,9 @@ acuerdo estuvieron las mesas entre sí para cada tema— con el mismo patrón de
 confirmación del LLM que ya usa `tipo_grafica` (`_pista_nivel_acuerdo` / `_extraer_nivel_acuerdo`).
 """
 import os
-import queue
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from django.db import close_old_connections
 from django.utils import timezone
@@ -51,10 +50,13 @@ from .prompt_comun import (
     normalizar_enfoque,
 )
 
-MODELS_DIR = Path(__file__).resolve().parent / '.models'
-DEFAULT_MODEL_REPO = 'Qwen/Qwen2.5-3B-Instruct-GGUF'
-DEFAULT_MODEL_FILE = os.environ.get('KUNSAMU_LLM_MODEL_FILE', 'qwen2.5-3b-instruct-q4_k_m.gguf')
-MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_FILE
+# Mismas variables de entorno que ya usa analisis_ia_openai.py (ver ese módulo) — un solo par de
+# nombres para las dos vías de análisis con OpenAI del proyecto, en vez de uno por pipeline.
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+OPENAI_REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
+# Nunca se expone el nombre real del modelo de un proveedor externo en la respuesta de la API —
+# mismo criterio que MODELO_USADO_LABEL en analisis_ia_openai.py.
+MODELO_USADO_LABEL = 'Generado con IA'
 
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 
@@ -68,25 +70,13 @@ MAX_TEMAS_CANDIDATOS = 5
 MAX_RESPUESTAS_CLASIFICACION = 60
 # Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
 # resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
-# Subido de 90s a 150s cuando se aumentaron los max_tokens de cada agente (análisis más robusto,
-# ver los distintos `max_tokens=` más abajo): con el presupuesto de tokens más alto, 90s hacía que
-# la mayoría de las preguntas de un reporte real cayeran a "(Sin descripción automática...)" por
-# timeout — validado contra datos reales (reporte #26, jornada-agil-2).
 GENERATION_TIMEOUT_SECONDS = 150
 # Preguntas y momentos son independientes entre sí (cada uno solo ve sus propios datos, ver nota
-# de diseño arriba), así que no hay razón para analizarlos uno a la vez: el servidor tiene núcleos
-# de sobra, así que en vez de una sola instancia del modelo usando todos los hilos para UNA
-# llamada a la vez, se reparten entre varias instancias que procesan preguntas EN PARALELO. Esto
-# no cambia una sola palabra de lo que se genera — mismo contenido, mismos prompts — solo cuánto
-# tarda en generarse.
-# Probado contra datos reales: con 8 instancias (6 hilos c/u en un servidor de 48 núcleos) las
-# llamadas individuales se vuelven tan lentas que varias chocan con GENERATION_TIMEOUT_SECONDS y
-# la clasificación falla (cae a resultado sin conteo) — con 6 (8 hilos c/u) el mismo lote de
-# preguntas terminó sin ningún fallo. El rendimiento total no mejora mucho más allá de este punto
-# porque el CPU total es fijo (48 núcleos): más instancias == menos hilos cada una == llamadas
-# individuales más lentas, así que la ganancia de más paralelismo se cancela con la pérdida de
-# velocidad por instancia. 6 es el punto validado que da paralelismo real sin arriesgar timeouts.
-LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '6'))
+# de diseño arriba), así que no hay razón para analizarlas una a la vez: se disparan hasta
+# OPENAI_CONCURRENCIA_MAXIMA llamadas a OpenAI en simultáneo (a diferencia del LLM local que este
+# pipeline usaba antes, la API de OpenAI sí soporta llamadas concurrentes sin coordinación
+# especial — no hace falta un pool de instancias, cada hilo abre su propio cliente).
+OPENAI_CONCURRENCIA_MAXIMA = int(os.environ.get('KUNSAMU_OPENAI_CONCURRENCIA_MAXIMA', '6'))
 
 def _instrucciones_plantilla(plantilla):
     """Instrucciones adicionales de la plantilla activa (`PlantillaAnalisis.prompt_sistema`,
@@ -219,68 +209,39 @@ def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
 # Modelo LLM (llama.cpp) — pool de instancias perezoso y único por proceso.
 # ---------------------------------------------------------------------------
 
-_llm_pool = None
-_llm_pool_lock = threading.Lock()
-
-
-def _crear_instancia_llm():
-    from llama_cpp import Llama
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f'No se encontró el modelo en {MODEL_PATH}. Corre '
-            "'python manage.py download_llm_model' primero."
-        )
-    # Los hilos disponibles se reparten entre las instancias del pool en vez de dárselos todos a
-    # una sola — con LLM_POOL_SIZE llamadas corriendo de verdad en paralelo, cada una individual
-    # tarda un poco más que si tuviera el CPU entero para ella (ver más abajo), pero el conjunto
-    # avanza LLM_POOL_SIZE veces más rápido, que es lo que importa para el tiempo total del reporte.
-    hilos = max(1, (os.cpu_count() or LLM_POOL_SIZE) // LLM_POOL_SIZE)
-    return Llama(model_path=str(MODEL_PATH), n_ctx=4096, n_threads=hilos, verbose=False)
-
-
-def _get_llm_pool():
-    """Pool de `LLM_POOL_SIZE` instancias `Llama` independientes, una por 'carril' de paralelismo.
-    llama.cpp no soporta llamadas concurrentes de inferencia sobre la MISMA instancia — corrompen
-    el contexto interno y crashean el proceso entero con un GGML_ASSERT nativo (no es una excepción
-    de Python, ningún try/except lo detiene). Esto pasó en producción una vez: dos hilos llamando
-    al modelo a la vez tumbaron el worker y dejaron dos reportes huérfanos en 'procesando' para
-    siempre. La lección de ese incidente NO era "nunca paralelizar" sino "nunca compartir una
-    instancia entre hilos" — instancias DISTINTAS sí pueden inferir al mismo tiempo sin problema.
-    El `queue.Queue` es el mecanismo de exclusión: sacar una instancia (`get`) se la reserva a ese
-    hilo hasta que la devuelve (`put`), así nunca hay dos hilos usando la misma instancia a la vez,
-    sin necesidad de un lock global que serialice todo el pool."""
-    global _llm_pool
-    if _llm_pool is None:
-        with _llm_pool_lock:
-            if _llm_pool is None:
-                pool = queue.Queue()
-                for _ in range(LLM_POOL_SIZE):
-                    pool.put(_crear_instancia_llm())
-                _llm_pool = pool
-    return _llm_pool
-
-
 def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
-    """Una llamada de agente al LLM. Devuelve (texto, error) — nunca lanza excepción; `error`
-    queda disponible para diagnóstico cuando `texto` es None."""
+    """Una llamada de agente a OpenAI. Devuelve (texto, error) — nunca lanza excepción; `error`
+    queda disponible para diagnóstico cuando `texto` es None. Mismo patrón de hilo + timeout que
+    `_llamar_openai_json` en `analisis_ia_openai.py`, pero en texto libre (esta vía redacta prosa
+    por agente, no un único JSON estructurado)."""
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).'
+
     resultado = {}
 
     def _run():
-        pool = _get_llm_pool()
-        llm = pool.get()
         try:
-            salida = llm.create_chat_completion(
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            kwargs = dict(
+                model=OPENAI_MODEL,
                 messages=[
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
                 ],
-                max_tokens=max_tokens, temperature=temperature,
+                max_completion_tokens=max_tokens,
             )
-            resultado['texto'] = salida['choices'][0]['message']['content'].strip()
-        except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
+            if OPENAI_REASONING_EFFORT:
+                # Los modelos de razonamiento no aceptan `temperature` (la fijan ellos mismos) —
+                # se manda reasoning_effort en su lugar, nunca ambos a la vez.
+                kwargs['reasoning_effort'] = OPENAI_REASONING_EFFORT
+            else:
+                kwargs['temperature'] = temperature
+            respuesta = client.chat.completions.create(**kwargs)
+            resultado['texto'] = respuesta.choices[0].message.content.strip()
+        except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a texto de respaldo
             resultado['error'] = str(exc)
-        finally:
-            pool.put(llm)
 
     hilo = threading.Thread(target=_run, daemon=True)
     hilo.start()
@@ -289,7 +250,7 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
     if hilo.is_alive():
         return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s).'
     if not resultado.get('texto'):
-        return None, resultado.get('error', 'El modelo no devolvió texto.')
+        return None, resultado.get('error', 'OpenAI no devolvió contenido.')
     return resultado['texto'], None
 
 
@@ -1159,7 +1120,7 @@ def procesar_reporte(reporte_id):
             return pregunta.id, resultado
 
         resultados_pregunta = {}
-        with ThreadPoolExecutor(max_workers=LLM_POOL_SIZE) as executor:
+        with ThreadPoolExecutor(max_workers=OPENAI_CONCURRENCIA_MAXIMA) as executor:
             for pregunta_id, resultado in executor.map(_analizar_pregunta_en_hilo, todas_las_preguntas):
                 resultados_pregunta[pregunta_id] = resultado
 
@@ -1172,7 +1133,7 @@ def procesar_reporte(reporte_id):
                 contexto_momento=contexto_mom, instrucciones_momento=instrucciones_mom,
             )
 
-        with ThreadPoolExecutor(max_workers=min(LLM_POOL_SIZE, len(momentos))) as executor:
+        with ThreadPoolExecutor(max_workers=min(OPENAI_CONCURRENCIA_MAXIMA, len(momentos))) as executor:
             momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))
 
         texto, error_narrativa, system_jornada = analizar_jornada(
@@ -1182,7 +1143,7 @@ def procesar_reporte(reporte_id):
 
         reporte.analisis = {'participacion': participacion, 'momentos': momentos_analisis}
         reporte.texto_reporte = texto or FALLBACK_TEXTO
-        reporte.modelo_usado = DEFAULT_MODEL_FILE if texto else ''
+        reporte.modelo_usado = MODELO_USADO_LABEL if texto else ''
         reporte.error_mensaje = '' if texto else f'Síntesis de jornada no generada: {error_narrativa}'
         reporte.prompt_usado = system_jornada
         reporte.estado = Reporte.ESTADO_COMPLETO

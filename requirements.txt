@@ -5,8 +5,6 @@ django-environ
 django-cors-headers
 drf-spectacular
 gunicorn
-llama-cpp-python
-huggingface_hub
 bertopic
 sentence-transformers
 reportlab

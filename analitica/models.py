@@ -210,13 +210,13 @@ class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
 
 
 class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, models.Model):
-    """Vía de análisis alternativa a `Reporte`: en vez del pipeline local multiagente (una llamada
-    de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
-    instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
+    """Vía de análisis alternativa a `Reporte`: en vez del pipeline multiagente de `analysis.py`
+    (una llamada a OpenAI por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI
+    lee el instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
     redacta un reporte general — hallazgos que pueden cruzar varias preguntas a la vez, no un
-    bloque aislado por pregunta como hace el pipeline local. Ver `analitica/analisis_ia_openai.py`
-    para el formato exacto de `resultado`. No depende de un `Reporte` — se dispara directo desde
-    un `Momento`, con su propio historial."""
+    bloque aislado por pregunta como hace el pipeline de `analysis.py`. Ver
+    `analitica/analisis_ia_openai.py` para el formato exacto de `resultado`. No depende de un
+    `Reporte` — se dispara directo desde un `Momento`, con su propio historial."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'

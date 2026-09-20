@@ -7,9 +7,8 @@
 #
 # Python 3.12 para calzar con la versión real de producción (ver sistema/python_version.txt del
 # respaldo). bertopic/umap-learn/hdbscan/scikit-learn compilan extensiones nativas en la primera
-# instalación — de ahí build-essential/cmake — y llama-cpp-python SIEMPRE compila desde código en
-# este Dockerfile (no hay wheel prebuilt garantizado para toda arquitectura x86_64), así que ese
-# toolchain de build se necesita sí o sí, no es opcional.
+# instalación — de ahí build-essential — así que ese toolchain de build se necesita sí o sí, no es
+# opcional.
 FROM python:3.12-slim
 
 # PYTHONDONTWRITEBYTECODE: no ensucia los volúmenes montados con .pyc de una versión de Python
@@ -21,14 +20,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# build-essential + cmake + git: compilar llama-cpp-python (inferencia LLM local, CPU-only —
-# ver analitica/analysis.py, nunca usa GPU) y las extensiones nativas de hdbscan/umap-learn.
-# poppler-utils: pdfplumber lo usa para algunos PDFs con capas de texto complejas
-# (instrumentos/extraccion_ia_openai.py). fonts-dejavu-core: reportlab necesita al menos una
-# fuente con soporte de acentos/ñ para los PDFs en español (analitica/pdf_presentacion.py,
-# transcripciones/pdf_informe.py) — sin ella el texto sale con glifos rotos.
+# build-essential + git: compilar las extensiones nativas de hdbscan/umap-learn (BERTopic, ver
+# analitica/analysis.py — clustering local, determinístico, sin LLM). poppler-utils: pdfplumber lo
+# usa para algunos PDFs con capas de texto complejas (instrumentos/extraccion_ia_openai.py).
+# fonts-dejavu-core: reportlab necesita al menos una fuente con soporte de acentos/ñ para los PDFs
+# en español (analitica/pdf_presentacion.py, transcripciones/pdf_informe.py) — sin ella el texto
+# sale con glifos rotos.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git poppler-utils fonts-dejavu-core \
+        build-essential git poppler-utils fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Torch CPU-only ANTES del resto de requirements: pip por defecto instala la build con CUDA

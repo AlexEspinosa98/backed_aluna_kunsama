@@ -56,14 +56,11 @@ services:
       # con un `alias` a una ruta de disco) puede leerlos sin tener que entrar al contenedor.
       - ./media:/app/media
       - ./staticfiles:/app/staticfiles
-      # El modelo LLM local (2 GB, gitignored) y la caché de sentence-transformers NO viven en la
-      # imagen ni se descargan en cada build — se montan desde el host, igual que media/ y
-      # staticfiles/ (bind mount, no volumen con nombre: así restaurar un respaldo es un `cp` a
-      # una ruta del proyecto, sin tener que entrar a un volumen de Docker). `python manage.py
-      # download_llm_model` (ver analitica/management/commands/download_llm_model.py) deja el
-      # modelo en `./analitica/.models`; `./.hf_cache` se puebla sola la primera vez que corre un
-      # análisis (o se restaura desde un respaldo — ver docs/DOCKER.md).
-      - ./analitica/.models:/app/analitica/.models
+      # La caché de sentence-transformers (embeddings de BERTopic, ver analitica/analysis.py) NO
+      # vive en la imagen ni se descarga en cada build — se monta desde el host, igual que media/ y
+      # staticfiles/ (bind mount, no volumen con nombre: así restaurar un respaldo es un `cp` a una
+      # ruta del proyecto, sin tener que entrar a un volumen de Docker). Se puebla sola la primera
+      # vez que corre un análisis (o se restaura desde un respaldo — ver docs/DOCKER.md).
       - ./.hf_cache:/home/kunsama/.cache/huggingface
     command: >
       gunicorn config.wsgi:application
