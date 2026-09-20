@@ -43,7 +43,13 @@ COPY . .
 # Usuario sin privilegios para correr gunicorn — nunca root en un proceso que recibe tráfico HTTP,
 # aunque sea detrás de un proxy. uid/gid 1000 porque es lo habitual en la primera cuenta no-root
 # de la mayoría de hosts Linux (facilita que un bind mount del host quede legible sin ajustes).
-RUN useradd -m -u 1000 kunsama && chown -R kunsama:kunsama /app
+# ~/.cache se crea acá, ya con el dueño correcto, ANTES de que exista cualquier bind mount debajo
+# (docker-compose.yml monta ./.hf_cache en ~/.cache/huggingface): si ese directorio padre no
+# existiera ya en la imagen, Docker lo autocrearía como root al arrancar el contenedor (para poder
+# enganchar el mount), y kunsama quedaría sin permiso de escritura en ~/.cache mismo — justo lo que
+# rompía numba más abajo.
+RUN useradd -m -u 1000 kunsama && chown -R kunsama:kunsama /app && \
+    mkdir -p /home/kunsama/.cache && chown kunsama:kunsama /home/kunsama/.cache
 USER kunsama
 
 # HF_HOME fija dónde caen los modelos que descarga sentence-transformers (si no, usa
@@ -57,7 +63,8 @@ ENV HF_HOME=/home/kunsama/.cache/huggingface
 # override, la primera vez que corre un análisis con volumen suficiente para activar BERTopic
 # (`MIN_RESPUESTAS_TOPICOS`, ver analitica/analysis.py) numba lanza `RuntimeError: cannot cache
 # function ...: no locator available` y tumba ese hilo de análisis — pasó en producción real
-# (2026-09-20, Reporte #41). Redirigido a una ruta propia del usuario de la app, igual que HF_HOME.
+# (2026-09-20, Reporte #41). Redirigido a una ruta propia del usuario de la app, igual que HF_HOME
+# (y solo funciona en conjunto con el `mkdir`/`chown` de ~/.cache de arriba — ver esa nota).
 ENV NUMBA_CACHE_DIR=/home/kunsama/.cache/numba
 
 EXPOSE 8000
