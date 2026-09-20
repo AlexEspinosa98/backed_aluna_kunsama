@@ -4,8 +4,13 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 from rest_framework.authtoken.views import obtain_auth_token
 
 from .media_views import servir_media_publica
+from .views import healthcheck
 
 urlpatterns = [
+    # Sin `/api/` a propósito: se pide poder confirmar que el servidor funciona entrando directo
+    # a la URL base del dominio (ver config/views.py), sin tener que recordar ninguna ruta de la
+    # API ni autenticarse.
+    path('', healthcheck, name='healthcheck'),
     path('admin/', admin.site.urls),
     path('api/admin/login/', obtain_auth_token, name='admin-login'),
     path('api/admin/', include('jornadas.urls')),
