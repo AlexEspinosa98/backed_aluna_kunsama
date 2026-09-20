@@ -1,0 +1,12 @@
+# Imagen chica para el servicio `git-sync` de docker-compose.yml (ver redeploy-watcher.sh para el
+# porqué de no usar el binario oficial de git-sync). `docker:27-cli` ya trae el CLI de Docker; se
+# le suma `git` (para el fetch/pull) y `openssh-client` (git necesita `ssh` en el PATH para clonar
+# por SSH) y el plugin de compose.
+FROM docker:27-cli
+
+RUN apk add --no-cache git openssh-client docker-cli-compose
+
+COPY redeploy-watcher.sh /usr/local/bin/redeploy-watcher.sh
+RUN chmod +x /usr/local/bin/redeploy-watcher.sh
+
+ENTRYPOINT ["/usr/local/bin/redeploy-watcher.sh"]

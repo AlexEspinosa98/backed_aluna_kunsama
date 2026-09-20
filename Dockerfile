@@ -7,9 +7,8 @@
 #
 # Python 3.12 para calzar con la versión real de producción (ver sistema/python_version.txt del
 # respaldo). bertopic/umap-learn/hdbscan/scikit-learn compilan extensiones nativas en la primera
-# instalación — de ahí build-essential/cmake — y llama-cpp-python SIEMPRE compila desde código en
-# este Dockerfile (no hay wheel prebuilt garantizado para toda arquitectura x86_64), así que ese
-# toolchain de build se necesita sí o sí, no es opcional.
+# instalación — de ahí build-essential — así que ese toolchain de build se necesita sí o sí, no es
+# opcional.
 FROM python:3.12-slim
 
 # PYTHONDONTWRITEBYTECODE: no ensucia los volúmenes montados con .pyc de una versión de Python
@@ -21,14 +20,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# build-essential + cmake + git: compilar llama-cpp-python (inferencia LLM local, CPU-only —
-# ver analitica/analysis.py, nunca usa GPU) y las extensiones nativas de hdbscan/umap-learn.
-# poppler-utils: pdfplumber lo usa para algunos PDFs con capas de texto complejas
-# (instrumentos/extraccion_ia_openai.py). fonts-dejavu-core: reportlab necesita al menos una
-# fuente con soporte de acentos/ñ para los PDFs en español (analitica/pdf_presentacion.py,
-# transcripciones/pdf_informe.py) — sin ella el texto sale con glifos rotos.
+# build-essential + git: compilar las extensiones nativas de hdbscan/umap-learn (BERTopic, ver
+# analitica/analysis.py — clustering local, determinístico, sin LLM). poppler-utils: pdfplumber lo
+# usa para algunos PDFs con capas de texto complejas (instrumentos/extraccion_ia_openai.py).
+# fonts-dejavu-core: reportlab necesita al menos una fuente con soporte de acentos/ñ para los PDFs
+# en español (analitica/pdf_presentacion.py, transcripciones/pdf_informe.py) — sin ella el texto
+# sale con glifos rotos.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git poppler-utils fonts-dejavu-core \
+        build-essential git poppler-utils fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Torch CPU-only ANTES del resto de requirements: pip por defecto instala la build con CUDA
@@ -44,13 +43,29 @@ COPY . .
 # Usuario sin privilegios para correr gunicorn — nunca root en un proceso que recibe tráfico HTTP,
 # aunque sea detrás de un proxy. uid/gid 1000 porque es lo habitual en la primera cuenta no-root
 # de la mayoría de hosts Linux (facilita que un bind mount del host quede legible sin ajustes).
-RUN useradd -m -u 1000 kunsama && chown -R kunsama:kunsama /app
+# ~/.cache se crea acá, ya con el dueño correcto, ANTES de que exista cualquier bind mount debajo
+# (docker-compose.yml monta ./.hf_cache en ~/.cache/huggingface): si ese directorio padre no
+# existiera ya en la imagen, Docker lo autocrearía como root al arrancar el contenedor (para poder
+# enganchar el mount), y kunsama quedaría sin permiso de escritura en ~/.cache mismo — justo lo que
+# rompía numba más abajo.
+RUN useradd -m -u 1000 kunsama && chown -R kunsama:kunsama /app && \
+    mkdir -p /home/kunsama/.cache && chown kunsama:kunsama /home/kunsama/.cache
 USER kunsama
 
 # HF_HOME fija dónde caen los modelos que descarga sentence-transformers (si no, usa
 # ~/.cache/huggingface del usuario del proceso, que es lo mismo pero mejor dejarlo explícito para
 # que docker-compose.yml pueda montarlo como volumen sin adivinar la ruta).
 ENV HF_HOME=/home/kunsama/.cache/huggingface
+# NUMBA_CACHE_DIR: por defecto numba (dependencia de umap-learn, que usa BERTopic para el
+# clustering de tópicos) intenta guardar la caché de sus funciones JIT junto al código fuente del
+# paquete (site-packages/umap/__pycache__) — eso quedó instalado por `pip` corriendo como root
+# (paso anterior a `USER kunsama`), así que `kunsama` no tiene permiso de escritura ahí. Sin este
+# override, la primera vez que corre un análisis con volumen suficiente para activar BERTopic
+# (`MIN_RESPUESTAS_TOPICOS`, ver analitica/analysis.py) numba lanza `RuntimeError: cannot cache
+# function ...: no locator available` y tumba ese hilo de análisis — pasó en producción real
+# (2026-09-20, Reporte #41). Redirigido a una ruta propia del usuario de la app, igual que HF_HOME
+# (y solo funciona en conjunto con el `mkdir`/`chown` de ~/.cache de arriba — ver esa nota).
+ENV NUMBA_CACHE_DIR=/home/kunsama/.cache/numba
 
 EXPOSE 8000
 

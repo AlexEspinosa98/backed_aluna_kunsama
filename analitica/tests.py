@@ -2,11 +2,13 @@ import datetime
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
-from jornadas.models import Jornada, PerfilUsuario
+from jornadas.models import Jornada, Momento, PerfilUsuario, Pregunta
 
-from .models import AnalisisJornadaIA, InfografiaJornada, PlantillaAnalisis, Reporte
+from .analisis_ia_openai import _validar_y_limpiar, _validar_y_limpiar_jornada
+from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
 
 Usuario = get_user_model()
 
@@ -18,6 +20,18 @@ def crear_jornada(slug, propietario=None):
     if propietario:
         jornada.propietarios.set([propietario])
     return jornada
+
+
+def crear_momento_con_respuesta(jornada, orden=1, titulo='Momento con datos'):
+    """Un momento con una pregunta abierta y UNA respuesta real — lo mínimo para pasar el guard
+    de "sin respuestas en el alcance" (HU-57 §5, ver `_sin_respuestas` en admin_views.py) sin
+    tener que montar un instrumento completo en cada test."""
+    from participantes.models import Respuesta
+
+    momento = Momento.objects.create(jornada=jornada, orden=orden, titulo=titulo)
+    pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_ABIERTA, texto='¿Qué opinas?', orden=1)
+    Respuesta.objects.create(pregunta=pregunta, texto_libre='Una respuesta real de prueba.')
+    return momento
 
 
 def crear_dependencia(username):
@@ -123,8 +137,9 @@ class AnalisisJornadaIAScopingTests(APITestCase):
 
 
 class InfografiaSinReporteTests(APITestCase):
-    """La infografía se pide a nivel de JORNADA. Exigir un `Reporte` dejaba sin salida al panel,
-    que usa el reporte integral (AnalisisJornadaIA) y no el pipeline local."""
+    """La infografía se pide sobre una VERSIÓN exacta de análisis (HU-73) — acá, la vía
+    `analisis_jornada` (reporte integral vía IA), sin necesidad de un `Reporte` del pipeline
+    local."""
 
     def setUp(self):
         self.admin = crear_admin_completo('admin')
@@ -138,44 +153,74 @@ class InfografiaSinReporteTests(APITestCase):
             resultado={'resumen_ejecutivo': 'Hubo consenso.', 'hallazgos': [{'titulo': 'Tema'}]},
         )
 
-    def test_genera_desde_el_reporte_integral_sin_reporte_local(self):
-        self._analisis_integral_completo(self.jornada)
+    def test_genera_desde_analisis_jornada_fijado_sin_reporte_local(self):
+        analisis = self._analisis_integral_completo(self.jornada)
         self.client.force_authenticate(user=self.admin)
         with patch('analitica.admin_views.threading.Thread'):
             resp = self.client.post(
-                '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+                '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
             )
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 201, resp.data)
         infografia = InfografiaJornada.objects.get(id=resp.data['id'])
         self.assertEqual(infografia.jornada, self.jornada)
+        self.assertEqual(infografia.analisis_jornada, analisis)
         self.assertIsNone(infografia.reporte)
         self.assertEqual(Reporte.objects.count(), 0)
 
-    def test_400_si_la_jornada_no_tiene_analitica(self):
-        """Se avisa de una vez, en vez de crear un registro que va a fallar en background."""
+    def test_sin_ningun_pin_da_400(self):
+        """HU-73: `jornada`/`momento` solos ya no alcanzan — hay que fijar la versión exacta."""
+        self._analisis_integral_completo(self.jornada)
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(
             '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
         )
         self.assertEqual(resp.status_code, 400)
+        self.assertIn('EXACTAMENTE uno', str(resp.data))
         self.assertEqual(InfografiaJornada.objects.count(), 0)
 
-    def test_409_si_ya_hay_una_en_curso(self):
-        self._analisis_integral_completo(self.jornada)
-        InfografiaJornada.objects.create(
-            jornada=self.jornada, estado=InfografiaJornada.ESTADO_PROCESANDO,
+    def test_400_si_el_analisis_fijado_no_esta_completo(self):
+        """Se avisa de una vez, en vez de crear un registro que va a fallar en background."""
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_PENDIENTE,
         )
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(
-            '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+            '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(InfografiaJornada.objects.count(), 0)
+
+    def test_409_si_ya_hay_una_en_curso_para_la_misma_version(self):
+        analisis = self._analisis_integral_completo(self.jornada)
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, analisis_jornada=analisis, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
         )
         self.assertEqual(resp.status_code, 409)
 
+    def test_una_version_en_curso_no_bloquea_a_otra_version_distinta(self):
+        """HU-73, el punto central: dos versiones de análisis de la MISMA jornada son trabajos
+        aislados — una en curso nunca debe bloquear a la otra."""
+        version_a = self._analisis_integral_completo(self.jornada)
+        version_b = self._analisis_integral_completo(self.jornada)
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, analisis_jornada=version_a, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_jornada': version_b.id}, format='json',
+            )
+        self.assertEqual(resp.status_code, 201, resp.data)
+
     def test_dependencia_no_puede_pedirla_para_jornada_ajena(self):
-        self._analisis_integral_completo(self.ajena)
+        analisis_ajeno = self._analisis_integral_completo(self.ajena)
         self.client.force_authenticate(user=self.dependencia)
         resp = self.client.post(
-            '/api/admin/infografias/', {'jornada': self.ajena.id}, format='json',
+            '/api/admin/infografias/', {'analisis_jornada': analisis_ajeno.id}, format='json',
         )
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(InfografiaJornada.objects.count(), 0)
@@ -187,17 +232,6 @@ class InfografiaSinReporteTests(APITestCase):
         resp = self.client.get('/api/admin/infografias/')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual([i['jornada'] for i in resp.data], [self.jornada.id])
-
-    def test_rechaza_un_reporte_de_otra_jornada(self):
-        reporte_ajeno = Reporte.objects.create(
-            jornada=self.ajena, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
-        )
-        self._analisis_integral_completo(self.jornada)
-        self.client.force_authenticate(user=self.admin)
-        resp = self.client.post('/api/admin/infografias/', {
-            'jornada': self.jornada.id, 'reporte': reporte_ajeno.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
 
     def test_el_atajo_desde_un_reporte_sigue_funcionando(self):
         reporte = Reporte.objects.create(
@@ -211,6 +245,147 @@ class InfografiaSinReporteTests(APITestCase):
         infografia = InfografiaJornada.objects.get()
         self.assertEqual(infografia.jornada, self.jornada)
         self.assertEqual(infografia.reporte, reporte)
+
+    def test_el_atajo_de_un_reporte_no_bloquea_al_de_otro_reporte_de_la_misma_jornada(self):
+        reporte_a = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+            analisis={'participacion': {'total': 1}},
+        )
+        reporte_b = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+            analisis={'participacion': {'total': 2}},
+        )
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, reporte=reporte_a, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(f'/api/admin/reportes/{reporte_b.id}/generar-infografia/')
+        self.assertEqual(resp.status_code, 202, resp.data)
+
+
+class InfografiaFijaAnalisisExactoTests(APITestCase):
+    """Una jornada o un momento pueden tener VARIOS análisis completos a la vez (HU-71: distintos
+    métodos y enfoques) — la infografía queda atada a exactamente uno (HU-73), fijado siempre por
+    el cliente: ya no existe "el más reciente" como comportamiento por defecto. `jornada`/
+    `momento` se derivan solos del análisis fijado, así que no hay forma de mandar una
+    combinación incoherente entre ellos — solo entre los TRES campos de fijado entre sí."""
+
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.jornada = crear_jornada('jornada-fijar-analisis')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+        self.client.force_authenticate(user=self.admin)
+
+    # --- Nivel función pura: _obtener_datos_analitica usa el fijado, no el más reciente. Esta
+    # función se mantiene flexible (con fallback) como utilidad general — la garantía de
+    # aislamiento de HU-73 se exige en la capa de creación (serializer/vista), probada más abajo.
+
+    def test_momento_fijando_el_mas_viejo_lo_usa_pese_a_que_hay_uno_mas_reciente(self):
+        from .infografia_ia_openai import _obtener_datos_analitica
+
+        viejo = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Viejo', 'hallazgos': []},
+        )
+        AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Nuevo', 'hallazgos': []},
+        )
+        datos, error = _obtener_datos_analitica(self.jornada, momento=self.momento, analisis_momento=viejo)
+        self.assertIsNone(error)
+        self.assertEqual(datos['resumen_ejecutivo'], 'Viejo')
+
+    def test_jornada_fijando_el_mas_viejo_lo_usa_pese_a_que_hay_uno_mas_reciente(self):
+        from .infografia_ia_openai import _obtener_datos_analitica
+
+        viejo = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Viejo cualitativo', 'hallazgos': []},
+        )
+        AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+            resultado={'resumen_ejecutivo': 'Nuevo cuantitativo', 'hallazgos': []},
+        )
+        datos, error = _obtener_datos_analitica(self.jornada, analisis_jornada=viejo)
+        self.assertIsNone(error)
+        self.assertEqual(datos['resumen_ejecutivo'], 'Viejo cualitativo')
+
+    # --- Nivel API: se exige exactamente uno, jornada/momento se derivan, se guarda el fijado ---
+
+    def test_api_guarda_analisis_momento_fijado_y_deriva_momento_y_jornada(self):
+        analisis = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_momento': analisis.id}, format='json',
+            )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.analisis_momento_id, analisis.id)
+        self.assertEqual(infografia.momento_id, self.momento.id)
+        self.assertEqual(infografia.jornada_id, self.jornada.id)
+
+    def test_api_guarda_analisis_jornada_fijado_y_deriva_jornada_sin_momento(self):
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
+            )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.analisis_jornada_id, analisis.id)
+        self.assertIsNone(infografia.momento_id)
+        self.assertEqual(infografia.jornada_id, self.jornada.id)
+
+    def test_jornada_y_momento_del_cuerpo_se_ignoran_manda_lo_que_sea(self):
+        """`jornada`/`momento` son read-only — mandarlos no rompe nada, simplemente no se usan
+        para nada más que ser ignorados; lo único que decide el alcance es la versión fijada."""
+        otra_jornada = crear_jornada('jornada-fijar-analisis-otra-para-ignorar')
+        analisis = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/infografias/', {
+                'jornada': otra_jornada.id, 'analisis_momento': analisis.id,
+            }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.jornada_id, self.jornada.id)  # NO otra_jornada
+
+    def test_ningun_pin_da_400(self):
+        resp = self.client.post('/api/admin/infografias/', {}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_reporte_y_analisis_jornada_a_la_vez_da_400(self):
+        reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'reporte': reporte.id, 'analisis_jornada': analisis.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_los_tres_pines_a_la_vez_da_400(self):
+        reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        analisis_j = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        analisis_m = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'reporte': reporte.id, 'analisis_jornada': analisis_j.id, 'analisis_momento': analisis_m.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
 
 
 class PlantillaAnalisisPermisosTests(APITestCase):
@@ -314,3 +489,334 @@ class PayloadJornadaConTranscripcionesTests(APITestCase):
         transcripciones = self._payload()['transcripciones']
         self.assertEqual(len(transcripciones), 1)
         self.assertEqual(transcripciones[0]['resumen_ejecutivo'], 'Versión nueva')
+
+
+class AnalisisGuiadoCamposTests(APITestCase):
+    """HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md) §1: enfoque/contexto/instrucciones en las tres
+    solicitudes de análisis, persistidos y devueltos tal cual. No espera a que el hilo en
+    background termine (no hay OPENAI_API_KEY en el entorno de test): solo verifica la respuesta
+    síncrona del `create()`, que es donde vive el contrato que describe la HU."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.jornada = crear_jornada('jornada-guiada', propietario=self.admin)
+        self.momento = crear_momento_con_respuesta(self.jornada)
+        self.client.force_authenticate(user=self.admin)
+
+    def test_reporte_persiste_y_devuelve_los_campos_guiados(self):
+        resp = self.client.post('/api/admin/reportes/', {
+            'jornada': self.jornada.id,
+            'momentos': [self.momento.id],
+            'enfoque': 'cualitativo',
+            'contexto': 'Jornada de percepción sobre bienestar.',
+            'instrucciones': 'Tono cercano.',
+            'contexto_momento': 'Este momento se trabajó en mesas.',
+            'instrucciones_momento': 'Destaca tensiones.',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'bertopic')
+        self.assertEqual(resp.data['enfoque'], 'cualitativo')
+        self.assertEqual(resp.data['contexto'], 'Jornada de percepción sobre bienestar.')
+        self.assertEqual(resp.data['instrucciones'], 'Tono cercano.')
+        self.assertEqual(resp.data['contexto_momento'], 'Este momento se trabajó en mesas.')
+        self.assertEqual(resp.data['instrucciones_momento'], 'Destaca tensiones.')
+
+    def test_reporte_enfoque_por_defecto_es_mixto(self):
+        resp = self.client.post(
+            '/api/admin/reportes/', {'jornada': self.jornada.id, 'momentos': [self.momento.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['enfoque'], 'mixto')
+
+    def test_reporte_enfoque_invalido_da_400(self):
+        resp = self.client.post('/api/admin/reportes/', {
+            'jornada': self.jornada.id, 'momentos': [self.momento.id], 'enfoque': 'no-existe',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('enfoque', resp.data)
+
+    def test_reporte_sin_respuestas_en_el_alcance_da_400_explicito(self):
+        momento_vacio = Momento.objects.create(jornada=self.jornada, orden=99, titulo='Vacío')
+        resp = self.client.post(
+            '/api/admin/reportes/', {'jornada': self.jornada.id, 'momentos': [momento_vacio.id]}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('no tiene respuestas', str(resp.data))
+        self.assertFalse(Reporte.objects.filter(jornada=self.jornada, momentos=momento_vacio).exists())
+
+    def test_analisis_momento_persiste_campos_guiados_y_metodo(self):
+        resp = self.client.post('/api/admin/analisis-momento-ia/', {
+            'momento': self.momento.id, 'enfoque': 'cuantitativo', 'contexto': 'Ctx',
+            'instrucciones': 'Instr', 'contexto_momento': 'CtxM', 'instrucciones_momento': 'InstrM',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'openai')
+        self.assertEqual(resp.data['enfoque'], 'cuantitativo')
+        self.assertEqual(resp.data['momento_orden'], self.momento.orden)
+        self.assertEqual(resp.data['contexto_momento'], 'CtxM')
+
+    def test_analisis_momento_sin_respuestas_da_400(self):
+        momento_vacio = Momento.objects.create(jornada=self.jornada, orden=99, titulo='Vacío')
+        resp = self.client.post('/api/admin/analisis-momento-ia/', {'momento': momento_vacio.id}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(AnalisisMomentoIA.objects.filter(momento=momento_vacio).exists())
+
+    def test_analisis_jornada_persiste_campos_guiados_y_metodo(self):
+        resp = self.client.post('/api/admin/analisis-jornada-ia/', {
+            'jornada': self.jornada.id, 'enfoque': 'mixto', 'contexto': 'Ctx', 'instrucciones': 'Instr',
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['metodo'], 'openai')
+        self.assertEqual(resp.data['contexto'], 'Ctx')
+
+    def test_analisis_jornada_sin_momentos_activos_con_respuestas_da_400(self):
+        jornada_vacia = crear_jornada('jornada-sin-datos', propietario=self.admin)
+        Momento.objects.create(jornada=jornada_vacia, orden=1, titulo='Sin respuestas')
+        resp = self.client.post('/api/admin/analisis-jornada-ia/', {'jornada': jornada_vacia.id}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
+class AnalisisSugerenciasViewTests(APITestCase):
+    """HU-57 §3. Sin OPENAI_API_KEY en el entorno de test, `generar_sugerencias` devuelve `[]`
+    determinísticamente (ver sugerencias_ia_openai.py) — alcanza para probar el contrato HTTP
+    (200 con la forma esperada, 400 de validación, 403 de scoping) sin mockear la llamada."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia')
+        self.jornada = crear_jornada('jornada-sug', propietario=self.dependencia)
+        self.jornada_ajena = crear_jornada('jornada-sug-ajena')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+
+    def test_responde_200_con_lista_de_sugerencias(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'momentos': [], 'metodo': 'openai', 'enfoque': 'mixto',
+            'contexto': '', 'instrucciones': '',
+        }, format='json')
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data, {'sugerencias': []})
+
+    def test_metodo_invalido_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'metodo': 'no-existe',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_dependencia_no_puede_pedir_sugerencias_de_jornada_ajena(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada_ajena.id, 'metodo': 'bertopic',
+        }, format='json')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_momento_de_otra_jornada_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        momento_ajeno = crear_momento_con_respuesta(self.jornada_ajena)
+        resp = self.client.post('/api/admin/analisis-sugerencias/', {
+            'jornada': self.jornada.id, 'momentos': [momento_ajeno.id], 'metodo': 'bertopic',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+
+class AnalisisUnificadoViewTests(APITestCase):
+    """HU-57 §4: `GET /api/admin/analisis/` une Reporte + AnalisisMomentoIA + AnalisisJornadaIA de
+    una jornada en una sola lista."""
+    def setUp(self):
+        self.admin = crear_admin_completo('admin')
+        self.dependencia = crear_dependencia('dependencia')
+        self.jornada = crear_jornada('jornada-unif', propietario=self.dependencia)
+        self.jornada_ajena = crear_jornada('jornada-unif-ajena')
+        self.momento = crear_momento_con_respuesta(self.jornada)
+
+        self.reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        self.analisis_momento = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_PROCESANDO,
+        )
+        self.analisis_jornada = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+        )
+        # De otra jornada — no debe aparecer al filtrar por `self.jornada`.
+        Reporte.objects.create(jornada=self.jornada_ajena, alcance=Reporte.ALCANCE_JORNADA)
+
+    def test_sin_filtro_da_400(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get('/api/admin/analisis/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_lista_los_tres_tipos_de_la_jornada(self):
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data), 3)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'reporte', 'analisis_momento', 'analisis_jornada'})
+        por_tipo = {item['tipo']: item for item in resp.data}
+        self.assertEqual(por_tipo['reporte']['metodo'], 'bertopic')
+        self.assertEqual(por_tipo['analisis_momento']['metodo'], 'openai')
+        self.assertEqual(por_tipo['analisis_momento']['momento_titulo'], self.momento.titulo)
+        self.assertEqual(por_tipo['analisis_momento']['alcance'], 'momento')
+        self.assertIsNone(por_tipo['analisis_jornada']['momento'])
+
+    def test_filtro_por_momento_excluye_reporte_y_analisis_de_jornada_no_ligados_a_el(self):
+        # `self.reporte` es de alcance JORNADA (sin momentos en su M2M) — filtrar por momento no
+        # debe traerlo, solo lo que de verdad está ligado a ESE momento.
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.get(f'/api/admin/analisis/?momento={self.momento.id}')
+        self.assertEqual(resp.status_code, 200)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'analisis_momento'})
+
+    def test_filtro_por_momento_incluye_reporte_ligado_a_ese_momento(self):
+        self.client.force_authenticate(user=self.admin)
+        reporte_momento = Reporte.objects.create(jornada=self.jornada, alcance=Reporte.ALCANCE_MOMENTO)
+        reporte_momento.momentos.set([self.momento])
+        resp = self.client.get(f'/api/admin/analisis/?momento={self.momento.id}')
+        self.assertEqual(resp.status_code, 200)
+        tipos = {item['tipo'] for item in resp.data}
+        self.assertEqual(tipos, {'reporte', 'analisis_momento'})
+
+    def test_dependencia_solo_ve_su_jornada(self):
+        self.client.force_authenticate(user=self.dependencia)
+        resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada_ajena.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data, [])
+
+
+class EnfoqueCualitativoSinGraficasTests(APITestCase):
+    """Regresión de un bug real de producción (AnalisisJornadaIA #4, 2026-09-20): un análisis
+    `cualitativo` salió con los 6 hallazgos graficados porque el prompt base tenía una sección
+    incondicional ("casi ningún hallazgo debería quedar sin datos graficables") que pesaba más
+    que el párrafo de enfoque anexado aparte. La corrección tiene dos capas — acá se prueban las
+    dos: el prompt ya no lo pide (movido a `prompt_comun.py::bloque_enfoque`, no verificable con
+    un test unitario sin llamar a un LLM real) y el CÓDIGO fuerza `tipo_grafica=None`/`datos=[]`
+    sin importar qué haya devuelto el modelo — eso sí es lo que prueban estos tests."""
+
+    def test_validar_y_limpiar_momento_borra_graficas_en_cualitativo(self):
+        jornada = crear_jornada('jornada-cualitativa-momento')
+        momento = crear_momento_con_respuesta(jornada)
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D1', 'tipo_grafica': 'radar',
+                 'datos': [{'etiqueta': 'x', 'valor': 3, 'unidad': 'conteo'}]},
+                {'titulo': 'H2', 'descripcion': 'D2', 'tipo_grafica': None, 'datos': []},
+            ],
+        }
+        limpio = _validar_y_limpiar(resultado, momento, enfoque='cualitativo')
+        for hallazgo in limpio['hallazgos']:
+            self.assertIsNone(hallazgo['tipo_grafica'])
+            self.assertEqual(hallazgo['datos'], [])
+
+    def test_validar_y_limpiar_momento_conserva_graficas_en_cuantitativo(self):
+        jornada = crear_jornada('jornada-cuantitativa-momento')
+        momento = crear_momento_con_respuesta(jornada)
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D1', 'tipo_grafica': 'radar',
+                 'datos': [{'etiqueta': 'x', 'valor': 3, 'unidad': 'conteo'}]},
+            ],
+        }
+        limpio = _validar_y_limpiar(resultado, momento, enfoque='cuantitativo')
+        self.assertEqual(limpio['hallazgos'][0]['tipo_grafica'], 'radar')
+        self.assertEqual(len(limpio['hallazgos'][0]['datos']), 1)
+
+    def test_validar_y_limpiar_jornada_borra_graficas_en_cualitativo(self):
+        # Reproduce exactamente el caso real: AnalisisJornadaIA con enfoque cualitativo y
+        # hallazgos ya graficados en `resultado` (como los devolvió el modelo antes del fix).
+        jornada = crear_jornada('jornada-cualitativa')
+        resultado = {
+            'hallazgos': [
+                {'titulo': h, 'descripcion': 'D', 'tipo_grafica': 'barras',
+                 'datos': [{'etiqueta': 'a', 'valor': 4, 'unidad': 'conteo'}]}
+                for h in ('H1', 'H2', 'H3')
+            ],
+        }
+        limpio = _validar_y_limpiar_jornada(resultado, jornada, enfoque='cualitativo')
+        self.assertTrue(all(h['tipo_grafica'] is None and h['datos'] == [] for h in limpio['hallazgos']))
+
+    def test_validar_y_limpiar_jornada_default_mixto_conserva_graficas(self):
+        # `enfoque=None` (dato viejo, de antes de HU-71) se normaliza a "mixto" — comportamiento
+        # de siempre, nunca borra nada.
+        jornada = crear_jornada('jornada-sin-enfoque-guardado')
+        resultado = {
+            'hallazgos': [
+                {'titulo': 'H1', 'descripcion': 'D', 'tipo_grafica': 'pastel', 'datos': [{'etiqueta': 'a', 'valor': 1}]},
+            ],
+        }
+        limpio = _validar_y_limpiar_jornada(resultado, jornada, enfoque=None)
+        self.assertEqual(limpio['hallazgos'][0]['tipo_grafica'], 'pastel')
+
+    def test_agente_pregunta_cerrada_sin_grafica_en_cualitativo(self):
+        from .analysis import _agente_pregunta_cerrada, _estadisticas_pregunta
+
+        jornada = crear_jornada('jornada-cerrada-cualitativa')
+        momento = Momento.objects.create(jornada=jornada, orden=1, titulo='M')
+        pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_UNICA, texto='¿Cuál?', orden=1)
+        from jornadas.models import OpcionPregunta
+        from participantes.models import Respuesta
+
+        opcion = OpcionPregunta.objects.create(pregunta=pregunta, texto='Sí', orden=1)
+        respuesta = Respuesta.objects.create(pregunta=pregunta)
+        respuesta.opciones.set([opcion])
+        estad = _estadisticas_pregunta(pregunta)
+
+        with patch('analitica.analysis._llamar_llm', return_value=('Domina "Sí".\nGRAFICA: barras', None)):
+            _descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, enfoque='cualitativo')
+        self.assertIsNone(tipo_grafica)
+
+    def test_agente_pregunta_cerrada_con_grafica_en_mixto(self):
+        from .analysis import _agente_pregunta_cerrada, _estadisticas_pregunta
+
+        jornada = crear_jornada('jornada-cerrada-mixta')
+        momento = Momento.objects.create(jornada=jornada, orden=1, titulo='M')
+        pregunta = Pregunta.objects.create(momento=momento, tipo=Pregunta.TIPO_UNICA, texto='¿Cuál?', orden=1)
+        from jornadas.models import OpcionPregunta
+        from participantes.models import Respuesta
+
+        opcion = OpcionPregunta.objects.create(pregunta=pregunta, texto='Sí', orden=1)
+        respuesta = Respuesta.objects.create(pregunta=pregunta)
+        respuesta.opciones.set([opcion])
+        estad = _estadisticas_pregunta(pregunta)
+
+        with patch('analitica.analysis._llamar_llm', return_value=('Domina "Sí".\nGRAFICA: barras', None)):
+            _descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, enfoque='mixto')
+        self.assertEqual(tipo_grafica, 'barras')
+
+
+class InfografiaTituloResueltoEnCodigoTests(SimpleTestCase):
+    """Regresión de un bug real de producción (InfografiaJornada #12, 2026-09-20): la lámina de
+    portada salió con el título literal "el campo `momento` del JSON si viene, o si no el de
+    `jornada`." — el modelo de IMAGEN dibujó la regla en vez de resolverla. El título ahora se
+    resuelve en Python antes de armar el prompt (`_titulo_lamina`), nunca describiéndole al
+    modelo de imagen qué campo del JSON mirar."""
+
+    def test_titulo_usa_momento_si_viene(self):
+        from .infografia_ia_openai import _titulo_lamina
+
+        datos = {'momento': 'Diálogos mesas', 'jornada': 'Mujeres al Mar'}
+        self.assertEqual(_titulo_lamina(datos), 'Diálogos mesas')
+
+    def test_titulo_cae_a_jornada_sin_momento(self):
+        from .infografia_ia_openai import _titulo_lamina
+
+        datos = {'jornada': 'Mujeres al Mar - Mesas'}
+        self.assertEqual(_titulo_lamina(datos), 'Mujeres al Mar - Mesas')
+
+    def test_prompt_de_portada_no_menciona_json_ni_campos(self):
+        from .infografia_ia_openai import SLIDES, _construir_prompt
+
+        # Caso exacto del bug: análisis de JORNADA, sin `momento` en los datos.
+        datos = {'jornada': 'Mujeres al Mar - Mesas', 'resumen_ejecutivo': '…', 'hallazgos': []}
+        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        self.assertIn('"Mujeres al Mar - Mesas"', prompt)
+        self.assertNotIn('el campo', prompt.lower())
+        self.assertNotIn('`momento`', prompt)
+        self.assertNotIn('`jornada`', prompt)
+
+    def test_prompt_de_portada_usa_el_momento_cuando_hay(self):
+        from .infografia_ia_openai import SLIDES, _construir_prompt
+
+        datos = {'momento': 'Diálogos mesas', 'jornada': 'Mujeres al Mar', 'hallazgos': []}
+        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        self.assertIn('"Diálogos mesas"', prompt)

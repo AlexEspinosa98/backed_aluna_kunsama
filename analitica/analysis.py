@@ -1,12 +1,14 @@
-"""Análisis jerárquico de una jornada: jornada → momento → pregunta, con un LLM local
-(`Qwen2.5-3B-Instruct`, cuantizado GGUF, servido con `llama-cpp-python` — sin GPU, sin `torch`;
-mismo enfoque ya probado en el repo hermano `aluna_propositos_backend/backend/catalog/ai_analysis.py`)
-actuando como varios agentes chicos en vez de uno solo con todo el contexto encima.
+"""Análisis jerárquico de una jornada: jornada → momento → pregunta, con OpenAI actuando como
+varios agentes chicos en vez de uno solo con todo el contexto encima (hasta 2026-09-20 esto corría
+contra un LLM local — `Qwen2.5-3B-Instruct` cuantizado GGUF, servido con `llama-cpp-python`, sin
+GPU — reemplazado por OpenAI para no mantener infraestructura de inferencia local que no hace
+falta; ver `_llamar_llm` más abajo).
 
-Decisión de diseño central, igual que en el repo hermano: **los números nunca dependen del LLM**.
-Las estadísticas y los tópicos (BERTopic) son 100% determinísticos; el modelo solo redacta prosa
-sobre esos datos ya calculados. Cada agente además solo ve los datos de **su propio nivel** — nunca
-el detalle completo de la jornada — así que el tamaño del contexto no escala con la cantidad de
+Decisión de diseño central: **los números nunca dependen del LLM**. Las estadísticas y los tópicos
+(BERTopic + embeddings de sentence-transformers) son 100% determinísticos y siguen corriendo
+localmente — nada de esto es un LLM, es clustering; el modelo de lenguaje solo redacta prosa sobre
+esos datos ya calculados. Cada agente además solo ve los datos de **su propio nivel** — nunca el
+detalle completo de la jornada — así que el tamaño del contexto no escala con la cantidad de
 preguntas/momentos de la jornada (a diferencia de la versión anterior de una sola llamada, que
 llegó a superar la ventana de contexto del modelo con una jornada real de 34 preguntas).
 
@@ -18,13 +20,12 @@ llegó a superar la ventana de contexto del modelo con una jornada real de 34 pr
 
     Total: N (preguntas) + M (momentos) + 1 llamadas al LLM. Como cada agente solo ve los datos de
     su propio nivel, las N preguntas de TODA la jornada son independientes entre sí (igual que,
-    después, las M síntesis de momento) — así que corren en paralelo sobre un pool de
-    `LLM_POOL_SIZE` instancias de `Llama` (una sola instancia solo puede atender una inferencia a
-    la vez; instancias distintas sí pueden hacerlo en simultáneo). Solo la síntesis final de
-    jornada, que necesita las M síntesis de momento ya listas, sigue siendo una llamada aislada al
-    final. Cada agente falla de forma aislada (nunca tumba el reporte completo): si una llamada
-    falla o se pasa del tiempo, esa pieza queda con un aviso corto en vez de descripción generada,
-    y el resto del análisis sigue su curso.
+    después, las M síntesis de momento) — así que corren en paralelo, hasta
+    `OPENAI_CONCURRENCIA_MAXIMA` llamadas a la vez. Solo la síntesis final de jornada, que necesita
+    las M síntesis de momento ya listas, sigue siendo una llamada aislada al final. Cada agente
+    falla de forma aislada (nunca tumba el reporte completo): si una llamada falla o se pasa del
+    tiempo, esa pieza queda con un aviso corto en vez de descripción generada, y el resto del
+    análisis sigue su curso.
 
 Metodología de codificación temática del equipo: un `Momento` puede traer `categorias_semilla`
 (lista de categorías predefinidas por eje temático, ej. EIBIC o Innovación y Emprendimiento). Si
@@ -37,19 +38,25 @@ acuerdo estuvieron las mesas entre sí para cada tema— con el mismo patrón de
 confirmación del LLM que ya usa `tipo_grafica` (`_pista_nivel_acuerdo` / `_extraer_nivel_acuerdo`).
 """
 import os
-import queue
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from django.db import close_old_connections
 from django.utils import timezone
 
-MODELS_DIR = Path(__file__).resolve().parent / '.models'
-DEFAULT_MODEL_REPO = 'Qwen/Qwen2.5-3B-Instruct-GGUF'
-DEFAULT_MODEL_FILE = os.environ.get('KUNSAMU_LLM_MODEL_FILE', 'qwen2.5-3b-instruct-q4_k_m.gguf')
-MODEL_PATH = MODELS_DIR / DEFAULT_MODEL_FILE
+from .prompt_comun import (
+    ENFOQUE_CUALITATIVO, REGLA_DATOS_ANALISIS, bloque_contexto, bloque_enfoque, bloque_instrucciones,
+    normalizar_enfoque,
+)
+
+# Mismas variables de entorno que ya usa analisis_ia_openai.py (ver ese módulo) — un solo par de
+# nombres para las dos vías de análisis con OpenAI del proyecto, en vez de uno por pipeline.
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+OPENAI_REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
+# Nunca se expone el nombre real del modelo de un proveedor externo en la respuesta de la API —
+# mismo criterio que MODELO_USADO_LABEL en analisis_ia_openai.py.
+MODELO_USADO_LABEL = 'Generado con IA'
 
 EMBEDDING_MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 
@@ -63,25 +70,13 @@ MAX_TEMAS_CANDIDATOS = 5
 MAX_RESPUESTAS_CLASIFICACION = 60
 # Cada llamada de agente ve un contexto chico y acotado (una pregunta, o las descripciones ya
 # resumidas de un nivel inferior) — este timeout es por llamada, no por reporte completo.
-# Subido de 90s a 150s cuando se aumentaron los max_tokens de cada agente (análisis más robusto,
-# ver los distintos `max_tokens=` más abajo): con el presupuesto de tokens más alto, 90s hacía que
-# la mayoría de las preguntas de un reporte real cayeran a "(Sin descripción automática...)" por
-# timeout — validado contra datos reales (reporte #26, jornada-agil-2).
 GENERATION_TIMEOUT_SECONDS = 150
 # Preguntas y momentos son independientes entre sí (cada uno solo ve sus propios datos, ver nota
-# de diseño arriba), así que no hay razón para analizarlos uno a la vez: el servidor tiene núcleos
-# de sobra, así que en vez de una sola instancia del modelo usando todos los hilos para UNA
-# llamada a la vez, se reparten entre varias instancias que procesan preguntas EN PARALELO. Esto
-# no cambia una sola palabra de lo que se genera — mismo contenido, mismos prompts — solo cuánto
-# tarda en generarse.
-# Probado contra datos reales: con 8 instancias (6 hilos c/u en un servidor de 48 núcleos) las
-# llamadas individuales se vuelven tan lentas que varias chocan con GENERATION_TIMEOUT_SECONDS y
-# la clasificación falla (cae a resultado sin conteo) — con 6 (8 hilos c/u) el mismo lote de
-# preguntas terminó sin ningún fallo. El rendimiento total no mejora mucho más allá de este punto
-# porque el CPU total es fijo (48 núcleos): más instancias == menos hilos cada una == llamadas
-# individuales más lentas, así que la ganancia de más paralelismo se cancela con la pérdida de
-# velocidad por instancia. 6 es el punto validado que da paralelismo real sin arriesgar timeouts.
-LLM_POOL_SIZE = int(os.environ.get('KUNSAMU_LLM_POOL_SIZE', '6'))
+# de diseño arriba), así que no hay razón para analizarlas una a la vez: se disparan hasta
+# OPENAI_CONCURRENCIA_MAXIMA llamadas a OpenAI en simultáneo (a diferencia del LLM local que este
+# pipeline usaba antes, la API de OpenAI sí soporta llamadas concurrentes sin coordinación
+# especial — no hace falta un pool de instancias, cada hilo abre su propio cliente).
+OPENAI_CONCURRENCIA_MAXIMA = int(os.environ.get('KUNSAMU_OPENAI_CONCURRENCIA_MAXIMA', '6'))
 
 def _instrucciones_plantilla(plantilla):
     """Instrucciones adicionales de la plantilla activa (`PlantillaAnalisis.prompt_sistema`,
@@ -214,68 +209,39 @@ def _tipo_grafica_por_defecto(tipo_pregunta, num_opciones):
 # Modelo LLM (llama.cpp) — pool de instancias perezoso y único por proceso.
 # ---------------------------------------------------------------------------
 
-_llm_pool = None
-_llm_pool_lock = threading.Lock()
-
-
-def _crear_instancia_llm():
-    from llama_cpp import Llama
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f'No se encontró el modelo en {MODEL_PATH}. Corre '
-            "'python manage.py download_llm_model' primero."
-        )
-    # Los hilos disponibles se reparten entre las instancias del pool en vez de dárselos todos a
-    # una sola — con LLM_POOL_SIZE llamadas corriendo de verdad en paralelo, cada una individual
-    # tarda un poco más que si tuviera el CPU entero para ella (ver más abajo), pero el conjunto
-    # avanza LLM_POOL_SIZE veces más rápido, que es lo que importa para el tiempo total del reporte.
-    hilos = max(1, (os.cpu_count() or LLM_POOL_SIZE) // LLM_POOL_SIZE)
-    return Llama(model_path=str(MODEL_PATH), n_ctx=4096, n_threads=hilos, verbose=False)
-
-
-def _get_llm_pool():
-    """Pool de `LLM_POOL_SIZE` instancias `Llama` independientes, una por 'carril' de paralelismo.
-    llama.cpp no soporta llamadas concurrentes de inferencia sobre la MISMA instancia — corrompen
-    el contexto interno y crashean el proceso entero con un GGML_ASSERT nativo (no es una excepción
-    de Python, ningún try/except lo detiene). Esto pasó en producción una vez: dos hilos llamando
-    al modelo a la vez tumbaron el worker y dejaron dos reportes huérfanos en 'procesando' para
-    siempre. La lección de ese incidente NO era "nunca paralelizar" sino "nunca compartir una
-    instancia entre hilos" — instancias DISTINTAS sí pueden inferir al mismo tiempo sin problema.
-    El `queue.Queue` es el mecanismo de exclusión: sacar una instancia (`get`) se la reserva a ese
-    hilo hasta que la devuelve (`put`), así nunca hay dos hilos usando la misma instancia a la vez,
-    sin necesidad de un lock global que serialice todo el pool."""
-    global _llm_pool
-    if _llm_pool is None:
-        with _llm_pool_lock:
-            if _llm_pool is None:
-                pool = queue.Queue()
-                for _ in range(LLM_POOL_SIZE):
-                    pool.put(_crear_instancia_llm())
-                _llm_pool = pool
-    return _llm_pool
-
-
 def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
-    """Una llamada de agente al LLM. Devuelve (texto, error) — nunca lanza excepción; `error`
-    queda disponible para diagnóstico cuando `texto` es None."""
+    """Una llamada de agente a OpenAI. Devuelve (texto, error) — nunca lanza excepción; `error`
+    queda disponible para diagnóstico cuando `texto` es None. Mismo patrón de hilo + timeout que
+    `_llamar_openai_json` en `analisis_ia_openai.py`, pero en texto libre (esta vía redacta prosa
+    por agente, no un único JSON estructurado)."""
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key:
+        return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).'
+
     resultado = {}
 
     def _run():
-        pool = _get_llm_pool()
-        llm = pool.get()
         try:
-            salida = llm.create_chat_completion(
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            kwargs = dict(
+                model=OPENAI_MODEL,
                 messages=[
                     {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
                 ],
-                max_tokens=max_tokens, temperature=temperature,
+                max_completion_tokens=max_tokens,
             )
-            resultado['texto'] = salida['choices'][0]['message']['content'].strip()
-        except Exception as exc:  # noqa: BLE001 — cualquier falla del modelo cae a texto de respaldo
+            if OPENAI_REASONING_EFFORT:
+                # Los modelos de razonamiento no aceptan `temperature` (la fijan ellos mismos) —
+                # se manda reasoning_effort en su lugar, nunca ambos a la vez.
+                kwargs['reasoning_effort'] = OPENAI_REASONING_EFFORT
+            else:
+                kwargs['temperature'] = temperature
+            respuesta = client.chat.completions.create(**kwargs)
+            resultado['texto'] = respuesta.choices[0].message.content.strip()
+        except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a texto de respaldo
             resultado['error'] = str(exc)
-        finally:
-            pool.put(llm)
 
     hilo = threading.Thread(target=_run, daemon=True)
     hilo.start()
@@ -284,7 +250,7 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
     if hilo.is_alive():
         return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s).'
     if not resultado.get('texto'):
-        return None, resultado.get('error', 'El modelo no devolvió texto.')
+        return None, resultado.get('error', 'OpenAI no devolvió contenido.')
     return resultado['texto'], None
 
 
@@ -598,7 +564,10 @@ NIVELES_ACUERDO_VALIDOS = (
 )
 
 
-def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_valores, plantilla=None):
+def _agente_pregunta_abierta(
+    pregunta, estad, valores_caracteristicos, metodo_valores, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Devuelve (descripcion, tipo_grafica, nivel_acuerdo). `tipo_grafica` solo se decide cuando
     hay datos cuantitativos reales que graficar — 2 o más temas con tamaño/porcentaje conocidos,
     que salen de que el LLM haya clasificado las respuestas en los temas candidatos (método
@@ -696,6 +665,20 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
         if pista_acuerdo:
             lineas.append(f'Nota: la forma de la distribución sugiere NIVEL_ACUERDO: {pista_acuerdo}.')
 
+    # HU-57 (docs/HU_BACKEND_ANALISIS_GUIADO.md §2): enfoque, contexto e instrucciones del
+    # asistente guiado — se anexan AL FINAL, después de las instrucciones de formato de arriba
+    # (GRAFICA:/NIVEL_ACUERDO:), mismo punto donde ya vivía `_instrucciones_plantilla` antes de
+    # este cambio. La regla de datos se repite acá como refuerzo de texto; la garantía real sigue
+    # siendo de código (`_purgar_cifras_falsas`, arriba), no depende de que el modelo la respete.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=230, temperature=0.5)
 
     tipo_grafica = None
@@ -717,6 +700,12 @@ def _agente_pregunta_abierta(pregunta, estad, valores_caracteristicos, metodo_va
             # necesariamente inventada por el modelo (ver CIFRA_FALSA_RE arriba).
             texto = _purgar_cifras_falsas(texto)
         texto = _purgar_etiquetas_estructura(texto)
+
+    if normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO:
+        # Refuerzo de código, no solo de prompt (ver el comentario junto a `bloque_enfoque` en
+        # prompt_comun.py): un análisis cualitativo nunca lleva gráfica, sin importar si el
+        # modelo devolvió un tag GRAFICA: válido.
+        tipo_grafica = None
 
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica, nivel_acuerdo
@@ -776,7 +765,10 @@ def _pista_nivel_acuerdo(valores_caracteristicos, num_mesas):
     return None
 
 
-def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
+def _agente_pregunta_cerrada(
+    pregunta, estad, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Para preguntas `unica`/`multiple`: además de la descripción, el propio LLM elige el tipo
     de gráfica que mejor muestre hacia dónde se inclina el público entre las opciones — pastel
     (pocas, mutuamente excluyentes), barras (comparación simple de conteos) o radar (varias
@@ -831,6 +823,17 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
     pista = _pista_equilibrio([o['conteo'] for o in opciones])
     if pista:
         lineas.append(pista)
+
+    # HU-57: mismo punto de inyección y mismo razonamiento que en _agente_pregunta_abierta.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=190, temperature=0.5)
 
     tipo_grafica = None
@@ -840,6 +843,12 @@ def _agente_pregunta_cerrada(pregunta, estad, plantilla=None):
 
     if tipo_grafica not in ('pastel', 'barras', 'radar'):
         tipo_grafica = _tipo_grafica_por_defecto(pregunta.tipo, len(opciones))
+    if normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO:
+        # Refuerzo de código — ver el comentario equivalente en _agente_pregunta_abierta. Una
+        # pregunta cerrada SIEMPRE tiene con qué graficar (son opciones con conteo), así que sin
+        # este override el fallback de arriba le pondría gráfica a cualquier análisis cualitativo
+        # que incluya alguna pregunta cerrada.
+        tipo_grafica = None
 
     descripcion = texto or f'(Sin descripción automática — {error})'
     return descripcion, tipo_grafica
@@ -865,13 +874,21 @@ def _clasificar_topicos(textos, temas_candidatos, permitir_categoria_nueva):
     return valores, 'bertopic_sin_clasificar'
 
 
-def analizar_pregunta(pregunta, plantilla=None):
+def analizar_pregunta(
+    pregunta, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """Analiza una pregunta de forma aislada: estadísticas + (para abiertas) tópicos/frases +
     descripción del agente de pregunta. Nunca lanza excepción — una falla puntual del LLM solo
     deja un aviso corto en `descripcion`, no tumba el resto del análisis. `plantilla` (opcional,
     `PlantillaAnalisis` editable vía /api/admin/plantillas-analisis/) se reenvía a los agentes de
     redacción para que sus instrucciones de tono/profundidad apliquen también a nivel de
-    pregunta, no solo en la síntesis final de la jornada."""
+    pregunta, no solo en la síntesis final de la jornada. `enfoque`/`contexto`/`instrucciones` son
+    los del análisis guiado (HU-57) — se reenvían igual, salvo a la clasificación de tópicos
+    (`_clasificar_topicos`/`_etiquetar_y_clasificar`): ese prompt depende de un formato estricto
+    (`TEMAS:`/`CLASIFICACION:`) que un modelo de 3B ya es propenso a romper con instrucciones
+    libres de por medio, así que se deja intacto — el enfoque/contexto solo afecta la REDACCIÓN
+    de la descripción, no el descubrimiento/clasificación de temas en sí."""
     from jornadas.models import Pregunta
 
     estad = _estadisticas_pregunta(pregunta)
@@ -912,7 +929,10 @@ def analizar_pregunta(pregunta, plantilla=None):
             metodo = 'llm' if valores else 'insuficiente'
 
         descripcion, tipo_grafica, nivel_acuerdo = _agente_pregunta_abierta(
-            pregunta, estad, valores, metodo, plantilla)
+            pregunta, estad, valores, metodo, plantilla,
+            enfoque=enfoque, contexto=contexto, instrucciones=instrucciones,
+            contexto_momento=contexto_momento, instrucciones_momento=instrucciones_momento,
+        )
         return {
             'pregunta_id': pregunta.id,
             'texto': pregunta.texto,
@@ -925,7 +945,11 @@ def analizar_pregunta(pregunta, plantilla=None):
             'metodo_valores': metodo,
         }
 
-    descripcion, tipo_grafica = _agente_pregunta_cerrada(pregunta, estad, plantilla)
+    descripcion, tipo_grafica = _agente_pregunta_cerrada(
+        pregunta, estad, plantilla,
+        enfoque=enfoque, contexto=contexto, instrucciones=instrucciones,
+        contexto_momento=contexto_momento, instrucciones_momento=instrucciones_momento,
+    )
     return {
         'pregunta_id': pregunta.id,
         'texto': pregunta.texto,
@@ -943,7 +967,10 @@ def analizar_pregunta(pregunta, plantilla=None):
 # Agente de momento.
 # ---------------------------------------------------------------------------
 
-def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
+def _sintetizar_momento(
+    momento, analisis_preguntas, plantilla=None,
+    enfoque=None, contexto='', instrucciones='', contexto_momento='', instrucciones_momento='',
+):
     """La síntesis en sí (una llamada al LLM) — separada de analizar las preguntas del momento
     para que estas últimas puedan correr en paralelo entre TODOS los momentos de la jornada (ver
     `procesar_reporte`), no solo dentro de cada uno."""
@@ -974,6 +1001,18 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
         "estén en las descripciones dadas. Español." +
         _instrucciones_plantilla(plantilla)
     )
+    # HU-57: enfoque cambia el peso de cifras vs. lectura interpretativa también en la síntesis
+    # de momento — "redactar el resumen" es exactamente el paso que describe
+    # docs/HU_BACKEND_ANALISIS_GUIADO.md §2 para el pipeline local.
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto, contexto_momento)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones, instrucciones_momento)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
+
     user = '\n'.join(f"- {p['descripcion']}" for p in analisis_preguntas)
     descripcion_general, error = _llamar_llm(system, user, max_tokens=220, temperature=0.5)
     descripcion_general = _purgar_etiquetas_estructura(descripcion_general)
@@ -990,8 +1029,20 @@ def _sintetizar_momento(momento, analisis_preguntas, plantilla=None):
 # Agente de jornada.
 # ---------------------------------------------------------------------------
 
-def analizar_jornada(plantilla, momentos_analisis, participacion):
+def analizar_jornada(plantilla, momentos_analisis, participacion, enfoque=None, contexto='', instrucciones=''):
+    """Devuelve (texto, error, system_usado) — el tercer valor es el prompt final ya compuesto,
+    que `procesar_reporte` guarda en `Reporte.prompt_usado` (HU-57): es la síntesis de más alto
+    nivel del reporte, así que es la más representativa de "con qué se generó" cuando hay decenas
+    de otros prompts (uno por pregunta y por momento) que sería excesivo guardar todos."""
     system = BASE_SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
+    system += '\n\n' + bloque_enfoque(enfoque)
+    ctx = bloque_contexto(contexto)
+    if ctx:
+        system += '\n\n' + ctx
+    instr = bloque_instrucciones(instrucciones)
+    if instr:
+        system += '\n\n' + instr
+    system += '\n\n' + REGLA_DATOS_ANALISIS
 
     lineas = [
         f"Participantes totales: {participacion['total_participantes']}.",
@@ -1001,7 +1052,8 @@ def analizar_jornada(plantilla, momentos_analisis, participacion):
     ]
     for m in momentos_analisis:
         lineas.append(f"- {m['descripcion_general']}")
-    return _llamar_llm(system, '\n'.join(lineas), max_tokens=420, temperature=0.5)
+    texto, error = _llamar_llm(system, '\n'.join(lineas), max_tokens=420, temperature=0.5)
+    return texto, error, system
 
 
 # ---------------------------------------------------------------------------
@@ -1009,73 +1061,47 @@ def analizar_jornada(plantilla, momentos_analisis, participacion):
 # ---------------------------------------------------------------------------
 
 def procesar_reporte(reporte_id):
+    """REDISEÑO (2026-09-20, contrato `kunsamu.analisis/v2`, docs/mejora_promps/): el reporte ya no
+    corre el pipeline multiagente de este módulo (`analizar_pregunta`/`_sintetizar_momento`/
+    `analizar_jornada`, que se conservan como referencia del comportamiento anterior) sino
+    `analitica/v2/procesar.py::ejecutar_analisis_v2` con el pipeline `bertopic_llm`: BERTopic por
+    pregunta de texto (mismo clustering de siempre, exportado como fuente verificable) + UNA
+    llamada a OpenAI con el prompt íntegro de la entrega y salida estructurada validada. El JSON
+    v2 queda en `analisis`; `texto_reporte` lleva los resúmenes de sus informes. Alcance: `momentos`
+    vacío = `integral` (toda la jornada), uno o varios = `por_momento` (un informe por cada uno).
+    `enfoque` y `plantilla` se siguen guardando por compatibilidad pero ya no influyen."""
     close_old_connections()
     from .models import Reporte
+    from .v2.contrato import MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_BERTOPIC_LLM
+    from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada, resumen_de_salida
 
     reporte = None
     try:
-        reporte = Reporte.objects.select_related('jornada', 'plantilla').get(pk=reporte_id)
+        reporte = Reporte.objects.select_related('jornada').get(pk=reporte_id)
         reporte.estado = Reporte.ESTADO_PROCESANDO
         reporte.save(update_fields=['estado'])
 
-        momentos = list(reporte.momentos.all()) or list(reporte.jornada.momentos.all())
-        if not momentos:
+        momentos = list(reporte.momentos.all())
+        modo = MODO_POR_MOMENTO if momentos else MODO_INTEGRAL
+        if modo == MODO_INTEGRAL and not reporte.jornada.momentos.exists():
             raise ValueError('La jornada no tiene momentos para analizar.')
-        momentos.sort(key=lambda m: m.orden)
-
-        from participantes.models import Participante, Respuesta
-
-        from jornadas.models import Pregunta
-
-        total_participantes = Participante.objects.filter(jornada=reporte.jornada).count()
-        preguntas_scope = Pregunta.objects.filter(momento__in=momentos)
-        participantes_respondieron = set(
-            Respuesta.objects.filter(pregunta__in=preguntas_scope, participante__isnull=False)
-            .values_list('participante_id', flat=True)
-            .distinct()
+        # contexto_momento/instrucciones_momento solo tienen sentido con un único momento (HU-57).
+        personalizacion = []
+        if len(momentos) == 1 and (reporte.contexto_momento or reporte.instrucciones_momento):
+            personalizacion = [{
+                'momento': momentos[0].id, 'contexto': reporte.contexto_momento,
+                'instrucciones': reporte.instrucciones_momento,
+            }]
+        r = ejecutar_analisis_v2(
+            reporte.jornada, modo, momentos, PIPELINE_BERTOPIC_LLM,
+            contexto=reporte.contexto, instrucciones=reporte.instrucciones,
+            personalizacion_momentos=personalizacion, referencia=f'reporte-{reporte.id}',
+            al_guardar_entrada=guardador_de_entrada(reporte),
         )
-        tasa = (
-            round(len(participantes_respondieron) / total_participantes * 100, 1)
-            if total_participantes else 0.0
+        aplicar_resultado(
+            reporte, r, campo_resultado='analisis',
+            extra={'texto_reporte': resumen_de_salida(r['salida']) or FALLBACK_TEXTO},
         )
-        participacion = {
-            'total_participantes': total_participantes,
-            'participantes_que_respondieron': len(participantes_respondieron),
-            'tasa_participacion': tasa,
-        }
-
-        preguntas_por_momento = {m.id: list(m.preguntas.all().order_by('orden')) for m in momentos}
-        todas_las_preguntas = [p for m in momentos for p in preguntas_por_momento[m.id]]
-
-        def _analizar_pregunta_en_hilo(pregunta):
-            # Cada pregunta corre en un hilo nuevo del pool de abajo — necesita su propia
-            # conexión a la base de datos (Django abre una por hilo; esto la deja limpia si el
-            # hilo se reutiliza) antes de tocar el ORM.
-            close_old_connections()
-            return pregunta.id, analizar_pregunta(pregunta, reporte.plantilla)
-
-        resultados_pregunta = {}
-        with ThreadPoolExecutor(max_workers=LLM_POOL_SIZE) as executor:
-            for pregunta_id, resultado in executor.map(_analizar_pregunta_en_hilo, todas_las_preguntas):
-                resultados_pregunta[pregunta_id] = resultado
-
-        def _sintetizar_momento_en_hilo(momento):
-            close_old_connections()
-            analisis_preguntas = [resultados_pregunta[p.id] for p in preguntas_por_momento[momento.id]]
-            return _sintetizar_momento(momento, analisis_preguntas, reporte.plantilla)
-
-        with ThreadPoolExecutor(max_workers=min(LLM_POOL_SIZE, len(momentos))) as executor:
-            momentos_analisis = list(executor.map(_sintetizar_momento_en_hilo, momentos))
-
-        texto, error_narrativa = analizar_jornada(reporte.plantilla, momentos_analisis, participacion)
-
-        reporte.analisis = {'participacion': participacion, 'momentos': momentos_analisis}
-        reporte.texto_reporte = texto or FALLBACK_TEXTO
-        reporte.modelo_usado = DEFAULT_MODEL_FILE if texto else ''
-        reporte.error_mensaje = '' if texto else f'Síntesis de jornada no generada: {error_narrativa}'
-        reporte.estado = Reporte.ESTADO_COMPLETO
-        reporte.completado_en = timezone.now()
-        reporte.save()
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if reporte is not None:
             reporte.estado = Reporte.ESTADO_ERROR

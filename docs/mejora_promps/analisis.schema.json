@@ -1,0 +1,1533 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kunsamu — Contrato de análisis v2",
+  "description": "Salida JSON común a los pipelines llm y bertopic_llm. Todos los campos son obligatorios. La guía añade validaciones semánticas que este esquema no expresa.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "enum": [
+        "kunsamu.analisis/v2"
+      ]
+    },
+    "pipeline": {
+      "type": "string",
+      "enum": [
+        "llm",
+        "bertopic_llm"
+      ]
+    },
+    "estado": {
+      "type": "string",
+      "enum": [
+        "completo",
+        "parcial",
+        "sin_datos",
+        "datos_insuficientes"
+      ]
+    },
+    "alcance": {
+      "$ref": "#/$defs/alcance"
+    },
+    "fuentes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fuente"
+      }
+    },
+    "cobertura": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/cobertura"
+      }
+    },
+    "limitaciones": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/limitacion"
+      }
+    },
+    "informes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/informe"
+      }
+    },
+    "visualizaciones": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/visual_categorica"
+          },
+          {
+            "$ref": "#/$defs/visual_coordenadas"
+          },
+          {
+            "$ref": "#/$defs/visual_histograma"
+          },
+          {
+            "$ref": "#/$defs/visual_caja"
+          },
+          {
+            "$ref": "#/$defs/visual_calor"
+          },
+          {
+            "$ref": "#/$defs/visual_nube"
+          },
+          {
+            "$ref": "#/$defs/visual_red"
+          },
+          {
+            "$ref": "#/$defs/visual_tabla"
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "version",
+    "pipeline",
+    "estado",
+    "alcance",
+    "fuentes",
+    "cobertura",
+    "limitaciones",
+    "informes",
+    "visualizaciones"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "metodo": {
+      "type": "string",
+      "enum": [
+        "descriptivo",
+        "comparativo",
+        "tematico",
+        "mineria_texto",
+        "sentimiento",
+        "integracion_mixta"
+      ]
+    },
+    "alcance": {
+      "type": "object",
+      "properties": {
+        "modo": {
+          "type": "string",
+          "enum": [
+            "integral",
+            "por_momento"
+          ]
+        },
+        "jornada_id": {
+          "type": "string"
+        },
+        "momento_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "modo",
+        "jornada_id",
+        "momento_ids"
+      ],
+      "additionalProperties": false
+    },
+    "fuente": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "respuestas",
+            "agregado",
+            "transcripcion",
+            "resumen_secundario",
+            "bertopic"
+          ]
+        },
+        "etiqueta": {
+          "type": "string"
+        },
+        "momento_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pregunta_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cobertura": {
+          "type": "string",
+          "enum": [
+            "completa",
+            "parcial",
+            "desconocida"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "etiqueta",
+        "momento_ids",
+        "pregunta_ids",
+        "cobertura"
+      ],
+      "additionalProperties": false
+    },
+    "cobertura": {
+      "type": "object",
+      "properties": {
+        "momento_id": {
+          "type": "string"
+        },
+        "pregunta_id": {
+          "type": "string"
+        },
+        "estado": {
+          "type": "string",
+          "enum": [
+            "analizada",
+            "sin_datos",
+            "no_recibida",
+            "insuficiente"
+          ]
+        },
+        "metodos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metodo"
+          }
+        },
+        "nota": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "momento_id",
+        "pregunta_id",
+        "estado",
+        "metodos",
+        "nota"
+      ],
+      "additionalProperties": false
+    },
+    "limitacion": {
+      "type": "object",
+      "properties": {
+        "codigo": {
+          "type": "string"
+        },
+        "descripcion": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "codigo",
+        "descripcion",
+        "fuente_ids"
+      ],
+      "additionalProperties": false
+    },
+    "referencia": {
+      "type": "object",
+      "properties": {
+        "fuente_id": {
+          "type": "string"
+        },
+        "ruta": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fuente_id",
+        "ruta"
+      ],
+      "additionalProperties": false
+    },
+    "metrica": {
+      "type": "object",
+      "properties": {
+        "etiqueta": {
+          "type": "string"
+        },
+        "valor": {
+          "type": "number"
+        },
+        "unidad": {
+          "type": "string"
+        },
+        "numerador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "denominador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "base": {
+          "type": "string"
+        },
+        "origen": {
+          "type": "string",
+          "enum": [
+            "reportado",
+            "calculado",
+            "codificado_llm"
+          ]
+        },
+        "referencias": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/referencia"
+          }
+        }
+      },
+      "required": [
+        "etiqueta",
+        "valor",
+        "unidad",
+        "numerador",
+        "denominador",
+        "base",
+        "origen",
+        "referencias"
+      ],
+      "additionalProperties": false
+    },
+    "cita": {
+      "type": "object",
+      "properties": {
+        "fuente_id": {
+          "type": "string"
+        },
+        "texto": {
+          "type": "string"
+        },
+        "localizador": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fuente_id",
+        "texto",
+        "localizador"
+      ],
+      "additionalProperties": false
+    },
+    "hallazgo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "naturaleza": {
+          "type": "string",
+          "enum": [
+            "cuantitativa",
+            "cualitativa",
+            "mixta"
+          ]
+        },
+        "afirmacion": {
+          "type": "string"
+        },
+        "implicacion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metodos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metodo"
+          }
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pregunta_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metricas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/metrica"
+          }
+        },
+        "citas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cita"
+          }
+        },
+        "limitaciones": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "visualizacion_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "titulo",
+        "naturaleza",
+        "afirmacion",
+        "implicacion",
+        "metodos",
+        "fuente_ids",
+        "pregunta_ids",
+        "metricas",
+        "citas",
+        "limitaciones",
+        "visualizacion_ids"
+      ],
+      "additionalProperties": false
+    },
+    "recomendacion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "accion": {
+          "type": "string"
+        },
+        "hallazgo_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prioridad": {
+          "type": "string",
+          "enum": [
+            "alta",
+            "media",
+            "baja"
+          ]
+        },
+        "criterio": {
+          "type": "string"
+        },
+        "validacion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "accion",
+        "hallazgo_ids",
+        "prioridad",
+        "criterio",
+        "validacion"
+      ],
+      "additionalProperties": false
+    },
+    "informe": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "momento_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "resumen": {
+          "type": "string"
+        },
+        "hallazgos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hallazgo"
+          }
+        },
+        "recomendaciones": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/recomendacion"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "momento_ids",
+        "titulo",
+        "resumen",
+        "hallazgos",
+        "recomendaciones"
+      ],
+      "additionalProperties": false
+    },
+    "rango": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false
+    },
+    "fila_categorica": {
+      "type": "object",
+      "properties": {
+        "categoria": {
+          "type": "string"
+        },
+        "serie": {
+          "type": "string"
+        },
+        "valor": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "numerador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "denominador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "categoria",
+        "serie",
+        "valor",
+        "numerador",
+        "denominador"
+      ],
+      "additionalProperties": false
+    },
+    "datos_categoricos": {
+      "type": "object",
+      "properties": {
+        "unidad": {
+          "type": "string"
+        },
+        "orden_categorias": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rango": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/rango"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fila_categorica"
+          }
+        }
+      },
+      "required": [
+        "unidad",
+        "orden_categorias",
+        "rango",
+        "filas"
+      ],
+      "additionalProperties": false
+    },
+    "punto": {
+      "type": "object",
+      "properties": {
+        "serie": {
+          "type": "string"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "y": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "n": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "serie",
+        "x",
+        "y",
+        "n"
+      ],
+      "additionalProperties": false
+    },
+    "datos_coordenadas": {
+      "type": "object",
+      "properties": {
+        "tipo_x": {
+          "type": "string",
+          "enum": [
+            "numero",
+            "fecha"
+          ]
+        },
+        "etiqueta_x": {
+          "type": "string"
+        },
+        "unidad_x": {
+          "type": "string"
+        },
+        "etiqueta_y": {
+          "type": "string"
+        },
+        "unidad_y": {
+          "type": "string"
+        },
+        "filas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/punto"
+          }
+        }
+      },
+      "required": [
+        "tipo_x",
+        "etiqueta_x",
+        "unidad_x",
+        "etiqueta_y",
+        "unidad_y",
+        "filas"
+      ],
+      "additionalProperties": false
+    },
+    "intervalo": {
+      "type": "object",
+      "properties": {
+        "desde": {
+          "type": "number"
+        },
+        "hasta": {
+          "type": "number"
+        },
+        "conteo": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "desde",
+        "hasta",
+        "conteo"
+      ],
+      "additionalProperties": false
+    },
+    "datos_histograma": {
+      "type": "object",
+      "properties": {
+        "unidad": {
+          "type": "string"
+        },
+        "intervalos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/intervalo"
+          }
+        },
+        "cierre_ultimo": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unidad",
+        "intervalos",
+        "cierre_ultimo"
+      ],
+      "additionalProperties": false
+    },
+    "grupo_caja": {
+      "type": "object",
+      "properties": {
+        "etiqueta": {
+          "type": "string"
+        },
+        "n": {
+          "type": "number"
+        },
+        "min": {
+          "type": "number"
+        },
+        "q1": {
+          "type": "number"
+        },
+        "mediana": {
+          "type": "number"
+        },
+        "q3": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "atipicos": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "etiqueta",
+        "n",
+        "min",
+        "q1",
+        "mediana",
+        "q3",
+        "max",
+        "atipicos"
+      ],
+      "additionalProperties": false
+    },
+    "datos_caja": {
+      "type": "object",
+      "properties": {
+        "unidad": {
+          "type": "string"
+        },
+        "regla_bigotes": {
+          "type": "string"
+        },
+        "grupos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/grupo_caja"
+          }
+        }
+      },
+      "required": [
+        "unidad",
+        "regla_bigotes",
+        "grupos"
+      ],
+      "additionalProperties": false
+    },
+    "celda_calor": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "string"
+        },
+        "y": {
+          "type": "string"
+        },
+        "valor": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "numerador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "denominador": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "valor",
+        "numerador",
+        "denominador"
+      ],
+      "additionalProperties": false
+    },
+    "datos_calor": {
+      "type": "object",
+      "properties": {
+        "unidad": {
+          "type": "string"
+        },
+        "etiqueta_x": {
+          "type": "string"
+        },
+        "etiqueta_y": {
+          "type": "string"
+        },
+        "filas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/celda_calor"
+          }
+        }
+      },
+      "required": [
+        "unidad",
+        "etiqueta_x",
+        "etiqueta_y",
+        "filas"
+      ],
+      "additionalProperties": false
+    },
+    "termino": {
+      "type": "object",
+      "properties": {
+        "texto": {
+          "type": "string"
+        },
+        "peso": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "texto",
+        "peso"
+      ],
+      "additionalProperties": false
+    },
+    "datos_nube": {
+      "type": "object",
+      "properties": {
+        "tipo_peso": {
+          "type": "string",
+          "enum": [
+            "frecuencia_documental",
+            "frecuencia_termino",
+            "c_tf_idf",
+            "relevancia_modelo"
+          ]
+        },
+        "terminos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/termino"
+          }
+        }
+      },
+      "required": [
+        "tipo_peso",
+        "terminos"
+      ],
+      "additionalProperties": false
+    },
+    "nodo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "etiqueta": {
+          "type": "string"
+        },
+        "peso": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "etiqueta",
+        "peso"
+      ],
+      "additionalProperties": false
+    },
+    "arista": {
+      "type": "object",
+      "properties": {
+        "origen": {
+          "type": "string"
+        },
+        "destino": {
+          "type": "string"
+        },
+        "peso": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "evidencia": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "origen",
+        "destino",
+        "peso",
+        "evidencia",
+        "fuente_ids"
+      ],
+      "additionalProperties": false
+    },
+    "datos_red": {
+      "type": "object",
+      "properties": {
+        "tipo_relacion": {
+          "type": "string",
+          "enum": [
+            "coocurrencia",
+            "similitud",
+            "interpretativa"
+          ]
+        },
+        "dirigida": {
+          "type": "boolean"
+        },
+        "tipo_peso": {
+          "type": "string"
+        },
+        "nodos": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nodo"
+          }
+        },
+        "aristas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/arista"
+          }
+        }
+      },
+      "required": [
+        "tipo_relacion",
+        "dirigida",
+        "tipo_peso",
+        "nodos",
+        "aristas"
+      ],
+      "additionalProperties": false
+    },
+    "columna_tabla": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "etiqueta": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "texto",
+            "numero",
+            "fecha"
+          ]
+        },
+        "unidad": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "etiqueta",
+        "tipo",
+        "unidad"
+      ],
+      "additionalProperties": false
+    },
+    "fila_tabla": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "celdas": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "celdas"
+      ],
+      "additionalProperties": false
+    },
+    "datos_tabla": {
+      "type": "object",
+      "properties": {
+        "columnas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/columna_tabla"
+          }
+        },
+        "filas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fila_tabla"
+          }
+        }
+      },
+      "required": [
+        "columnas",
+        "filas"
+      ],
+      "additionalProperties": false
+    },
+    "visual_categorica": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "barras",
+            "barras_agrupadas",
+            "barras_apiladas",
+            "barras_100",
+            "dona",
+            "radar"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_categoricos"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_coordenadas": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "lineas",
+            "areas",
+            "dispersion",
+            "pendientes"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_coordenadas"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_histograma": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "histograma"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_histograma"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_caja": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "caja_bigotes"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_caja"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_calor": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "mapa_calor"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_calor"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_nube": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "nube_palabras"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_nube"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_red": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "red_semantica"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_red"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    },
+    "visual_tabla": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "tipo": {
+          "type": "string",
+          "enum": [
+            "tabla",
+            "matriz_cualitativa"
+          ]
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "fuente_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metodo": {
+          "type": "string"
+        },
+        "unidad_analisis": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "nota": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "descripcion_accesible": {
+          "type": "string"
+        },
+        "datos": {
+          "$ref": "#/$defs/datos_tabla"
+        }
+      },
+      "required": [
+        "id",
+        "tipo",
+        "titulo",
+        "fuente_ids",
+        "metodo",
+        "unidad_analisis",
+        "base",
+        "nota",
+        "descripcion_accesible",
+        "datos"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

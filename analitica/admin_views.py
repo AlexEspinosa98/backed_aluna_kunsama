@@ -14,15 +14,21 @@ from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
 from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
-from .models import AnalisisJornadaIA, AnalisisMomentoIA, InfografiaJornada, PlantillaAnalisis, Reporte
+from .models import (
+    AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis, Reporte,
+)
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
     AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
-    AnalisisMomentoIASerializer, InfografiaJornadaCrearSerializer, InfografiaJornadaSerializer,
-    PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
+    AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
+    AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
+    InfografiaJornadaSerializer, PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
 )
+from .sugerencias_ia_openai import generar_sugerencias
+from .v2.contrato import VERSION as VERSION_V2
+from .v2.procesar import procesar_analisis_v2
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
 # 'procesando' para siempre — nada vuelve a tocarlo. Sin este umbral, el guard de abajo lo
@@ -43,22 +49,68 @@ UMBRAL_HUERFANO_ANALISIS_IA = timedelta(minutes=10)
 # analitica/infografia_ia_openai.py) es independiente del pipeline local, así que un umbral corto
 # alcanza para no bloquear reintentos legítimos tras un redeploy a mitad de generación.
 UMBRAL_HUERFANO_INFOGRAFIA = timedelta(minutes=10)
+# La llamada v2 es una sola pero grande (salida de hasta ~24k tokens con un modelo de razonamiento)
+# y en bertopic_llm va precedida de embeddings + clustering por pregunta — más margen que las vías
+# legacy antes de dar por muerto al worker.
+UMBRAL_HUERFANO_ANALISIS_V2 = timedelta(minutes=45)
 
 
-def _infografias_en_curso(jornada, momento=None):
-    """Filtra por el ALCANCE exacto: `momento=None` significa "las de la jornada completa", no
-    "las de cualquier momento". Si no, generar la infografía de un momento bloquearía la de la
-    jornada y la de los demás momentos, que son trabajos independientes."""
+def _es_resultado_v2(resultado):
+    return (resultado or {}).get('version') == VERSION_V2
+
+
+# La presentación HTML (analitica/presentacion.py) y el PDF (analitica/pdf_presentacion.py) leen el
+# formato jerárquico ANTERIOR de `Reporte.analisis` (participacion + momentos + preguntas). Desde
+# el rediseño los reportes nuevos traen el contrato kunsamu.analisis/v2, que el frontend renderiza
+# con su propio renderer; adaptar esas dos capas es una HU aparte — mientras tanto, un 400 claro en
+# vez de una página o un PDF vacíos.
+MENSAJE_SIN_PRESENTACION_V2 = (
+    'Este reporte está en el formato kunsamu.analisis/v2: la presentación HTML y el PDF del '
+    'servidor todavía no soportan ese formato (se renderiza en el panel). Sigue disponible para '
+    'los reportes generados antes del rediseño.'
+)
+
+
+def _sin_respuestas(momentos):
+    """True si NINGUNA pregunta de estos momentos tiene una sola `Respuesta` real — el guard de
+    HU-57 §5 (docs/HU_BACKEND_ANALISIS_GUIADO.md): "sin respuestas en el alcance → 400 al crear,
+    nunca un registro que termine en estado 'error'" después de gastar tiempo de cómputo real por
+    nada. Vive acá (capa de vista) y no en los serializers de creación: tiene que evaluarse
+    DESPUÉS de `verificar_acceso_jornada` — antes, un 400 de "sin respuestas" en `is_valid()`
+    taparía el 403 de jornada ajena y le revelaría a un admin de otra dependencia si esa jornada
+    ajena tiene respuestas o no, solo por el código de estado."""
+    from participantes.models import Respuesta
+
+    return not Respuesta.objects.filter(pregunta__momento__in=momentos).exists()
+
+
+def _filtro_fuente_infografia(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
+    """Cuál de los cuatro FK identifica la versión exacta de análisis de esta infografía —
+    EXACTAMENTE uno, garantizado por `InfografiaJornadaCrearSerializer.validate()` (HU-73). Se usa
+    para acotar el guard de "ya hay una en curso"/huérfanas a esa versión puntual, nunca a la
+    jornada o al momento en general: dos versiones de análisis del mismo momento/jornada
+    (distintos métodos o enfoques, HU-71) son trabajos completamente independientes entre sí,
+    generar la infografía de una nunca debe bloquear ni confundirse con la de la otra."""
+    if analisis_v2 is not None:
+        return {'analisis_v2': analisis_v2}
+    if analisis_momento is not None:
+        return {'analisis_momento': analisis_momento}
+    if analisis_jornada is not None:
+        return {'analisis_jornada': analisis_jornada}
+    return {'reporte': reporte}
+
+
+def _infografias_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     return InfografiaJornada.objects.filter(
-        jornada=jornada, momento=momento,
         estado__in=[InfografiaJornada.ESTADO_PENDIENTE, InfografiaJornada.ESTADO_PROCESANDO],
+        **_filtro_fuente_infografia(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2),
     )
 
 
-def sanar_infografias_huerfanas(jornada, momento=None):
+def sanar_infografias_huerfanas(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     """Una infografía cuyo worker murió a mitad de generación (crash, redeploy) se queda en
     'procesando' para siempre y bloquearía pedir otra — pasado el umbral se marca error."""
-    _infografias_en_curso(jornada, momento).filter(
+    _infografias_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2).filter(
         actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_INFOGRAFIA,
     ).update(
         estado=InfografiaJornada.ESTADO_ERROR,
@@ -68,8 +120,8 @@ def sanar_infografias_huerfanas(jornada, momento=None):
     )
 
 
-def hay_infografia_en_curso(jornada, momento=None):
-    return _infografias_en_curso(jornada, momento).exists()
+def hay_infografia_en_curso(reporte=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
+    return _infografias_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2).exists()
 
 
 class PlantillaAnalisisViewSet(viewsets.ModelViewSet):
@@ -154,7 +206,19 @@ class ReporteViewSet(
 
         entrada = ReporteCrearSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
-        verificar_acceso_jornada(request.user, entrada.validated_data['jornada'])
+        jornada = entrada.validated_data['jornada']
+        verificar_acceso_jornada(request.user, jornada)
+
+        # HU-57 §5, ver el comentario de `_sin_respuestas` arriba.
+        momentos = entrada.validated_data.get('momentos') or []
+        scope = momentos or list(jornada.momentos.all())
+        if _sin_respuestas(scope):
+            detalle = (
+                f'El momento "{momentos[0].titulo}" no tiene respuestas todavía.' if len(momentos) == 1
+                else 'La jornada no tiene respuestas todavía.'
+            )
+            return Response({'momentos': [detalle]}, status=status.HTTP_400_BAD_REQUEST)
+
         reporte = entrada.save(solicitado_por=request.user)
 
         threading.Thread(target=procesar_reporte, args=(reporte.id,), daemon=True).start()
@@ -176,6 +240,8 @@ class ReporteViewSet(
                            'presentación se genera a partir de datos ya calculados.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _es_resultado_v2(reporte.analisis):
+            return Response({'detail': MENSAJE_SIN_PRESENTACION_V2}, status=status.HTTP_400_BAD_REQUEST)
         # Auto-sanación, mismo espíritu que en create(): si quedó 'procesando' hace más de
         # UMBRAL_HUERFANO_PRESENTACION, el worker que la generaba ya no existe (crash, redeploy) —
         # se marca error para no bloquear un reintento legítimo para siempre.
@@ -215,10 +281,10 @@ class ReporteViewSet(
                            'infografía se genera a partir de datos ya calculados.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        sanar_infografias_huerfanas(reporte.jornada)
-        if hay_infografia_en_curso(reporte.jornada):
+        sanar_infografias_huerfanas(reporte=reporte)
+        if hay_infografia_en_curso(reporte=reporte):
             return Response(
-                {'detail': 'Ya hay una infografía en proceso para esta jornada.'},
+                {'detail': 'Ya hay una infografía en proceso para este reporte.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
@@ -244,6 +310,8 @@ class ReporteViewSet(
                 {'detail': 'El análisis de este reporte todavía no está completo.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if _es_resultado_v2(reporte.analisis):
+            return Response({'detail': MENSAJE_SIN_PRESENTACION_V2}, status=status.HTTP_400_BAD_REQUEST)
         return construir_pdf_response(reporte)
 
 
@@ -303,6 +371,14 @@ class AnalisisMomentoIAViewSet(
                 {'detail': 'Ya hay un análisis con IA en proceso para este momento — espera a '
                            'que termine (o falle) antes de pedir otro.'},
                 status=status.HTTP_409_CONFLICT,
+            )
+
+        # HU-57 §5, ver el comentario de `_sin_respuestas` arriba. Después del 409, mismo criterio
+        # que en AnalisisJornadaIAViewSet.create.
+        if _sin_respuestas([momento]):
+            return Response(
+                {'momento': [f'El momento "{momento.titulo}" no tiene respuestas todavía.']},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         analisis = entrada.save(solicitado_por=request.user)
@@ -366,12 +442,299 @@ class AnalisisJornadaIAViewSet(
                 status=status.HTTP_409_CONFLICT,
             )
 
+        # HU-57 §5, ver el comentario de `_sin_respuestas` arriba. Después del 409: si ya hay uno
+        # en curso, eso es lo que importa reportar primero, sin importar si además faltan
+        # respuestas. Mismo alcance que `_construir_payload_jornada` en analisis_ia_openai.py —
+        # TODOS los momentos, sin filtrar por `activo` (ese campo es de visibilidad para
+        # participantes, no dice nada sobre si hay respuestas reales que analizar — bug reportado
+        # en producción, 2026-09-20: bloqueaba analizar una jornada con respuestas reales solo
+        # porque sus momentos ya estaban desactivados). "Sin respuestas" y "lo que de verdad se le
+        # manda al modelo" siguen siendo la misma definición de alcance.
+        if _sin_respuestas(list(jornada.momentos.all())):
+            return Response(
+                {'jornada': ['La jornada no tiene respuestas todavía en ningún momento.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         analisis = entrada.save(solicitado_por=request.user)
         threading.Thread(target=analizar_jornada_ia, args=(analisis.id,), daemon=True).start()
 
         salida = AnalisisJornadaIASerializer(analisis)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class AnalisisV2ViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Análisis bajo el contrato kunsamu.analisis/v2 (ver `AnalisisV2` en models.py y el plan en
+    docs/mejora_promps/plan_implementacion/). Orden de guards en `create` (D4 del plan): 400 de
+    forma → 403 de jornada ajena → sanar huérfanos → 409 si hay otro en curso con el MISMO alcance
+    (jornada + modo + conjunto de momentos) → 400 si la jornada no tiene momentos. Sin guard de
+    "sin respuestas": `sin_datos` es un estado analítico válido del contrato y lo produce el
+    backend sin gastar una llamada (D11)."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = AnalisisV2.objects.select_related('jornada').prefetch_related('momentos')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
+        jornada_id = self.request.query_params.get('jornada')
+        if jornada_id:
+            queryset = queryset.filter(jornada_id=jornada_id)
+        momento_id = self.request.query_params.get('momento')
+        if momento_id:
+            queryset = queryset.filter(momentos__id=momento_id).distinct()
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return AnalisisV2CrearSerializer
+        if self.action == 'list':
+            return AnalisisV2ListaSerializer
+        return AnalisisV2Serializer
+
+    def create(self, request, *args, **kwargs):
+        entrada = AnalisisV2CrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada = entrada.validated_data['jornada']
+        verificar_acceso_jornada(request.user, jornada)
+        modo = entrada.validated_data['modo']
+        momentos = entrada.validated_data.get('momentos') or []
+
+        AnalisisV2.objects.filter(
+            jornada=jornada,
+            estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
+            actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_V2,
+        ).update(
+            estado=AnalisisV2.ESTADO_ERROR,
+            error_mensaje='El análisis quedó procesando más de 45 minutos sin completarse '
+                          '(probablemente el worker se reinició o falló) y se marcó como error '
+                          'automáticamente.',
+        )
+
+        ids_alcance = {m.id for m in momentos}
+        en_curso = AnalisisV2.objects.filter(
+            jornada=jornada, modo=modo,
+            estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
+        ).prefetch_related('momentos')
+        for otro in en_curso:
+            if {m.id for m in otro.momentos.all()} == ids_alcance:
+                return Response(
+                    {'detail': 'Ya hay un análisis v2 en proceso para este mismo alcance — espera a '
+                               'que termine (o falle) antes de pedir otro.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        if modo == AnalisisV2.MODO_INTEGRAL and not jornada.momentos.exists():
+            return Response(
+                {'jornada': ['La jornada no tiene momentos: no hay nada que analizar.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        analisis = entrada.save(solicitado_por=request.user)
+        threading.Thread(target=procesar_analisis_v2, args=(analisis.id,), daemon=True).start()
+
+        salida = AnalisisV2Serializer(analisis)
+        headers = self.get_success_headers(salida.data)
+        return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class AnalisisSugerenciasView(APIView):
+    """`POST /api/admin/analisis-sugerencias/` — HU-57 §3 (docs/HU_BACKEND_ANALISIS_GUIADO.md).
+    Sin modelo detrás: nada de esto se persiste. Valida la entrada, confirma acceso a la jornada
+    (403 en jornada ajena, mismo scoping que el resto del módulo) y siempre responde `200` — si
+    `generar_sugerencias` no pudo generar nada (sin API key, timeout, respuesta no interpretable),
+    la lista simplemente viene vacía; nunca es un error que el asistente tenga que manejar."""
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        entrada = AnalisisSugerenciasSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        datos = entrada.validated_data
+        verificar_acceso_jornada(request.user, datos['jornada'])
+
+        sugerencias = generar_sugerencias(
+            jornada=datos['jornada'],
+            momento_ids=[momento.id for momento in datos['momentos']],
+            metodo=datos['metodo'], enfoque=datos['enfoque'],
+            contexto=datos['contexto'], instrucciones=datos['instrucciones'],
+        )
+        return Response({'sugerencias': sugerencias})
+
+
+def _item_reporte(reporte):
+    # Un `Reporte` con exactamente UN momento (alcance=momento) sí tiene "el" momento al que
+    # titular la tarjeta; con la jornada completa (alcance=jornada) o varios combinados
+    # (alcance=momentos) no hay un único momento al que referirse — igual que pide HU-57 §4 para
+    # el resto de tipos, esos tres campos quedan en `None`.
+    momentos = list(reporte.momentos.all())
+    momento = momentos[0] if len(momentos) == 1 else None
+    return {
+        'tipo': 'reporte',
+        'id': reporte.id,
+        'jornada': reporte.jornada_id,
+        'momento': momento.id if momento else None,
+        'momento_titulo': momento.titulo if momento else None,
+        'momento_orden': momento.orden if momento else None,
+        'metodo': 'bertopic',
+        'enfoque': reporte.enfoque,
+        'alcance': reporte.alcance,
+        'estado': reporte.estado,
+        'error_mensaje': reporte.error_mensaje,
+        'creado_en': reporte.creado_en,
+        'completado_en': reporte.completado_en,
+        **_claves_v2(reporte.analisis),
+    }
+
+
+def _claves_v2(resultado):
+    """`version` y `estado_analitico` del resultado, en TODOS los items de la lista unificada: es
+    lo que le dice al frontend qué renderer usar. Un registro anterior al rediseño (formato
+    jerárquico / hallazgos con tipo_grafica) no trae `version` y sale con `null` en ambas."""
+    resultado = resultado or {}
+    return {'version': resultado.get('version'), 'estado_analitico': resultado.get('estado')}
+
+
+def _item_analisis_momento(analisis):
+    return {
+        'tipo': 'analisis_momento',
+        'id': analisis.id,
+        'jornada': analisis.momento.jornada_id,
+        'momento': analisis.momento_id,
+        'momento_titulo': analisis.momento.titulo,
+        'momento_orden': analisis.momento.orden,
+        'metodo': 'openai',
+        'enfoque': analisis.enfoque,
+        'alcance': 'momento',
+        'estado': analisis.estado,
+        'error_mensaje': analisis.error_mensaje,
+        'creado_en': analisis.creado_en,
+        'completado_en': analisis.completado_en,
+        **_claves_v2(analisis.resultado),
+    }
+
+
+def _item_analisis_jornada(analisis):
+    return {
+        'tipo': 'analisis_jornada',
+        'id': analisis.id,
+        'jornada': analisis.jornada_id,
+        'momento': None,
+        'momento_titulo': None,
+        'momento_orden': None,
+        'metodo': 'openai',
+        'enfoque': analisis.enfoque,
+        'alcance': 'jornada',
+        'estado': analisis.estado,
+        'error_mensaje': analisis.error_mensaje,
+        'creado_en': analisis.creado_en,
+        'completado_en': analisis.completado_en,
+        **_claves_v2(analisis.resultado),
+    }
+
+
+def _item_analisis_v2(analisis):
+    momentos = list(analisis.momentos.all())
+    momento = momentos[0] if len(momentos) == 1 else None
+    if analisis.modo == AnalisisV2.MODO_INTEGRAL:
+        alcance = 'jornada'
+    else:
+        alcance = 'momento' if len(momentos) == 1 else 'momentos'
+    return {
+        'tipo': 'analisis_v2',
+        'id': analisis.id,
+        'jornada': analisis.jornada_id,
+        'momento': momento.id if momento else None,
+        'momento_titulo': momento.titulo if momento else None,
+        'momento_orden': momento.orden if momento else None,
+        # Derivado del pipeline para que la agrupación actual del panel siga funcionando.
+        'metodo': 'bertopic' if analisis.pipeline == AnalisisV2.PIPELINE_BERTOPIC_LLM else 'openai',
+        'enfoque': None,
+        'alcance': alcance,
+        'estado': analisis.estado,
+        'error_mensaje': analisis.error_mensaje,
+        'creado_en': analisis.creado_en,
+        'completado_en': analisis.completado_en,
+        # Solo los items v2 traen estas cuatro claves: es lo que le dice al frontend qué renderer usar.
+        'version': VERSION_V2,
+        'modo': analisis.modo,
+        'pipeline': analisis.pipeline,
+        'estado_analitico': (analisis.resultado or {}).get('estado'),
+    }
+
+
+class AnalisisUnificadoView(APIView):
+    """`GET /api/admin/analisis/?jornada=<id>` o `?momento=<id>` — HU-57 §4. Une `Reporte` +
+    `AnalisisMomentoIA` + `AnalisisJornadaIA` + `AnalisisV2` de una jornada (o de un momento) en
+    una sola lista, para que el panel arme la pestaña Analítica con una consulta en vez de varias
+    repetidas cada pocos segundos mientras algo procesa. Solo lectura: abrir, borrar y el detalle
+    siguen en los endpoints propios de cada tipo (`ReporteViewSet`, `AnalisisMomentoIAViewSet`,
+    `AnalisisJornadaIAViewSet`, `AnalisisV2ViewSet`) — acá no hay ni `get_object` ni acción por id.
+
+    Sin paginación (mismo criterio que el resto del módulo): no se espera que una sola jornada
+    acumule más de unos cientos de análisis."""
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        jornada_id = request.query_params.get('jornada')
+        momento_id = request.query_params.get('momento')
+        if not jornada_id and not momento_id:
+            return Response(
+                {'detail': 'Manda "jornada" o "momento" como query param.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        items = []
+
+        reportes = filtrar_por_propietario(
+            Reporte.objects.select_related('jornada').prefetch_related('momentos'),
+            request.user, 'jornada__propietarios',
+        )
+        if jornada_id:
+            reportes = reportes.filter(jornada_id=jornada_id)
+        if momento_id:
+            reportes = reportes.filter(momentos__id=momento_id)
+        items.extend(_item_reporte(r) for r in reportes)
+
+        analisis_momento = filtrar_por_propietario(
+            AnalisisMomentoIA.objects.select_related('momento', 'momento__jornada'),
+            request.user, 'momento__jornada__propietarios',
+        )
+        if jornada_id:
+            analisis_momento = analisis_momento.filter(momento__jornada_id=jornada_id)
+        if momento_id:
+            analisis_momento = analisis_momento.filter(momento_id=momento_id)
+        items.extend(_item_analisis_momento(a) for a in analisis_momento)
+
+        # Un análisis de JORNADA completa nunca es "de" un momento puntual — filtrar por
+        # `?momento=` lo excluye del todo, no tendría sentido devolverlo.
+        if not momento_id:
+            analisis_jornada = filtrar_por_propietario(
+                AnalisisJornadaIA.objects.select_related('jornada'),
+                request.user, 'jornada__propietarios',
+            )
+            if jornada_id:
+                analisis_jornada = analisis_jornada.filter(jornada_id=jornada_id)
+            items.extend(_item_analisis_jornada(a) for a in analisis_jornada)
+
+        analisis_v2 = filtrar_por_propietario(
+            AnalisisV2.objects.select_related('jornada').prefetch_related('momentos'),
+            request.user, 'jornada__propietarios',
+        )
+        if jornada_id:
+            analisis_v2 = analisis_v2.filter(jornada_id=jornada_id)
+        if momento_id:
+            # Un v2 integral abarca todos los momentos pero no es "de" uno puntual — mismo criterio
+            # que analisis_jornada: con ?momento= solo entran los por_momento que lo incluyen.
+            analisis_v2 = analisis_v2.filter(momentos__id=momento_id).distinct()
+        items.extend(_item_analisis_v2(a) for a in analisis_v2)
+
+        items.sort(key=lambda item: item['creado_en'], reverse=True)
+        return Response(items)
 
 
 class InfografiaJornadaViewSet(
@@ -381,15 +744,23 @@ class InfografiaJornadaViewSet(
     mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    """Infografías: se piden acá (`POST`) y se consultan acá mismo por polling. Dos alcances,
-    excluyentes entre sí — `{"jornada": id}` usa el reporte integral de la jornada y
-    `{"momento": id}` el análisis integral de ese momento. No exige un `Reporte` en ninguno de los
-    dos. Mismo patrón que `AnalisisJornadaIAViewSet`/`AnalisisMomentoIAViewSet`."""
+    """Infografías: se piden acá (`POST`) y se consultan acá mismo por polling.
+
+    HU-73: cada infografía queda ATADA a una versión exacta de análisis — manda EXACTAMENTE uno
+    de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento),
+    `analisis_jornada` (lectura IA de jornada completa) o `analisis_v2` (contrato
+    `kunsamu.analisis/v2`); `jornada`/`momento` se derivan solos de esa versión y no se aceptan
+    sueltos. Antes de esta HU, mandar solo `{"jornada": id}` o `{"momento": id}` caía al análisis
+    más reciente completo de ese alcance — con HU-71 una jornada/momento acumula varias VERSIONES
+    de análisis a la vez, y esa caída silenciosa a "la más reciente" significaba que dos versiones
+    podían terminar compartiendo la misma infografía (o peor, una infografía generada para ver la
+    versión A mostrando en realidad datos de la versión B que se volvió "la más reciente" mientras
+    tanto). Eso ya no puede pasar: sin un id exacto de análisis, `400`."""
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         queryset = InfografiaJornada.objects.select_related(
-            'jornada', 'momento', 'reporte',
+            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2',
         ).prefetch_related('imagenes')
         queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
         jornada_id = self.request.query_params.get('jornada')
@@ -401,6 +772,15 @@ class InfografiaJornadaViewSet(
         reporte_id = self.request.query_params.get('reporte')
         if reporte_id:
             queryset = queryset.filter(reporte_id=reporte_id)
+        analisis_momento_id = self.request.query_params.get('analisis_momento')
+        if analisis_momento_id:
+            queryset = queryset.filter(analisis_momento_id=analisis_momento_id)
+        analisis_jornada_id = self.request.query_params.get('analisis_jornada')
+        if analisis_jornada_id:
+            queryset = queryset.filter(analisis_jornada_id=analisis_jornada_id)
+        analisis_v2_id = self.request.query_params.get('analisis_v2')
+        if analisis_v2_id:
+            queryset = queryset.filter(analisis_v2_id=analisis_v2_id)
         return queryset
 
     def get_serializer_class(self):
@@ -413,20 +793,32 @@ class InfografiaJornadaViewSet(
         entrada.is_valid(raise_exception=True)
         jornada = entrada.validated_data['jornada']
         momento = entrada.validated_data.get('momento')
+        reporte = entrada.validated_data.get('reporte')
+        analisis_momento = entrada.validated_data.get('analisis_momento')
+        analisis_jornada = entrada.validated_data.get('analisis_jornada')
+        analisis_v2 = entrada.validated_data.get('analisis_v2')
         verificar_acceso_jornada(request.user, jornada)
 
-        sanar_infografias_huerfanas(jornada, momento)
-        if hay_infografia_en_curso(jornada, momento):
-            alcance = f'el momento "{momento.titulo}"' if momento else 'esta jornada'
+        # Acotado a la versión EXACTA (HU-73), no a la jornada/momento en general: generar la
+        # infografía de una versión nunca debe bloquearse ni confundirse con la de otra versión
+        # del mismo alcance.
+        sanar_infografias_huerfanas(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2)
+        if hay_infografia_en_curso(reporte, analisis_momento, analisis_jornada, analisis_v2=analisis_v2):
             return Response(
-                {'detail': f'Ya hay una infografía en proceso para {alcance} — espera a que '
-                           'termine (o falle) antes de pedir otra.'},
+                {'detail': 'Ya hay una infografía en proceso para esta versión del análisis — '
+                           'espera a que termine (o falle) antes de pedir otra.'},
                 status=status.HTTP_409_CONFLICT,
             )
 
         # Se valida acá y no solo dentro del hilo para que el frontend se entere de inmediato, en
-        # vez de crear un registro que va a fallar y tener que descubrirlo haciendo polling.
-        _, error = _obtener_datos_analitica(jornada, entrada.validated_data.get('reporte'), momento)
+        # vez de crear un registro que va a fallar y tener que descubrirlo haciendo polling. Los
+        # cinco argumentos, siempre los cinco: antes de HU-73 esta llamada no mandaba
+        # `analisis_momento`/`analisis_jornada`, así que el chequeo previo evaluaba "la más
+        # reciente" mientras la generación real (`generar_infografias`) ya usaba la fijada —
+        # podían no ser la misma.
+        _, error = _obtener_datos_analitica(
+            jornada, reporte, momento, analisis_momento, analisis_jornada, analisis_v2=analisis_v2,
+        )
         if error:
             return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
 

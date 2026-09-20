@@ -1,16 +1,21 @@
-"""Vía de análisis alternativa a `analysis.py`: en vez del pipeline local multiagente (una llamada
-de LLM local por pregunta + BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
-INSTRUMENTO completo (de un momento, o de la jornada entera) y redacta un reporte general — no
-una lista mecánica de "pregunta 1 dice X, pregunta 2 dice Y". El objetivo es que GPT deduzca
-hallazgos que cruzan varias preguntas (o varios momentos, a escala de jornada) a la vez, igual
-que lo haría un analista humano leyendo todo el material de corrido. Ninguna de las dos vías
-depende de un `Reporte` — `analizar_momento_ia` se dispara directo desde un `Momento`
-(AnalisisMomentoIA) y `analizar_jornada_ia` desde una `Jornada` completa (AnalisisJornadaIA)."""
+"""Análisis con IA de un momento (`analizar_momento_ia`, AnalisisMomentoIA) o de una jornada
+completa (`analizar_jornada_ia`, AnalisisJornadaIA).
+
+REDISEÑO (2026-09-20, contrato `kunsamu.analisis/v2`, docs/mejora_promps/): las dos funciones de
+entrada ya NO usan los prompts de este archivo — delegan en `analitica/v2/procesar.py::
+ejecutar_analisis_v2` (pipeline `llm`, prompt íntegro de la entrega del frontend, salida
+estructurada validada) y guardan el JSON v2 en `resultado`. `SYSTEM_PROMPT`, `SYSTEM_PROMPT_JORNADA`,
+`_construir_payload_*`, `_llamar_openai_json` y `_validar_y_limpiar*` se conservan como referencia
+del comportamiento anterior (y porque los registros históricos se generaron con ellos), pero
+ningún análisis nuevo pasa por ahí."""
 import json
 import os
 import threading
 
 from django.utils import timezone
+
+from .prompt_comun import REGLA_DATOS_ANALISIS, ensamblar_system  # noqa: F401 — usados por el flujo legacy conservado abajo
+from .v2.contrato import MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_LLM
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 # Los modelos de razonamiento (o1/o3/gpt-5+) aceptan un nivel de esfuerzo de razonamiento en vez
@@ -65,13 +70,16 @@ SYSTEM_PROMPT = (
     "debe dejar claro, con las cifras que lo sustentan, en qué concuerdan los participantes y en "
     "qué no (consenso amplio, opinión dividida, una minoría con una postura relevante, etc.).\n\n"
 
-    "=== TRANSFORMAR LO CUALITATIVO EN GRAFICABLE (obligatorio) ===\n"
-    "Casi ningún hallazgo debería quedar sin datos graficables — incluso uno que nazca de "
-    "respuestas de texto se puede cuantificar: extrae las palabras clave o categorías temáticas "
-    "que mejor resuman el patrón en las respuestas abiertas relevantes (de una pregunta o de "
-    "varias combinadas, si el hallazgo las une) y CUENTA cuántas respuestas reales tocan cada "
-    "una — eso es tu `datos`. Deja `datos` vacío solo en el caso raro de un hallazgo puramente "
-    "contextual sin ningún conteo posible detrás.\n\n"
+    # La sección "TRANSFORMAR LO CUALITATIVO EN GRAFICABLE" vivía acá, fija e incondicional —
+    # HU-71 la movió a `prompt_comun.py::bloque_enfoque` porque es EXACTAMENTE lo contrario de lo
+    # que pide `enfoque=cualitativo`: forzaba gráfica en "casi ningún hallazgo" sin importar qué
+    # eligiera quien pidió el análisis. Bug real detectado en producción (AnalisisJornadaIA #4,
+    # 2026-09-20): un análisis cualitativo salió con los 6 hallazgos graficados porque esta regla,
+    # incondicional, pesaba más que el párrafo de enfoque que se anexaba aparte. Ahora la decisión
+    # de graficar o no vive en el bloque de enfoque, antes del formato — y además se refuerza en
+    # código (`_validar_y_limpiar`/`_validar_y_limpiar_jornada`, más abajo) por si el modelo la
+    # ignora: mismo principio que `_purgar_cifras_falsas` en analysis.py, no confiar solo en que
+    # el prompt se respete.
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin "
@@ -132,6 +140,12 @@ SYSTEM_PROMPT = (
     "Nunca inventes cifras, temas ni respuestas que no estén en los datos entregados a "
     "continuación."
 )
+# La frase de cierre de arriba ("Nunca inventes...") queda TAMBIÉN dentro de SYSTEM_PROMPT por
+# compatibilidad de lectura del texto completo, pero quien de verdad decide el orden final es
+# `ensamblar_system` (analitica/prompt_comun.py): compone plantilla → enfoque → contexto →
+# instrucciones → REGLA_DATOS_ANALISIS, así que la regla de no inventar cifras queda garantizada
+# al final del prompt incluso cuando el usuario mandó instrucciones (ver `analizar_momento_ia`/
+# `analizar_jornada_ia` más abajo) — HU-57, docs/HU_BACKEND_ANALISIS_GUIADO.md §2.
 
 
 SYSTEM_PROMPT_JORNADA = (
@@ -178,13 +192,8 @@ SYSTEM_PROMPT_JORNADA = (
     "sustentan, en qué concuerdan los participantes y en qué no (consenso amplio, opinión "
     "dividida, una minoría con una postura relevante, etc.).\n\n"
 
-    "=== TRANSFORMAR LO CUALITATIVO EN GRAFICABLE (obligatorio) ===\n"
-    "Casi ningún hallazgo debería quedar sin datos graficables — incluso uno que nazca de "
-    "respuestas de texto se puede cuantificar: extrae las palabras clave o categorías temáticas "
-    "que mejor resuman el patrón en las respuestas abiertas relevantes (de un momento o de "
-    "varios combinados, si el hallazgo los une) y CUENTA cuántas respuestas reales tocan cada "
-    "una — eso es tu `datos`. Deja `datos` vacío solo en el caso raro de un hallazgo puramente "
-    "contextual sin ningún conteo posible detrás.\n\n"
+    # Ver el comentario equivalente en SYSTEM_PROMPT (arriba en este mismo archivo): la sección
+    # "TRANSFORMAR LO CUALITATIVO EN GRAFICABLE" se movió a `prompt_comun.py::bloque_enfoque`.
 
     "=== FORMATO DE SALIDA (obligatorio) ===\n"
     "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin "
@@ -333,6 +342,14 @@ def _transcripciones_payload(jornada):
 
 
 def _construir_payload_jornada(jornada):
+    # SIN filtrar por `activo`: ese campo solo controla si los participantes TODAVÍA pueden
+    # responder ese momento (ver Momento.activo, jornadas/models.py) — no dice nada sobre si tiene
+    # respuestas reales que valga la pena analizar. Un momento desactivado después de cerrar la
+    # jornada sigue siendo parte real de lo que se vivió, y excluirlo de un análisis de jornada
+    # completa perdía datos reales sin ninguna razón de negocio (bug reportado en producción,
+    # 2026-09-20). Lo que de verdad decide si un momento aporta algo es si tiene `Respuesta`
+    # reales — eso ya lo resuelve `_preguntas_payload`/`_estadisticas_pregunta` por pregunta, un
+    # momento sin respuestas simplemente aporta preguntas con `total_respuestas: 0`, inofensivo.
     momentos_payload = [
         {
             'momento_id': momento.id,
@@ -342,7 +359,7 @@ def _construir_payload_jornada(jornada):
             'categorias_semilla': momento.categorias_semilla,
             'preguntas': _preguntas_payload(momento),
         }
-        for momento in jornada.momentos.filter(activo=True).order_by('orden')
+        for momento in jornada.momentos.all().order_by('orden')
     ]
     return {
         'jornada_id': jornada.id,
@@ -405,21 +422,30 @@ def _llamar_openai_json(system, user, model=None, max_output_tokens=None, timeou
         return None, f'OpenAI devolvió JSON inválido: {exc}'
 
 
-def _validar_y_limpiar(resultado, momento):
+def _validar_y_limpiar(resultado, momento, enfoque=None):
     """Defensa mínima contra un JSON bien formado pero con detalles que no cuadran: fuerza
-    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), y limpia
+    `momento_id`/`tipo` a los reales (nunca los que 'recuerde' el modelo), limpia
     determinísticamente cualquier etiqueta de estructura ('(1)', 'Hallazgo:', etc.) o mención
-    suelta de qué gráfica usar que se haya colado en el texto — mismo principio ya validado en el
-    pipeline local (`analysis._purgar_etiquetas_estructura`): no confiar en que el modelo respete
-    una instrucción de formato solo porque se le pidió con palabras."""
+    suelta de qué gráfica usar que se haya colado en el texto, y en enfoque `cualitativo` fuerza
+    `tipo_grafica=None`/`datos=[]` en todos los hallazgos — mismo principio ya validado en el
+    pipeline local (`analysis._purgar_etiquetas_estructura`/`_purgar_cifras_falsas`): no confiar
+    en que el modelo respete una instrucción de prompt solo porque se le pidió con palabras. Bug
+    real detectado en producción (AnalisisJornadaIA #4, 2026-09-20, ver prompt_comun.py): un
+    análisis cualitativo salió con gráficas en los 6 hallazgos pese al prompt — desde ese
+    incidente esto ya no depende solo del prompt."""
     from .analysis import _purgar_etiquetas_estructura
+    from .prompt_comun import ENFOQUE_CUALITATIVO, normalizar_enfoque
 
     resultado['momento_id'] = momento.id
     resultado['tipo'] = momento.tipo
     resultado['resumen_ejecutivo'] = _purgar_etiquetas_estructura(resultado.get('resumen_ejecutivo'))
+    es_cualitativo = normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO
     for hallazgo in resultado.get('hallazgos') or []:
         hallazgo['titulo'] = _purgar_etiquetas_estructura(hallazgo.get('titulo'))
         hallazgo['descripcion'] = _purgar_etiquetas_estructura(hallazgo.get('descripcion'))
+        if es_cualitativo:
+            hallazgo['tipo_grafica'] = None
+            hallazgo['datos'] = []
     return resultado
 
 
@@ -435,31 +461,28 @@ def analizar_momento_ia(analisis_id):
 
     analisis = None
     try:
-        analisis = AnalisisMomentoIA.objects.select_related('momento').get(pk=analisis_id)
+        analisis = AnalisisMomentoIA.objects.select_related('momento', 'momento__jornada').get(pk=analisis_id)
         analisis.estado = AnalisisMomentoIA.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
-        plantilla = PlantillaAnalisis.objects.filter(
-            tipo=PlantillaAnalisis.TIPO_GPT_MOMENTO, predeterminada=True
-        ).first()
-        system = SYSTEM_PROMPT + _instrucciones_plantilla(plantilla)
-        payload = _construir_payload_momento(analisis.momento)
-        user = 'DATOS DEL MOMENTO (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
-        modelo = DEFAULT_MODEL
-        resultado, error = _llamar_openai_json(system, user, model=modelo)
+        # Rediseño (contrato kunsamu.analisis/v2, docs/mejora_promps/): este endpoint produce el
+        # contrato v2 con el pipeline `llm` en modo `por_momento` sobre ESTE momento. El prompt es
+        # el archivo íntegro de la entrega (analitica/v2/recursos/), sin plantilla, sin bloque de
+        # enfoque ni regla anexada; contexto/instrucciones viajan como datos en `personalizacion`.
+        # `enfoque` se sigue guardando por compatibilidad pero ya no influye en nada.
+        from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 
-        if resultado:
-            analisis.resultado = _validar_y_limpiar(resultado, analisis.momento)
-            analisis.estado = AnalisisMomentoIA.ESTADO_COMPLETO
-            analisis.error_mensaje = ''
-            analisis.modelo_usado = MODELO_USADO_LABEL
-            analisis.completado_en = timezone.now()
-        else:
-            analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
-            analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
-        analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
-        ])
+        momento = analisis.momento
+        r = ejecutar_analisis_v2(
+            momento.jornada, MODO_POR_MOMENTO, [momento], PIPELINE_LLM,
+            contexto=analisis.contexto, instrucciones=analisis.instrucciones,
+            personalizacion_momentos=[{
+                'momento': momento.id, 'contexto': analisis.contexto_momento,
+                'instrucciones': analisis.instrucciones_momento,
+            }],
+            referencia=f'analisis-momento-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+        )
+        aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:
             analisis.estado = AnalisisMomentoIA.ESTADO_ERROR
@@ -469,16 +492,23 @@ def analizar_momento_ia(analisis_id):
         close_old_connections()
 
 
-def _validar_y_limpiar_jornada(resultado, jornada):
-    """Misma defensa que `_validar_y_limpiar`, a escala de jornada: fuerza `jornada_id` al real
-    y limpia etiquetas de estructura que se hayan colado en el texto."""
+def _validar_y_limpiar_jornada(resultado, jornada, enfoque=None):
+    """Misma defensa que `_validar_y_limpiar`, a escala de jornada: fuerza `jornada_id` al real,
+    limpia etiquetas de estructura y, en enfoque `cualitativo`, fuerza `tipo_grafica=None`/
+    `datos=[]` en todos los hallazgos (ver el comentario en `_validar_y_limpiar` — este es
+    exactamente el caso que falló en producción, AnalisisJornadaIA #4)."""
     from .analysis import _purgar_etiquetas_estructura
+    from .prompt_comun import ENFOQUE_CUALITATIVO, normalizar_enfoque
 
     resultado['jornada_id'] = jornada.id
     resultado['resumen_ejecutivo'] = _purgar_etiquetas_estructura(resultado.get('resumen_ejecutivo'))
+    es_cualitativo = normalizar_enfoque(enfoque) == ENFOQUE_CUALITATIVO
     for hallazgo in resultado.get('hallazgos') or []:
         hallazgo['titulo'] = _purgar_etiquetas_estructura(hallazgo.get('titulo'))
         hallazgo['descripcion'] = _purgar_etiquetas_estructura(hallazgo.get('descripcion'))
+        if es_cualitativo:
+            hallazgo['tipo_grafica'] = None
+            hallazgo['datos'] = []
     return resultado
 
 
@@ -497,30 +527,18 @@ def analizar_jornada_ia(analisis_id):
         analisis.estado = AnalisisJornadaIA.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
-        plantilla = PlantillaAnalisis.objects.filter(
-            tipo=PlantillaAnalisis.TIPO_GPT_JORNADA, predeterminada=True
-        ).first()
-        system = SYSTEM_PROMPT_JORNADA + _instrucciones_plantilla(plantilla)
-        payload = _construir_payload_jornada(analisis.jornada)
-        user = 'DATOS DE LA JORNADA (JSON):\n' + json.dumps(payload, ensure_ascii=False, indent=2)
-        resultado, error = _llamar_openai_json(
-            system, user, model=DEFAULT_MODEL,
-            max_output_tokens=MAX_OUTPUT_TOKENS_JORNADA,
-            timeout_seconds=GENERATION_TIMEOUT_SECONDS_JORNADA,
-        )
+        # Rediseño (contrato kunsamu.analisis/v2): pipeline `llm` en modo `integral` — todos los
+        # momentos de la jornada, un solo informe. Ver el comentario en analizar_momento_ia. Las
+        # transcripciones vinculadas (`_transcripciones_payload`) todavía no entran como fuente
+        # del contrato v2 (HU aparte).
+        from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 
-        if resultado:
-            analisis.resultado = _validar_y_limpiar_jornada(resultado, analisis.jornada)
-            analisis.estado = AnalisisJornadaIA.ESTADO_COMPLETO
-            analisis.error_mensaje = ''
-            analisis.modelo_usado = MODELO_USADO_LABEL
-            analisis.completado_en = timezone.now()
-        else:
-            analisis.estado = AnalisisJornadaIA.ESTADO_ERROR
-            analisis.error_mensaje = error or 'Error desconocido generando el análisis.'
-        analisis.save(update_fields=[
-            'resultado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
-        ])
+        r = ejecutar_analisis_v2(
+            analisis.jornada, MODO_INTEGRAL, [], PIPELINE_LLM,
+            contexto=analisis.contexto, instrucciones=analisis.instrucciones,
+            referencia=f'analisis-jornada-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+        )
+        aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if analisis is not None:
             analisis.estado = AnalisisJornadaIA.ESTADO_ERROR

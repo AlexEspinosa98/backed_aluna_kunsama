@@ -1,0 +1,284 @@
+{
+  "version": "kunsamu.analisis/v2",
+  "pipeline": "bertopic_llm",
+  "estado": "completo",
+  "alcance": {
+    "modo": "integral",
+    "jornada_id": "j-ejemplo",
+    "momento_ids": [
+      "m1",
+      "m2"
+    ]
+  },
+  "fuentes": [
+    {
+      "id": "f1",
+      "tipo": "respuestas",
+      "etiqueta": "Encuesta ficticia completa",
+      "momento_ids": [
+        "m1"
+      ],
+      "pregunta_ids": [
+        "q1",
+        "q2"
+      ],
+      "cobertura": "completa"
+    },
+    {
+      "id": "f2",
+      "tipo": "respuestas",
+      "etiqueta": "Respuesta ficticia de una mesa",
+      "momento_ids": [
+        "m2"
+      ],
+      "pregunta_ids": [
+        "q3"
+      ],
+      "cobertura": "completa"
+    },
+    {
+      "id": "fbt",
+      "tipo": "bertopic",
+      "etiqueta": "Resultado BERTopic SIMULADO; no se entrenó un modelo",
+      "momento_ids": [
+        "m1"
+      ],
+      "pregunta_ids": [
+        "q2"
+      ],
+      "cobertura": "completa"
+    }
+  ],
+  "cobertura": [
+    {
+      "momento_id": "m1",
+      "pregunta_id": "q1",
+      "estado": "analizada",
+      "metodos": [
+        "descriptivo"
+      ],
+      "nota": "Se revisó la totalidad de las respuestas recibidas en este ejemplo ficticio."
+    },
+    {
+      "momento_id": "m1",
+      "pregunta_id": "q2",
+      "estado": "analizada",
+      "metodos": [
+        "tematico",
+        "mineria_texto"
+      ],
+      "nota": "Se revisó la totalidad de las respuestas recibidas en este ejemplo ficticio."
+    },
+    {
+      "momento_id": "m2",
+      "pregunta_id": "q3",
+      "estado": "analizada",
+      "metodos": [
+        "tematico"
+      ],
+      "nota": "Se revisó la totalidad de las respuestas recibidas en este ejemplo ficticio."
+    }
+  ],
+  "limitaciones": [
+    {
+      "codigo": "ejemplo_sintetico",
+      "descripcion": "Datos ficticios para comprobar el contrato; no sustentan decisiones reales.",
+      "fuente_ids": [
+        "f1",
+        "f2",
+        "fbt"
+      ]
+    }
+  ],
+  "informes": [
+    {
+      "id": "i1",
+      "momento_ids": [
+        "m1",
+        "m2"
+      ],
+      "titulo": "Horarios del taller — ejemplo ficticio",
+      "resumen": "Dos de seis personas reportan que el horario no les sirve. Sus motivos y la propuesta de una mesa justifican consultar una franja adicional; la encuesta y la mesa son evidencia complementaria, sin un vínculo individual entre ambos momentos.",
+      "hallazgos": [
+        {
+          "id": "h1",
+          "titulo": "Una franja alternativa atendería las restricciones reportadas",
+          "naturaleza": "mixta",
+          "afirmacion": "El horario no sirve a 2 de 6 personas encuestadas (33,3 %): una pide una opción al final de la tarde y otra reporta coincidencia con su turno. La mesa propone probar una franja adicional sin retirar la actual.",
+          "implicacion": "Conviene contrastar una franja adicional con quienes reportan la restricción antes de cambiar el horario vigente.",
+          "metodos": [
+            "descriptivo",
+            "tematico",
+            "integracion_mixta"
+          ],
+          "fuente_ids": [
+            "f1",
+            "f2"
+          ],
+          "pregunta_ids": [
+            "q1",
+            "q2",
+            "q3"
+          ],
+          "metricas": [
+            {
+              "etiqueta": "El horario no sirve",
+              "valor": 33.33,
+              "unidad": "porcentaje",
+              "numerador": 2,
+              "denominador": 6,
+              "base": "6 respuestas válidas a q1; una por persona en m1.",
+              "origen": "calculado",
+              "referencias": [
+                {
+                  "fuente_id": "f1",
+                  "ruta": "/respuestas"
+                }
+              ]
+            }
+          ],
+          "citas": [
+            {
+              "fuente_id": "f1",
+              "texto": "Necesito una opción al final de la tarde.",
+              "localizador": "/respuestas/10/valor"
+            },
+            {
+              "fuente_id": "f1",
+              "texto": "Mi turno coincide con la sesión.",
+              "localizador": "/respuestas/11/valor"
+            },
+            {
+              "fuente_id": "f2",
+              "texto": "Proponemos probar otra franja al final de la tarde sin retirar la actual.",
+              "localizador": "/respuestas/0/valor"
+            }
+          ],
+          "limitaciones": [
+            "La mesa y la encuesta tienen unidades distintas y no se dispone de enlace entre sus participantes. La propuesta no demuestra que una nueva franja resolverá todas las restricciones."
+          ],
+          "visualizacion_ids": [
+            "v1"
+          ]
+        },
+        {
+          "id": "h2",
+          "titulo": "El tópico agrupa restricciones, sin demostrar una solución común",
+          "naturaleza": "cualitativa",
+          "afirmacion": "Los textos asociados al tópico de restricciones contienen una solicitud de franja tardía y una coincidencia con el turno. El agrupamiento no demuestra que una única alternativa resolverá ambos casos.",
+          "implicacion": null,
+          "metodos": [
+            "tematico",
+            "mineria_texto"
+          ],
+          "fuente_ids": [
+            "f1",
+            "fbt"
+          ],
+          "pregunta_ids": [
+            "q2"
+          ],
+          "metricas": [],
+          "citas": [
+            {
+              "fuente_id": "f1",
+              "texto": "Necesito una opción al final de la tarde.",
+              "localizador": "/respuestas/10/valor"
+            },
+            {
+              "fuente_id": "f1",
+              "texto": "Mi turno coincide con la sesión.",
+              "localizador": "/respuestas/11/valor"
+            }
+          ],
+          "limitaciones": [
+            "Agrupamiento y pesos simulados para comprobar el adaptador; no son una ejecución real de BERTopic."
+          ],
+          "visualizacion_ids": [
+            "v2"
+          ]
+        }
+      ],
+      "recomendaciones": [
+        {
+          "id": "r1",
+          "accion": "Consultar una franja al final de la tarde con las dos personas que reportaron incompatibilidad, conservando la actual como opción.",
+          "hallazgo_ids": [
+            "h1"
+          ],
+          "prioridad": "media",
+          "criterio": "Existe una restricción documentada, pero la alternativa aún no fue validada.",
+          "validacion": "Comprobar disponibilidad de ambas personas y viabilidad operativa antes de probar el cambio."
+        }
+      ]
+    }
+  ],
+  "visualizaciones": [
+    {
+      "id": "v1",
+      "tipo": "barras",
+      "titulo": "Compatibilidad del horario en la encuesta",
+      "fuente_ids": [
+        "f1"
+      ],
+      "metodo": "Conteo por opción de q1; 100 × n / 6.",
+      "unidad_analisis": "respuesta_individual",
+      "base": "6 respuestas válidas; opciones excluyentes y exhaustivas.",
+      "nota": "Ejemplo ficticio. No representa a una población externa.",
+      "descripcion_accesible": "El horario sirve a 4 de 6 respuestas (66,67 %) y no sirve a 2 (33,33 %).",
+      "datos": {
+        "unidad": "porcentaje",
+        "orden_categorias": [
+          "Sí",
+          "No"
+        ],
+        "rango": {
+          "min": 0,
+          "max": 100
+        },
+        "filas": [
+          {
+            "categoria": "Sí",
+            "serie": "Encuesta",
+            "valor": 66.67,
+            "numerador": 4,
+            "denominador": 6
+          },
+          {
+            "categoria": "No",
+            "serie": "Encuesta",
+            "valor": 33.33,
+            "numerador": 2,
+            "denominador": 6
+          }
+        ]
+      }
+    },
+    {
+      "id": "v2",
+      "tipo": "nube_palabras",
+      "titulo": "Términos del tópico de restricciones — ejemplo simulado",
+      "fuente_ids": [
+        "fbt"
+      ],
+      "metodo": "Pesos c-TF-IDF reportados para run-demo::1; valores ficticios de integración.",
+      "unidad_analisis": "término de un tópico",
+      "base": "Representación simulada del tópico; los pesos no son conteos ni porcentajes.",
+      "nota": "Los pesos son relevancias léxicas dentro de esta representación.",
+      "descripcion_accesible": "Turno tiene peso 0,38 y tarde 0,29. Estos pesos no miden frecuencia ni importancia para una decisión.",
+      "datos": {
+        "tipo_peso": "c_tf_idf",
+        "terminos": [
+          {
+            "texto": "turno",
+            "peso": 0.38
+          },
+          {
+            "texto": "tarde",
+            "peso": 0.29
+          }
+        ]
+      }
+    }
+  ]
+}

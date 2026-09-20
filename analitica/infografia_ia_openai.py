@@ -30,6 +30,8 @@ from django.utils import timezone
 
 from jornadas.models import JornadaAsset
 
+from .v2.contrato import VERSION as VERSION_V2
+
 DEFAULT_IMAGE_MODEL = os.environ.get('OPENAI_IMAGE_MODEL', 'gpt-image-2')
 GENERATION_TIMEOUT_SECONDS = 300
 # 16:9 real en píxeles. gpt-image-2 acepta resoluciones arbitrarias (no solo el enum que declara
@@ -74,12 +76,22 @@ REGLA_DATOS = (
 # VARIACIONES del mismo contenido, no tres láminas que se complementen. Cada una tiene su papel y
 # su recorte de los datos, y todas comparten la instrucción de estilo para que se lean como una
 # serie y no como tres piezas sueltas.
+# El `{titulo}` de la portada se resuelve en Python (`_titulo_lamina`, más abajo) y se inyecta ya
+# como texto literal — NUNCA se le describe al modelo de imagen "toma el campo X del JSON si
+# viene, si no el campo Y": un modelo de imagen no es un modelo de texto/JSON, está entrenado
+# también para DIBUJAR el texto que se le describe, y confunde con facilidad "esto es una regla
+# de qué campo mirar" con "esto es el texto que va en la lámina". Pasó en producción real
+# (InfografiaJornada #12, 2026-09-20): la portada salió literalmente con el título "el campo
+# `momento` del JSON si viene, o si no el de `jornada`." en vez de resolverlo. El mismo patrón en
+# otros módulos del proyecto (analisis_ia_openai.py, presentacion.py) es seguro porque ahí el
+# modelo es de texto/JSON explicando su propio esquema de salida, no uno de imagen.
 SLIDES = (
     {
         'clave': 'portada',
         'instruccion': (
-            "LÁMINA 1 de 3 — PORTADA. Título: el campo `momento` del JSON si viene, o si no el de "
-            "`jornada`. Debajo, las cifras de participación. Nada más."
+            'LÁMINA 1 de 3 — PORTADA. Título, en texto grande: "{titulo}" — exactamente esas '
+            'palabras, ni una más ni una menos, sin comillas visibles. Debajo, las cifras de '
+            'participación. Nada más.'
         ),
     },
     {
@@ -178,18 +190,91 @@ def _texto_system_design(jornada):
     return system_design.texto if system_design else ''
 
 
-def _obtener_datos_analitica(jornada, reporte=None, momento=None):
+def _es_resultado_v2(resultado):
+    return (resultado or {}).get('version') == VERSION_V2
+
+
+def _datos_desde_analisis_v2(jornada, analisis_v2):
+    from .models import AnalisisV2
+
+    if analisis_v2.estado != AnalisisV2.ESTADO_COMPLETO or not analisis_v2.resultado:
+        return None, (
+            f'El análisis v2 #{analisis_v2.id} no está completo o no tiene resultado. Espera a que '
+            'termine y vuelve a pedir la infografía.'
+        )
+    momentos = list(analisis_v2.momentos.all())
+    momento = momentos[0] if analisis_v2.modo == AnalisisV2.MODO_POR_MOMENTO and len(momentos) == 1 else None
+    return _datos_desde_resultado_v2(jornada, analisis_v2.resultado, momento=momento, fuente='analisis_v2')
+
+
+def _datos_desde_resultado_v2(jornada, resultado, momento=None, fuente='analisis_v2'):
+    """Traduce un resultado kunsamu.analisis/v2 al MISMO diccionario que las láminas ya consumen
+    para los análisis IA anteriores al rediseño (`resumen_ejecutivo` + `hallazgos[{titulo,
+    descripcion, tipo_grafica, datos[{etiqueta, valor, unidad}]}]`) — el prompt de imagen no
+    cambia. La descripción es `afirmacion` (+ `implicacion`); los datos salen de `metricas` y, si
+    el hallazgo no trae métricas pero sí una visualización categórica, de sus filas. Desde el
+    rediseño lo usan las cuatro vías (Reporte, AnalisisMomentoIA, AnalisisJornadaIA, AnalisisV2):
+    cualquier registro cuyo resultado traiga `version` v2 pasa por acá."""
+    if resultado.get('estado') == 'sin_datos':
+        return None, 'El análisis no tiene datos (estado sin_datos): no hay nada que ilustrar.'
+
+    categoricas = ('barras', 'barras_agrupadas', 'barras_apiladas', 'barras_100', 'dona', 'radar')
+    visuales = {v['id']: v for v in resultado.get('visualizaciones', [])}
+    hallazgos = []
+    for informe in resultado.get('informes', []):
+        for h in informe.get('hallazgos', []):
+            datos = [
+                {'etiqueta': m['etiqueta'], 'valor': m['valor'], 'unidad': m['unidad']}
+                for m in h.get('metricas', [])
+            ]
+            tipo_grafica = None
+            for vid in h.get('visualizacion_ids', []):
+                visual = visuales.get(vid)
+                if visual and visual['tipo'] in categoricas:
+                    tipo_grafica = {'dona': 'pastel', 'radar': 'radar'}.get(visual['tipo'], 'barras')
+                    if not datos:
+                        datos = [
+                            {'etiqueta': f['categoria'], 'valor': f['valor'], 'unidad': visual['datos']['unidad']}
+                            for f in visual['datos']['filas'] if f['valor'] is not None
+                        ]
+                    break
+            descripcion = h['afirmacion'] + (f" {h['implicacion']}" if h.get('implicacion') else '')
+            hallazgos.append({'titulo': h['titulo'], 'descripcion': descripcion, 'tipo_grafica': tipo_grafica, 'datos': datos})
+
+    return {
+        'fuente': fuente,
+        'jornada': jornada.nombre,
+        'momento': momento.titulo if momento else None,
+        'tipo_momento': momento.tipo if momento else None,
+        'resumen_ejecutivo': ' '.join(i['resumen'] for i in resultado.get('informes', [])),
+        'hallazgos': hallazgos,
+    }, None
+
+
+def _obtener_datos_analitica(jornada, reporte=None, momento=None, analisis_momento=None, analisis_jornada=None, analisis_v2=None):
     """(datos, error) — nunca lanza excepción. El alcance manda: con `momento` se usa el análisis
     integral de ESE momento y no se mira nada de la jornada, porque mezclar los dos produciría una
-    infografía que dice ser de un momento mientras muestra cifras de toda la jornada. Sin momento:
-    el `Reporte` explícito si trae análisis, si no el reporte integral de jornada, y como último
-    recurso cualquier `Reporte` completo."""
+    infografía que dice ser de un momento mientras muestra cifras de toda la jornada.
+
+    `analisis_momento`/`analisis_jornada`/`reporte`/`analisis_v2` FIJAN cuál análisis usar (un id
+    concreto que vino de `InfografiaJornada`, ver ese modelo) — una jornada o un momento puede
+    tener VARIOS análisis completos a la vez (HU-71: distintos métodos y enfoques), así que "el
+    más reciente" no es necesariamente el que el usuario está mirando cuando pide la infografía
+    desde una tarjeta concreta de la lista unificada. Sin uno explícito, se cae al más reciente
+    completo de ese alcance — comportamiento de siempre, para no romper una petición que solo
+    manda `jornada`/`momento`."""
+    if analisis_v2 is not None:
+        return _datos_desde_analisis_v2(jornada, analisis_v2)
+
     if momento is not None:
         from .models import AnalisisMomentoIA
 
-        analisis_momento = AnalisisMomentoIA.objects.filter(
-            momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
-        ).order_by('-creado_en').first()
+        if analisis_momento is None:
+            analisis_momento = AnalisisMomentoIA.objects.filter(
+                momento=momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
+            ).order_by('-creado_en').first()
+        if analisis_momento and _es_resultado_v2(analisis_momento.resultado):
+            return _datos_desde_resultado_v2(jornada, analisis_momento.resultado, momento=momento, fuente='analisis_momento')
         if analisis_momento and analisis_momento.resultado:
             return {
                 'fuente': 'analisis_momento',
@@ -204,6 +289,12 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
             'primero (POST /api/admin/analisis-momento-ia/) y vuelve a pedir la infografía.'
         )
 
+    if reporte is not None and _es_resultado_v2(reporte.analisis):
+        momentos_reporte = list(reporte.momentos.all())
+        return _datos_desde_resultado_v2(
+            jornada, reporte.analisis, momento=momentos_reporte[0] if len(momentos_reporte) == 1 else None,
+            fuente='reporte',
+        )
     if reporte is not None and reporte.analisis:
         return {
             'fuente': 'reporte',
@@ -215,15 +306,18 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
 
     from .models import AnalisisJornadaIA, Reporte
 
-    analisis_ia = AnalisisJornadaIA.objects.filter(
-        jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
-    ).order_by('-creado_en').first()
-    if analisis_ia and analisis_ia.resultado:
+    if analisis_jornada is None:
+        analisis_jornada = AnalisisJornadaIA.objects.filter(
+            jornada=jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO,
+        ).order_by('-creado_en').first()
+    if analisis_jornada and _es_resultado_v2(analisis_jornada.resultado):
+        return _datos_desde_resultado_v2(jornada, analisis_jornada.resultado, fuente='analisis_jornada_ia')
+    if analisis_jornada and analisis_jornada.resultado:
         return {
             'fuente': 'analisis_jornada_ia',
             'jornada': jornada.nombre,
-            'resumen_ejecutivo': analisis_ia.resultado.get('resumen_ejecutivo'),
-            'hallazgos': analisis_ia.resultado.get('hallazgos'),
+            'resumen_ejecutivo': analisis_jornada.resultado.get('resumen_ejecutivo'),
+            'hallazgos': analisis_jornada.resultado.get('hallazgos'),
         }, None
 
     # Último recurso: cualquier reporte local ya completo de esta jornada. Cubre el caso de pedir
@@ -231,6 +325,8 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
     reporte_completo = Reporte.objects.filter(
         jornada=jornada, estado=Reporte.ESTADO_COMPLETO,
     ).exclude(analisis={}).order_by('-creado_en').first()
+    if reporte_completo and _es_resultado_v2(reporte_completo.analisis):
+        return _datos_desde_resultado_v2(jornada, reporte_completo.analisis, fuente='reporte')
     if reporte_completo:
         return {
             'fuente': 'reporte',
@@ -247,6 +343,13 @@ def _obtener_datos_analitica(jornada, reporte=None, momento=None):
     )
 
 
+def _titulo_lamina(datos_analitica):
+    """El título de la portada: el `momento` si la infografía es de uno, si no el `jornada` —
+    resuelto acá, en Python, y nunca descrito como regla dentro del prompt de imagen (ver el
+    comentario junto a `SLIDES`)."""
+    return datos_analitica.get('momento') or datos_analitica.get('jornada') or ''
+
+
 def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instrucciones=''):
     """El orden importa: lo que va después pesa más. Las instrucciones personalizadas se colocan
     al final, justo antes de la regla de datos, para que puedan contradecir el estilo, la
@@ -254,7 +357,10 @@ def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instr
     que queda después, y por lo tanto fuera de su alcance, es `REGLA_DATOS`."""
     partes = [SYSTEM_PROMPT_PREFIJO]
     if slide is not None:
-        partes.append(slide['instruccion'])
+        instruccion = slide['instruccion']
+        if slide['clave'] == 'portada':
+            instruccion = instruccion.format(titulo=_titulo_lamina(datos_analitica))
+        partes.append(instruccion)
         partes.append(INSTRUCCION_SERIE)
     if texto_system_design:
         partes.append(
@@ -366,13 +472,17 @@ def generar_infografias(infografia_id):
     infografia = None
     try:
         infografia = InfografiaJornada.objects.select_related(
-            'jornada', 'momento', 'reporte',
+            'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2',
         ).get(pk=infografia_id)
         infografia.estado = InfografiaJornada.ESTADO_PROCESANDO
         infografia.save(update_fields=['estado'])
 
         jornada = infografia.jornada
-        datos, error = _obtener_datos_analitica(jornada, infografia.reporte, infografia.momento)
+        datos, error = _obtener_datos_analitica(
+            jornada, infografia.reporte, infografia.momento,
+            infografia.analisis_momento, infografia.analisis_jornada,
+            analisis_v2=infografia.analisis_v2,
+        )
         if error:
             infografia.estado = InfografiaJornada.ESTADO_ERROR
             infografia.error_mensaje = error

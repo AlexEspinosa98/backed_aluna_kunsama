@@ -2,9 +2,10 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .admin_views import (
-    AnalisisJornadaIAViewSet, AnalisisMomentoIAViewSet, EstadisticasPreguntasView,
-    InfografiaJornadaViewSet, MesasView, PlantillaAnalisisViewSet, ProgresoParticipantesView,
-    ReporteExcelPorMomentoView, ReporteExcelPorPreguntaView, ReporteViewSet,
+    AnalisisJornadaIAViewSet, AnalisisMomentoIAViewSet, AnalisisSugerenciasView,
+    AnalisisUnificadoView, AnalisisV2ViewSet, EstadisticasPreguntasView, InfografiaJornadaViewSet,
+    MesasView, PlantillaAnalisisViewSet, ProgresoParticipantesView, ReporteExcelPorMomentoView,
+    ReporteExcelPorPreguntaView, ReporteViewSet,
 )
 
 router = DefaultRouter()
@@ -12,9 +13,12 @@ router.register('plantillas-analisis', PlantillaAnalisisViewSet, basename='admin
 router.register('reportes', ReporteViewSet, basename='admin-reporte')
 router.register('analisis-momento-ia', AnalisisMomentoIAViewSet, basename='admin-analisis-momento-ia')
 router.register('analisis-jornada-ia', AnalisisJornadaIAViewSet, basename='admin-analisis-jornada-ia')
+router.register('analisis-v2', AnalisisV2ViewSet, basename='admin-analisis-v2')
 router.register('infografias', InfografiaJornadaViewSet, basename='admin-infografia')
 
 urlpatterns = router.urls + [
+    path('analisis/', AnalisisUnificadoView.as_view(), name='admin-analisis-unificado'),
+    path('analisis-sugerencias/', AnalisisSugerenciasView.as_view(), name='admin-analisis-sugerencias'),
     path('estadisticas-preguntas/', EstadisticasPreguntasView.as_view(), name='admin-estadisticas-preguntas'),
     path('progreso-participantes/', ProgresoParticipantesView.as_view(), name='admin-progreso-participantes'),
     path('mesas/', MesasView.as_view(), name='admin-mesas'),

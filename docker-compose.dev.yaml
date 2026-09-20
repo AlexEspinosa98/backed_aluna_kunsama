@@ -1,0 +1,118 @@
+# Stack COMPLETO en contenedores — db + gunicorn (+ auto-deploy opcional), sin nginx a propósito:
+# el proxy/TLS lo resuelve cada servidor por fuera (nginx-proxy-manager en el servidor de pruebas)
+# apuntando a ${APP_PORT} en 127.0.0.1. Ver docs/DOCKER.md para cómo desplegar y qué variables de
+# `.env` hacen falta.
+#
+# Archivo APARTE del `docker-compose.yml` por defecto, y hay que nombrarlo explícitamente:
+#
+#     docker compose -f docker-compose.dev.yaml up -d --build
+#
+# En producción la app no corre en Docker (venv + gunicorn + systemd detrás del nginx del host),
+# así que allí el compose solo levanta Postgres — ese es el `docker-compose.yml` por defecto, y
+# separarlos evita que un `git pull` o un `docker compose up` a secas cambie ese despliegue.
+services:
+  db:
+    image: postgres:16
+    container_name: aluna_kunsama_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aluna_kunsamu}
+      POSTGRES_USER: ${POSTGRES_USER:-aluna_kunsamu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - aluna_kunsama_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aluna_kunsamu}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: aluna_kunsama_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de compose el host de Postgres es el nombre del servicio `db`, nunca lo
+      # que traiga `.env` (que suele decir `localhost`, pensado para un despliegue sin Docker) —
+      # se pisa acá para no tener que mantener dos `.env` distintos por esto solo.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+    # DNS público directo, sin pasar por el resolver que el host le inyecta por defecto al
+    # contenedor (127.0.0.11 → reenvía a Tailscale en un servidor conectado a esa red, ver
+    # docs/DOCKER.md). Ese camino devolvía SOLO la dirección IPv6 de dominios externos como
+    # api.openai.com — y el contenedor no tiene stack IPv6 en absoluto (imagen base sin soporte,
+    # red bridge de Docker es IPv4 por defecto), así que cualquier llamada a una API externa
+    # fallaba con "Connection error" sin ninguna pista de que era un problema de DNS. Pasó en
+    # producción real: una infografía se quedó sin poder generarse (2026-09-20) hasta diagnosticar
+    # esto. No se toca la configuración de Docker del host (`/etc/docker/daemon.json`) porque es
+    # compartida con otros proyectos de este servidor — esto es un ajuste acotado a ESTE servicio.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    volumes:
+      # media/ y staticfiles/ como bind mount (no volumen con nombre): así un proxy externo que
+      # corra fuera de Docker en el mismo host (como el nginx de producción, que sirve `static/`
+      # con un `alias` a una ruta de disco) puede leerlos sin tener que entrar al contenedor.
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+      # La caché de sentence-transformers (embeddings de BERTopic, ver analitica/analysis.py) NO
+      # vive en la imagen ni se descarga en cada build — se monta desde el host, igual que media/ y
+      # staticfiles/ (bind mount, no volumen con nombre: así restaurar un respaldo es un `cp` a una
+      # ruta del proyecto, sin tener que entrar a un volumen de Docker). Se puebla sola la primera
+      # vez que corre un análisis (o se restaura desde un respaldo — ver docs/DOCKER.md).
+      - ./.hf_cache:/home/kunsama/.cache/huggingface
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-3}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --access-logfile -
+      --error-logfile -
+
+  # Auto-deploy: vigila `origin/develop` y, ante un commit nuevo, hace `git pull` + reconstruye
+  # `app` sola — automatiza lo que hasta ahora se corría a mano por SSH tras cada push. Detrás de
+  # un profile (`docker compose --profile auto-deploy up -d`, nunca con un `up -d` a secas) porque
+  # necesita el socket de Docker del HOST montado adentro: ese contenedor queda con la misma
+  # capacidad que cualquier proceso con acceso a ese socket — puede tocar CUALQUIER contenedor de
+  # este servidor, no solo los de este proyecto. No es algo que deba arrancar solo, sin que quien
+  # levante el stack lo haya pedido explícitamente. Ver docs/DOCKER.md antes de activarlo.
+  git-sync:
+    profiles: ["auto-deploy"]
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.redeploy-watcher
+    container_name: aluna_kunsama_git_sync
+    restart: unless-stopped
+    environment:
+      GIT_BRANCH: ${GIT_SYNC_BRANCH:-develop}
+      SYNC_PERIOD_SECONDS: ${GIT_SYNC_PERIOD_SECONDS:-30}
+      # Ruta ABSOLUTA de este proyecto en el HOST (no dentro del contenedor) — obligatoria, sin
+      # default. Docker-fuera-de-Docker: este contenedor le habla al daemon del HOST a través del
+      # socket, así que cualquier ruta que le pase a `docker compose` tiene que ser una ruta que
+      # ese daemon pueda resolver en el disco real — de ahí que el volumen de abajo monte el
+      # working directory en la MISMA ruta adentro y afuera, en vez de en `/repo` o similar.
+      REPO_DIR: ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
+    volumes:
+      - ${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}:${HOST_REPO_PATH:?HOST_REPO_PATH es obligatorio para el profile auto-deploy — ver docs/DOCKER.md}
+      # Llave SSH ya autorizada contra GitHub en este host (ver docs/DOCKER.md), montada de solo
+      # lectura en una ruta APARTE (no directo en /root/.ssh): openssh rechaza un config/llave que
+      # no sea dueño de root o de quien lo ejecuta, y un bind mount de solo lectura conserva el
+      # uid del host (un usuario normal) — `redeploy-watcher.sh` copia estos archivos a
+      # /root/.ssh en cada arranque, donde sí puede fijarles el dueño y los permisos correctos.
+      - ${HOME}/.ssh:/ssh-host:ro
+      # El socket de Docker del host — ver la nota de seguridad arriba, es la pieza que de verdad
+      # hace falta pesar antes de activar este profile.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  aluna_kunsama_pg_data:
+    name: aluna_kunsama_pg_data

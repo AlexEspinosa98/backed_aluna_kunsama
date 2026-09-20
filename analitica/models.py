@@ -4,6 +4,81 @@ from django.utils import timezone
 
 from jornadas.models import Jornada, Momento
 
+from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+from .v2.contrato import (
+    MODO_CHOICES, MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_BERTOPIC_LLM, PIPELINE_CHOICES,
+    PIPELINE_LLM,
+)
+
+
+# Campos del análisis guiado (HU-57 del frontend, ver docs/HU_BACKEND_ANALISIS_GUIADO.md) —
+# compartidos por `Reporte`, `AnalisisMomentoIA` y `AnalisisJornadaIA` porque el asistente del
+# panel es uno solo para los tres métodos y le pide lo mismo a cualquiera que elija: con qué
+# enfoque leer los datos, y contexto/instrucciones libres. Dos mixins abstractos (no una función
+# que devuelva campos — Django no permite `**dict` de `Field` en el cuerpo de una clase) para que
+# los tres modelos no se desalineen entre sí (help_text, choices, max_length) a medida que el
+# asistente evolucione.
+class AnalisisGuiadoMixin(models.Model):
+    enfoque = models.CharField(
+        max_length=15, choices=ENFOQUE_CHOICES, default=ENFOQUE_DEFAULT, help_text=(
+            'Con qué enfoque leer los datos: cualitativo (voces y matices), cuantitativo '
+            '(cifras y comparaciones) o mixto (ambos por igual, default).'
+        ),
+    )
+    contexto = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Contexto general que escribió quien pidió el análisis — puede coincidir con '
+            'Jornada.descripcion o no. Se guarda tal cual, sin normalizar.'
+        ),
+    )
+    instrucciones = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Instrucciones adicionales de quien pidió el análisis (tono, público, cantidad de '
+            'gráficos, idioma…) — mandan sobre el estilo y la estructura por defecto.'
+        ),
+    )
+
+    class Meta:
+        abstract = True
+
+
+class AnalisisGuiadoPorMomentoMixin(models.Model):
+    """Solo tiene sentido cuando el alcance es UN momento — un `Reporte` de la jornada completa
+    o de varios momentos combinados los deja vacíos (nada que lo impida a nivel de modelo; es el
+    serializer quien decide cuándo pedirlos, ver `ReporteCrearSerializer`)."""
+    contexto_momento = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Contexto propio de ESTE momento, además del contexto general de la jornada. Solo '
+            'aplica cuando el alcance es un único momento.'
+        ),
+    )
+    instrucciones_momento = models.TextField(
+        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+            'Instrucciones propias de ESTE momento, además de las generales. Solo aplica '
+            'cuando el alcance es un único momento.'
+        ),
+    )
+
+    class Meta:
+        abstract = True
+
+
+class ResultadoV2Mixin(models.Model):
+    """Auditoría del contrato `kunsamu.analisis/v2` (docs/mejora_promps/) en los tres análisis
+    existentes, que desde el rediseño producen ese contrato en `resultado`/`analisis` (ver
+    `analitica/v2/procesar.py::ejecutar_analisis_v2`). `entrada` es el sobre normalizado EXACTO
+    que se le mandó al modelo, guardado antes de llamar y nunca recalculado: los JSON Pointers de
+    citas y documentos BERTopic del resultado apuntan a índices de sus arrays. `diagnostico`
+    conserva lo descartado (salidas inválidas, errores, metadatos de las llamadas, notas del
+    adaptador BERTopic). Un registro anterior al rediseño tiene los cuatro campos vacíos."""
+    entrada = models.JSONField(default=dict, blank=True)
+    diagnostico = models.JSONField(default=dict, blank=True)
+    version_prompt = models.CharField(max_length=40, blank=True)
+    version_esquema = models.CharField(max_length=40, blank=True)
+
+    class Meta:
+        abstract = True
+
 
 class PlantillaAnalisis(models.Model):
     # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
@@ -56,7 +131,7 @@ class PlantillaAnalisis(models.Model):
             )
 
 
-class Reporte(models.Model):
+class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, ResultadoV2Mixin, models.Model):
     ALCANCE_JORNADA = 'jornada'
     ALCANCE_MOMENTO = 'momento'
     ALCANCE_MOMENTOS = 'momentos'
@@ -97,6 +172,13 @@ class Reporte(models.Model):
     )
     texto_reporte = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=150, blank=True)
+    # Auditoría del análisis guiado (HU-57): el prompt de sistema con el que se generó la síntesis
+    # de jornada (`analysis.py::analizar_jornada`), ya con enfoque/contexto/instrucciones
+    # compuestos — mismo campo que ya tienen InfografiaJornada y, desde este mismo cambio, los dos
+    # `Analisis*IA`. No es "el" prompt del reporte completo (hay uno por pregunta y por momento,
+    # ver analysis.py) sino el representativo de más alto nivel, para mostrar en el detalle "con
+    # qué se generó" sin tener que guardar decenas de prompts por reporte.
+    prompt_usado = models.TextField(blank=True)
 
     # Presentación HTML generada por OpenAI a partir de `analisis` (ver analitica/presentacion.py)
     # — capa de presentación aparte del análisis en sí: se puede pedir, fallar o regenerar sin
@@ -148,14 +230,14 @@ class Reporte(models.Model):
         super().save(*args, **kwargs)
 
 
-class AnalisisMomentoIA(models.Model):
-    """Vía de análisis alternativa a `Reporte`: en vez del pipeline local multiagente (una llamada
-    de LLM local por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI lee el
-    instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
+class AnalisisMomentoIA(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, ResultadoV2Mixin, models.Model):
+    """Vía de análisis alternativa a `Reporte`: en vez del pipeline multiagente de `analysis.py`
+    (una llamada a OpenAI por pregunta, BERTopic para descubrir temas), UNA sola llamada a OpenAI
+    lee el instrumento completo del momento (contexto + todas sus preguntas y respuestas reales) y
     redacta un reporte general — hallazgos que pueden cruzar varias preguntas a la vez, no un
-    bloque aislado por pregunta como hace el pipeline local. Ver `analitica/analisis_ia_openai.py`
-    para el formato exacto de `resultado`. No depende de un `Reporte` — se dispara directo desde
-    un `Momento`, con su propio historial."""
+    bloque aislado por pregunta como hace el pipeline de `analysis.py`. Ver
+    `analitica/analisis_ia_openai.py` para el formato exacto de `resultado`. No depende de un
+    `Reporte` — se dispara directo desde un `Momento`, con su propio historial."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -176,6 +258,10 @@ class AnalisisMomentoIA(models.Model):
     )
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
+    # Auditoría del análisis guiado (HU-57) — el system prompt compuesto (plantilla + enfoque +
+    # contexto + instrucciones + regla de datos, ver analitica/prompt_comun.py) con el que se
+    # generó ESTE análisis.
+    prompt_usado = models.TextField(blank=True)
     solicitado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='analisis_momento_ia_solicitados',
@@ -193,7 +279,7 @@ class AnalisisMomentoIA(models.Model):
         return f'Análisis IA {self.id} · {self.momento} · {self.estado}'
 
 
-class AnalisisJornadaIA(models.Model):
+class AnalisisJornadaIA(AnalisisGuiadoMixin, ResultadoV2Mixin, models.Model):
     """Mismo mecanismo que `AnalisisMomentoIA` (una sola llamada a OpenAI, sin pasar por
     `Reporte`), pero a escala de jornada completa: lee TODOS los momentos activos de la jornada
     (cada uno con su contexto, preguntas y respuestas reales) en una sola llamada, para encontrar
@@ -201,7 +287,8 @@ class AnalisisJornadaIA(models.Model):
     hace `AnalisisMomentoIA`. Pensado para jornadas tipo "Café del Mundo" con varios momentos
     cortos (uno por mesa/tema) donde el valor real está en ver el panorama completo de una vez,
     no mesa por mesa. Ver `analitica/analisis_ia_openai.py` (`analizar_jornada_ia`,
-    `SYSTEM_PROMPT_JORNADA`) para el detalle exacto de payload y formato de `resultado`."""
+    `SYSTEM_PROMPT_JORNADA`) para el detalle exacto de payload y formato de `resultado`. Sin
+    `AnalisisGuiadoPorMomentoMixin`: el alcance es siempre la jornada entera, nunca un momento."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -224,6 +311,8 @@ class AnalisisJornadaIA(models.Model):
     )
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
+    # Auditoría del análisis guiado (HU-57) — ver el comentario equivalente en AnalisisMomentoIA.
+    prompt_usado = models.TextField(blank=True)
     solicitado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='analisis_jornada_ia_solicitados',
@@ -251,7 +340,15 @@ class InfografiaJornada(models.Model):
     del módulo —el pipeline local (`Reporte`), el reporte integral de jornada (`AnalisisJornadaIA`)
     o el de un momento (`AnalisisMomentoIA`)— y exigir un `Reporte` dejaba sin salida a quien usara
     las otras: tenía que crear y esperar un reporte que no necesitaba solo para desbloquear el
-    botón. `reporte` y `momento` quedan como referencia opcional de sobre qué se disparó.
+    botón. `reporte`, `analisis_momento` y `analisis_jornada` son NULLABLE a nivel de columna (solo
+    uno aplica según el alcance) pero `InfografiaJornadaCrearSerializer` exige EXACTAMENTE uno de
+    los tres al crear (HU-73) — nunca "la jornada"/"el momento" solos. Antes de HU-73 los tres eran
+    opcionales y, sin ninguno, `_obtener_datos_analitica` caía al análisis MÁS RECIENTE completo de
+    ese alcance; desde que una jornada/momento puede acumular varias VERSIONES de análisis a la vez
+    (HU-71, distintos métodos y enfoques), esa caída silenciosa significaba que dos versiones
+    podían terminar compartiendo la misma infografía, o que una generada mirando la versión A
+    mostrara datos de la versión B que se volvió "la más reciente" mientras tanto — exactamente lo
+    que una infografía aislada por versión no puede permitir.
 
     `jornada` sigue siendo obligatoria incluso cuando la infografía es de un momento (se deriva de
     `momento.jornada`): es lo que sostiene el scoping por propietario sin duplicar reglas, y evita
@@ -274,7 +371,24 @@ class InfografiaJornada(models.Model):
     )
     reporte = models.ForeignKey(
         Reporte, on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
-        help_text='Solo si se disparó desde un reporte concreto. Borrarlo no borra la infografía.',
+        help_text='Fija el Reporte (pipeline local) exacto del que salen los datos. Solo aplica '
+        'con alcance de jornada (sin `momento`). Sin esto, se usa el más reciente completo.',
+    )
+    analisis_momento = models.ForeignKey(
+        'AnalisisMomentoIA', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='infografias',
+        help_text='Fija el AnalisisMomentoIA exacto del que salen los datos. Solo aplica con '
+        '`momento`. Sin esto, se usa el más reciente completo de ese momento.',
+    )
+    analisis_jornada = models.ForeignKey(
+        'AnalisisJornadaIA', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='infografias',
+        help_text='Fija el AnalisisJornadaIA exacto del que salen los datos. Solo aplica con '
+        'alcance de jornada (sin `momento`). Sin esto, se usa el más reciente completo.',
+    )
+    analisis_v2 = models.ForeignKey(
+        'AnalisisV2', on_delete=models.SET_NULL, null=True, blank=True, related_name='infografias',
+        help_text='Fija el AnalisisV2 (contrato kunsamu.analisis/v2) exacto del que salen los datos.',
     )
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     instrucciones = models.TextField(blank=True, help_text=(
@@ -315,3 +429,78 @@ class InfografiaImagen(models.Model):
 
     def __str__(self):
         return f'Imagen {self.orden} · infografía {self.infografia_id}'
+
+
+class AnalisisV2(models.Model):
+    """Análisis con IA bajo el contrato `kunsamu.analisis/v2` (docs/mejora_promps/, plan en
+    docs/mejora_promps/plan_implementacion/). Un modelo aparte de `Reporte`/`AnalisisMomentoIA`/
+    `AnalisisJornadaIA` a propósito (D1 del plan): el frontend elige renderer por la `version` del
+    resultado y conserva los visores históricos, y el contrato rompe la partición por alcance de
+    los tres modelos legacy (un `por_momento` con varios momentos produce varios informes en UNA
+    solicitud). Sin `enfoque`: el contrato lo elimina — el modelo decide el método por pregunta y
+    lo declara en `naturaleza`/`metodos` de cada hallazgo.
+
+    `entrada` es el sobre normalizado EXACTO que se le mandó al modelo, guardado antes de llamar y
+    nunca recalculado: los JSON Pointers de citas y documentos BERTopic de `resultado` apuntan a
+    índices de sus arrays. `resultado` solo se llena con una salida que pasó las dos capas de
+    validación; lo descartado (salidas inválidas, errores, metadatos de las llamadas, notas del
+    adaptador BERTopic) queda en `diagnostico` para auditoría."""
+    MODO_INTEGRAL = MODO_INTEGRAL
+    MODO_POR_MOMENTO = MODO_POR_MOMENTO
+    PIPELINE_LLM = PIPELINE_LLM
+    PIPELINE_BERTOPIC_LLM = PIPELINE_BERTOPIC_LLM
+
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='analisis_v2')
+    momentos = models.ManyToManyField(Momento, blank=True, related_name='analisis_v2', help_text=(
+        'Vacío en modo integral (el alcance es toda la jornada). En por_momento, los momentos '
+        'elegidos — el orden efectivo es por Momento.orden.'
+    ))
+    modo = models.CharField(max_length=12, choices=MODO_CHOICES)
+    pipeline = models.CharField(max_length=15, choices=PIPELINE_CHOICES, default=PIPELINE_LLM)
+    contexto = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        'Contexto general escrito por quien pide el análisis. Viaja como dato en '
+        '`personalizacion.contexto_usuario`, nunca dentro del system prompt.'
+    ))
+    instrucciones = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        'Instrucciones de quien pide el análisis (`personalizacion.instrucciones_usuario`). '
+        'Ajustan énfasis y tono; el formato del informe es fijo por contrato.'
+    ))
+    personalizacion_momentos = models.JSONField(default=list, blank=True, help_text=(
+        'Lista de {"momento": <id>, "contexto": "…", "instrucciones": "…"} — como máximo una '
+        'entrada por momento del alcance.'
+    ))
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    error_mensaje = models.TextField(blank=True)
+    entrada = models.JSONField(default=dict, blank=True)
+    resultado = models.JSONField(default=dict, blank=True, help_text='Salida kunsamu.analisis/v2 validada.')
+    diagnostico = models.JSONField(default=dict, blank=True)
+    version_prompt = models.CharField(max_length=40, blank=True)
+    version_esquema = models.CharField(max_length=40, blank=True)
+    prompt_usado = models.TextField(blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='analisis_v2_solicitados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Análisis v2'
+        verbose_name_plural = 'Análisis v2'
+
+    def __str__(self):
+        return f'Análisis v2 {self.id} · {self.jornada} · {self.modo} · {self.pipeline} · {self.estado}'

@@ -4,9 +4,8 @@ psycopg2-binary
 django-environ
 django-cors-headers
 drf-spectacular
+jsonschema
 gunicorn
-llama-cpp-python
-huggingface_hub
 bertopic
 sentence-transformers
 reportlab
