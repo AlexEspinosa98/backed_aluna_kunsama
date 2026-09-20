@@ -36,6 +36,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # DNS público directo, sin pasar por el resolver que el host le inyecta por defecto al
+    # contenedor (127.0.0.11 → reenvía a Tailscale en un servidor conectado a esa red, ver
+    # docs/DOCKER.md). Ese camino devolvía SOLO la dirección IPv6 de dominios externos como
+    # api.openai.com — y el contenedor no tiene stack IPv6 en absoluto (imagen base sin soporte,
+    # red bridge de Docker es IPv4 por defecto), así que cualquier llamada a una API externa
+    # fallaba con "Connection error" sin ninguna pista de que era un problema de DNS. Pasó en
+    # producción real: una infografía se quedó sin poder generarse (2026-09-20) hasta diagnosticar
+    # esto. No se toca la configuración de Docker del host (`/etc/docker/daemon.json`) porque es
+    # compartida con otros proyectos de este servidor — esto es un ajuste acotado a ESTE servicio.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "127.0.0.1:${APP_PORT:-8000}:8000"
     volumes:
