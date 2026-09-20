@@ -11,7 +11,9 @@ from pathlib import Path
 
 VERSION = 'kunsamu.analisis/v2'
 VERSION_ESQUEMA = 'v2.0'
-VERSION_PROMPT = 'v2.0'
+# v2.1 (2026-09-20): SYSTEM_PROMPT_LLM.md reemplazado por la versión "analista principal" que
+# mandó el frontend (rol experto, cálculos que la evidencia permita, títulos como conclusión).
+VERSION_PROMPT = 'v2.1'
 
 MODO_INTEGRAL = 'integral'
 MODO_POR_MOMENTO = 'por_momento'
