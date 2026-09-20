@@ -425,28 +425,44 @@ Respuesta, **siempre `200`**:
 
 ---
 
-## 6. Infografías — fijar el análisis exacto (HU-72)
+## 6. Infografías — aisladas a una versión exacta de análisis (HU-73)
 
-Desde que una jornada/momento puede tener varios análisis a la vez, `POST
-/api/admin/infografias/` acepta fijar de cuál salen los datos, además de los dos alcances de
-siempre (`jornada` / `momento`, ver INTEGRACION_FRONTEND_INFOGRAFIA.md §2):
+> ⚠️ **CAMBIO DISRUPTIVO, acción requerida ya.** `POST /api/admin/infografias/` con solo
+> `{"jornada": <id>}` o `{"momento": <id>}` **dejó de funcionar** — ahora responde `400`. Si el
+> panel todavía manda eso, hay que actualizarlo antes de que alguien vuelva a pedir una
+> infografía en `develop`.
 
-| Campo | Alcance donde aplica | Qué fija |
-|---|---|---|
-| `reporte` | `jornada` | Un `Reporte` (pipeline local) concreto. Ya existía. |
-| `analisis_jornada` | `jornada` | Un `AnalisisJornadaIA` concreto. **Nuevo.** |
-| `analisis_momento` | `momento` | Un `AnalisisMomentoIA` concreto. **Nuevo.** |
+### Qué cambió y por qué
 
-**Todos opcionales.** Sin ninguno, sigue cayendo al más reciente completo de ese alcance —
-comportamiento de siempre, compatible con mandar solo `{"jornada": <id>}` o `{"momento": <id>}`.
-El fijado es la vía recomendada cuando el panel ya sabe, por la tarjeta de la lista unificada
-(§4, que trae `tipo` + `id` de cada análisis), exactamente cuál generó el clic — así se evita que
-la infografía salga de un análisis distinto al que la persona está mirando.
+Con HU-71 una jornada o un momento acumulan **varias versiones** de análisis a la vez (distintos
+métodos, distintos enfoques). Con el contrato de HU-72, fijar de cuál salían los datos
+(`reporte`/`analisis_momento`/`analisis_jornada`) era **opcional**: sin ninguno, el backend caía
+al análisis **más reciente** completo de ese alcance.
+
+Eso resultó ser el hueco exacto que produce justamente lo que las infografías no pueden hacer:
+que dos versiones terminen compartiendo infografía, o que una generada mirando la versión A
+muestre datos de la versión B que se volvió "la más reciente" mientras tanto. Desde HU-73, **cada
+infografía queda atada para siempre a la versión exacta de análisis con la que se generó, y
+nunca se comparte entre versiones distintas** — ni siquiera del mismo alcance.
+
+### El contrato nuevo
+
+Manda **EXACTAMENTE UNO** de estos tres — ya no hay opción de mandar `jornada`/`momento` solos:
+
+| Campo | Qué fija |
+|---|---|
+| `reporte` | Un `Reporte` (pipeline local) concreto. |
+| `analisis_momento` | Un `AnalisisMomentoIA` concreto. |
+| `analisis_jornada` | Un `AnalisisJornadaIA` concreto. |
+
+`jornada` y `momento` **ya no se aceptan como entrada** — se derivan solos de la versión que
+fijaste (`analisis_momento.momento`, `analisis_jornada.jornada`, `reporte.jornada`) y salen
+read-only en la respuesta. Si los mandas igual en el cuerpo, se ignoran silenciosamente (no da
+error, pero tampoco hacen nada — no confíes en que "eligen" el alcance).
 
 ```json
 POST /api/admin/infografias/
 {
-  "momento": 61,
   "analisis_momento": 8,
   "instrucciones": "Tono informal, dirigido a estudiantes."
 }
@@ -455,30 +471,49 @@ POST /api/admin/infografias/
 ```json
 POST /api/admin/infografias/
 {
-  "jornada": 14,
   "analisis_jornada": 4
 }
 ```
 
-Combinaciones inválidas (`400`, con la clave del campo):
+Esto es exactamente lo que ya tenías disponible desde la lista unificada (§4: cada item trae
+`tipo` + `id`) — el mapeo es directo:
 
-| Combinación | Por qué |
+| `tipo` en `GET /api/admin/analisis/` | Campo a mandar en `POST /api/admin/infografias/` |
 |---|---|
-| `momento` + `reporte` | Un reporte es de jornada completa. |
-| `momento` + `analisis_jornada` | `AnalisisJornadaIA` es de jornada completa — usa `analisis_momento`. |
-| `analisis_momento` de otro momento | Debe pertenecer al `momento` mandado. |
-| jornada sola + `analisis_momento` | `AnalisisMomentoIA` es de un momento puntual — usa `analisis_jornada` o `reporte`. |
-| `reporte` + `analisis_jornada` a la vez | Son dos métodos distintos, no se combinan en la misma infografía. |
-| `analisis_jornada`/`reporte` de otra jornada | Debe pertenecer a la `jornada` mandada. |
+| `"reporte"` | `reporte: <id>` |
+| `"analisis_momento"` | `analisis_momento: <id>` |
+| `"analisis_jornada"` | `analisis_jornada: <id>` |
 
-`GET`/detalle de `InfografiaJornada` ahora incluye `analisis_momento`/`analisis_jornada` (ids,
-`null` si no se fijó ninguno) junto a los campos de siempre (`reporte`, `instrucciones`,
+### Errores
+
+| Situación | Código |
+|---|---|
+| Ninguno de los tres | `400` — `"Manda EXACTAMENTE uno de..."` |
+| Dos o tres al mismo tiempo | `400` — mismo mensaje |
+| El análisis fijado no existe, no está completo, o no tiene resultado | `400`, mensaje explícito (igual que antes) |
+| Ya hay una infografía **de esa misma versión** en curso | `409` |
+| Jornada ajena (derivada de la versión fijada) | `403` |
+
+**Aislamiento también en el "ya hay una en curso":** el bloqueo de `409` ahora es por versión
+exacta, no por jornada/momento en general — pedir la infografía de la versión B mientras la
+versión A todavía está procesando ya **no** da `409`, son trabajos independientes.
+
+### Al listar/filtrar
+
+`GET /api/admin/infografias/` ahora también filtra por `?analisis_momento=<id>` y
+`?analisis_jornada=<id>`, además de `?jornada=`, `?momento=` y `?reporte=` que ya existían. Para
+mostrar "las infografías de ESTA versión" en el detalle de un análisis, filtra siempre por el id
+exacto (`?analisis_momento=8`, no `?momento=61`) — filtrar por jornada/momento sigue trayendo las
+de TODAS las versiones de ese alcance, útil para una vista de administración general, pero no es
+lo que hay que usar para "las de este análisis puntual".
+
+La respuesta de cada `InfografiaJornada` incluye `analisis_momento`/`analisis_jornada` (ids,
+`null` si no aplica a esa versión) junto a los campos de siempre (`reporte`, `instrucciones`,
 `prompt_usado`, `imagenes`, etc. — ver INTEGRACION_FRONTEND_INFOGRAFIA.md).
 
 **Recordatorio explícito, porque se preguntó:** nada de esto genera infografías automáticamente.
-Ni terminar un análisis, ni fijarlo acá, dispara nada por sí solo — la infografía siempre requiere
-un `POST` explícito a este endpoint. Este cambio es solo sobre DE CUÁL análisis salen los datos
-cuando sí se pide.
+Ni terminar un análisis, ni fijar la versión, dispara nada por sí solo — la infografía siempre
+requiere un `POST` explícito a este endpoint.
 
 ---
 

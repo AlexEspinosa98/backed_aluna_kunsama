@@ -339,6 +339,14 @@ def _transcripciones_payload(jornada):
 
 
 def _construir_payload_jornada(jornada):
+    # SIN filtrar por `activo`: ese campo solo controla si los participantes TODAVÍA pueden
+    # responder ese momento (ver Momento.activo, jornadas/models.py) — no dice nada sobre si tiene
+    # respuestas reales que valga la pena analizar. Un momento desactivado después de cerrar la
+    # jornada sigue siendo parte real de lo que se vivió, y excluirlo de un análisis de jornada
+    # completa perdía datos reales sin ninguna razón de negocio (bug reportado en producción,
+    # 2026-09-20). Lo que de verdad decide si un momento aporta algo es si tiene `Respuesta`
+    # reales — eso ya lo resuelve `_preguntas_payload`/`_estadisticas_pregunta` por pregunta, un
+    # momento sin respuestas simplemente aporta preguntas con `total_respuestas: 0`, inofensivo.
     momentos_payload = [
         {
             'momento_id': momento.id,
@@ -348,7 +356,7 @@ def _construir_payload_jornada(jornada):
             'categorias_semilla': momento.categorias_semilla,
             'preguntas': _preguntas_payload(momento),
         }
-        for momento in jornada.momentos.filter(activo=True).order_by('orden')
+        for momento in jornada.momentos.all().order_by('orden')
     ]
     return {
         'jornada_id': jornada.id,

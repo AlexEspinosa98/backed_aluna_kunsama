@@ -39,11 +39,14 @@ SYSTEM_PROMPT = (
 def _payload_momentos(jornada, momento_ids):
     """Sin respuestas de participantes — solo lo que hace falta para enmarcar el análisis (HU-57
     §3): título, contexto ya escrito por el equipo, tipo, cuántas respuestas hay y qué tipos de
-    pregunta trae. `momento_ids` vacío = todos los momentos activos (alcance de jornada
-    completa)."""
+    pregunta trae. `momento_ids` vacío = todos los momentos de la jornada (alcance de jornada
+    completa). Sin filtrar por `activo` — ese campo es de visibilidad para participantes, no dice
+    nada sobre si hay respuestas reales que enmarcar; mismo criterio que
+    `analisis_ia_openai._construir_payload_jornada`, para sugerir sobre exactamente el mismo
+    material que el análisis real va a usar."""
     from participantes.models import Respuesta
 
-    momentos = jornada.momentos.filter(activo=True)
+    momentos = jornada.momentos.all()
     if momento_ids:
         momentos = momentos.filter(id__in=momento_ids)
 

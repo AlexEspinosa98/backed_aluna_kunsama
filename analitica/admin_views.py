@@ -413,12 +413,15 @@ class AnalisisJornadaIAViewSet(
 
         # HU-57 §5, ver el comentario de `_sin_respuestas` arriba. Después del 409: si ya hay uno
         # en curso, eso es lo que importa reportar primero, sin importar si además faltan
-        # respuestas. Mismo alcance (momentos activos) que `_construir_payload_jornada` en
-        # analisis_ia_openai.py — "sin respuestas" y "lo que de verdad se le manda al modelo" son
-        # la misma definición de alcance.
-        if _sin_respuestas(list(jornada.momentos.filter(activo=True))):
+        # respuestas. Mismo alcance que `_construir_payload_jornada` en analisis_ia_openai.py —
+        # TODOS los momentos, sin filtrar por `activo` (ese campo es de visibilidad para
+        # participantes, no dice nada sobre si hay respuestas reales que analizar — bug reportado
+        # en producción, 2026-09-20: bloqueaba analizar una jornada con respuestas reales solo
+        # porque sus momentos ya estaban desactivados). "Sin respuestas" y "lo que de verdad se le
+        # manda al modelo" siguen siendo la misma definición de alcance.
+        if _sin_respuestas(list(jornada.momentos.all())):
             return Response(
-                {'jornada': ['La jornada no tiene respuestas todavía en ningún momento activo.']},
+                {'jornada': ['La jornada no tiene respuestas todavía en ningún momento.']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
