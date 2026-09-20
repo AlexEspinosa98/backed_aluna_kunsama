@@ -50,6 +50,15 @@ USER kunsama
 # ~/.cache/huggingface del usuario del proceso, que es lo mismo pero mejor dejarlo explícito para
 # que docker-compose.yml pueda montarlo como volumen sin adivinar la ruta).
 ENV HF_HOME=/home/kunsama/.cache/huggingface
+# NUMBA_CACHE_DIR: por defecto numba (dependencia de umap-learn, que usa BERTopic para el
+# clustering de tópicos) intenta guardar la caché de sus funciones JIT junto al código fuente del
+# paquete (site-packages/umap/__pycache__) — eso quedó instalado por `pip` corriendo como root
+# (paso anterior a `USER kunsama`), así que `kunsama` no tiene permiso de escritura ahí. Sin este
+# override, la primera vez que corre un análisis con volumen suficiente para activar BERTopic
+# (`MIN_RESPUESTAS_TOPICOS`, ver analitica/analysis.py) numba lanza `RuntimeError: cannot cache
+# function ...: no locator available` y tumba ese hilo de análisis — pasó en producción real
+# (2026-09-20, Reporte #41). Redirigido a una ruta propia del usuario de la app, igual que HF_HOME.
+ENV NUMBA_CACHE_DIR=/home/kunsama/.cache/numba
 
 EXPOSE 8000
 
