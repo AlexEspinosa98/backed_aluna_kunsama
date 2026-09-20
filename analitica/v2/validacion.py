@@ -382,6 +382,66 @@ def _validar_datos_visual(errores, vp, visual, declaradas):
                     errores.append(f'{fp}.celdas[{j}]: la columna es de fecha ISO')
 
 
+def _indice_ids_fuente(fuente):
+    """id → JSON Pointer al texto, para las colecciones donde el modelo tiende a citar por id."""
+    datos = fuente.get('datos') or {}
+    indice = {}
+    for i, r in enumerate(datos.get('respuestas') or []):
+        indice[r.get('id')] = f'/respuestas/{i}/valor'
+    for i, d in enumerate(datos.get('documentos') or []):
+        indice[d.get('id')] = f'/documentos/{i}/texto'
+    return indice
+
+
+def normalizar_salida(salida, entrada):
+    """Correcciones de REPRESENTACIÓN que el backend puede hacer sin inventar nada, antes de
+    validar — observadas en respuestas reales del modelo (AnalisisJornadaIA #11, 2026-09-20), donde
+    el reintento de reparación optó por borrar citas y gráficas en vez de corregirlas:
+    1. `localizador`/`ruta` con el ID de una respuesta o documento (`r2442`) en vez del JSON
+       Pointer normativo → se resuelve al puntero de ese id dentro de la misma fuente. El id está
+       en la entrada, así que la cita sigue siendo auditable.
+    2. `orden_categorias` que lista las SERIES (p. ej. los niveles Likert) y ninguna categoría de
+       las filas → se reconstruye con las categorías de las filas en orden de aparición.
+    Muta `salida` y devuelve la lista de normalizaciones aplicadas (para `diagnostico`). Nunca
+    toca cifras ni textos; lo que no encaja se deja tal cual para que la validación lo reporte."""
+    notas = []
+    indices = {f['id']: _indice_ids_fuente(f) for f in entrada.get('fuentes', [])}
+
+    def _resolver(fuente_id, ruta):
+        if isinstance(ruta, str) and not ruta.startswith('/'):
+            puntero = indices.get(fuente_id, {}).get(ruta)
+            if puntero:
+                return puntero
+        return ruta
+
+    for informe in salida.get('informes') or []:
+        for h in informe.get('hallazgos') or []:
+            for cita in h.get('citas') or []:
+                nuevo = _resolver(cita.get('fuente_id'), cita.get('localizador'))
+                if nuevo != cita.get('localizador'):
+                    notas.append(f"cita {cita.get('localizador')!r} → {nuevo}")
+                    cita['localizador'] = nuevo
+            for m in h.get('metricas') or []:
+                for ref in m.get('referencias') or []:
+                    nuevo = _resolver(ref.get('fuente_id'), ref.get('ruta'))
+                    if nuevo != ref.get('ruta'):
+                        notas.append(f"referencia {ref.get('ruta')!r} → {nuevo}")
+                        ref['ruta'] = nuevo
+
+    for v in salida.get('visualizaciones') or []:
+        if v.get('tipo') not in TIPOS_CATEGORICOS:
+            continue
+        datos = v.get('datos') or {}
+        filas = datos.get('filas') or []
+        orden = datos.get('orden_categorias') or []
+        categorias = [f.get('categoria') for f in filas]
+        series = {f.get('serie') for f in filas}
+        if filas and orden and not (set(orden) & set(categorias)) and series <= set(orden):
+            datos['orden_categorias'] = list(dict.fromkeys(categorias))
+            notas.append(f"visualizaciones[{v.get('id')}]: orden_categorias listaba las series; reconstruido con las categorías de las filas")
+    return notas
+
+
 def validar_salida(salida, entrada, pipeline_esperado=None):
     """Las dos capas en orden: si el esquema falla, no tiene sentido (ni es seguro) correr las
     reglas de negocio sobre una forma desconocida."""

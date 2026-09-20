@@ -21,7 +21,7 @@ from .contrato import PIPELINE_BERTOPIC_LLM, VERSION_ESQUEMA, VERSION_PROMPT, ca
 from .entrada import construir_entrada, hay_respuestas
 from .llm import MODELO_USADO_LABEL, llamar_openai_estructurado
 from .sin_datos import construir_salida_sin_datos
-from .validacion import validar_salida
+from .validacion import normalizar_salida, validar_salida
 
 # ≈300k tokens. Un corpus mayor necesitaría codificación por lotes + agregación (fuera de alcance,
 # D10): mejor fallar con un mensaje claro que mandar una llamada que el modelo va a truncar.
@@ -81,6 +81,7 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
         diagnostico['intentos'].append({'n': 1, 'error': error, 'meta': meta})
         if salida is None:
             raise RuntimeError(error)
+        diagnostico['intentos'][-1]['normalizaciones'] = normalizar_salida(salida, entrada)
         errores = validar_salida(salida, entrada, pipeline_esperado=pipeline)
         if errores:
             diagnostico['intentos'][-1].update({'errores_validacion': errores, 'salida_descartada': salida})
@@ -90,6 +91,7 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
             diagnostico['intentos'].append({'n': 2, 'error': error, 'meta': meta})
             if salida is None:
                 raise RuntimeError(error)
+            diagnostico['intentos'][-1]['normalizaciones'] = normalizar_salida(salida, entrada)
             errores = validar_salida(salida, entrada, pipeline_esperado=pipeline)
             if errores:
                 diagnostico['intentos'][-1].update({'errores_validacion': errores, 'salida_descartada': salida})

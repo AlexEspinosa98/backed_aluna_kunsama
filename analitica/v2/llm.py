@@ -52,9 +52,13 @@ def _mensaje_reparacion(errores):
     return (
         'Tu respuesta anterior NO pasó la validación del backend. Errores concretos:\n' + lista +
         '\n\nDevuelve de nuevo el objeto JSON COMPLETO y corregido, conforme al mismo esquema y a '
-        'las mismas reglas del system prompt. Corrige solo lo necesario. No inventes datos para '
-        '"cuadrar" una cifra ni una cita: si algo no puede sustentarse con la entrada, elimínalo y '
-        'registra la limitación.'
+        'las mismas reglas del system prompt. CORRIGE cada error en su sitio; no borres citas, '
+        'métricas ni visualizaciones que sí puedes arreglar — eliminarlas empobrece el informe. '
+        'Recordatorios: un `localizador` o `ruta` es un JSON Pointer relativo a `datos` de la '
+        'fuente (ej. `/respuestas/12/valor`, donde 12 es la posición de esa respuesta en '
+        '`datos.respuestas`), nunca el id de la respuesta; `orden_categorias` enumera las '
+        'CATEGORÍAS de las filas (el eje), no las series. Elimina un elemento solo si de verdad no '
+        'puede sustentarse con la entrada, y en ese caso registra la limitación.'
     )
 
 

@@ -707,3 +707,37 @@ class ListaUnificadaYPresentacionV2Tests(APITestCase):
         resp = self.client.get(f'/api/admin/analisis-jornada-ia/{a.id}/')
         self.assertEqual(resp.data['version_prompt'], 'v2.0')
         self.assertEqual(resp.data['diagnostico'], {'intentos': []})
+
+
+from .v2.validacion import normalizar_salida
+
+
+class NormalizacionSalidaTests(SimpleTestCase):
+    """Correcciones de representación observadas en una respuesta real (AnalisisJornadaIA #11):
+    citas con el id de la respuesta como localizador y `orden_categorias` con las series."""
+
+    def test_localizador_por_id_se_resuelve_a_puntero(self):
+        salida, entrada = _ejemplo('llm_integral.salida.json'), _ejemplo('llm_integral.entrada.json')
+        cita = salida['informes'][0]['hallazgos'][0]['citas'][0]
+        fuente = next(f for f in entrada['fuentes'] if f['id'] == cita['fuente_id'])
+        idx = int(cita['localizador'].split('/')[2])
+        cita['localizador'] = fuente['datos']['respuestas'][idx]['id']
+        notas = normalizar_salida(salida, entrada)
+        self.assertEqual(len(notas), 1)
+        self.assertEqual(cita['localizador'], f'/respuestas/{idx}/valor')
+        self.assertEqual(validar_negocio(salida, entrada), [])
+
+    def test_orden_categorias_con_series_se_reconstruye(self):
+        salida, entrada = _ejemplo('llm_integral.salida.json'), _ejemplo('llm_integral.entrada.json')
+        v = next(v for v in salida['visualizaciones'] if v['tipo'] in ('barras', 'barras_100', 'dona'))
+        series = sorted({f['serie'] for f in v['datos']['filas']})
+        v['datos']['orden_categorias'] = series
+        self.assertTrue(any('orden_categorias' in e for e in validar_negocio(salida, entrada)))
+        notas = normalizar_salida(salida, entrada)
+        self.assertEqual(len(notas), 1)
+        self.assertEqual(v['datos']['orden_categorias'], list(dict.fromkeys(f['categoria'] for f in v['datos']['filas'])))
+        self.assertEqual(validar_negocio(salida, entrada), [])
+
+    def test_no_toca_una_salida_correcta(self):
+        salida, entrada = _ejemplo('bertopic_integral.salida.json'), _ejemplo('bertopic_integral.entrada.json')
+        self.assertEqual(normalizar_salida(salida, entrada), [])
