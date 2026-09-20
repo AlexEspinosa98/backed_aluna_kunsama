@@ -9,5 +9,6 @@ venv/
 staticfiles/
 gunicorn-*.log
 media/
+.hf_cache/
 .claude/
 tmp/

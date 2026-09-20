@@ -65,10 +65,18 @@ BACKUP=~/backups/aluna_kunsama/<timestamp>
 docker exec -i aluna_kunsama_db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
     --no-owner --clean --if-exists < "$BACKUP/db/aluna_kunsamu.dump"
 
-# 2. Archivos: media/, extracciones sueltas, el modelo GGUF y la caché de sentence-transformers
-tar -xzf "$BACKUP/app_data.tar.gz" -C .                 # trae media/ y instrumentos/extracciones/
-mkdir -p analitica/.models
-tar -xzf "$BACKUP/modelos.tar.gz" -C .                  # trae analitica/.models/ y el caché de HF
+# 2a. Archivos: media/, extracciones sueltas, staticfiles/, .env real de producción
+tar -xzf "$BACKUP/app_data.tar.gz" -C .
+
+# 2b. Modelo GGUF + caché de sentence-transformers — el tar mezcla dos raíces distintas
+# (analitica/.models/ relativo al proyecto, y el caché de HF relativo a ~/.cache/huggingface/hub/),
+# así que se extrae a un lugar de paso y cada pieza se mueve a donde este compose la monta:
+rm -rf /tmp/modelos_kunsama && mkdir -p /tmp/modelos_kunsama analitica/.models .hf_cache/hub
+tar -xzf "$BACKUP/modelos.tar.gz" -C /tmp/modelos_kunsama
+cp -a /tmp/modelos_kunsama/analitica/.models/. analitica/.models/
+cp -a /tmp/modelos_kunsama/models--*/. .hf_cache/hub/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2/ 2>/dev/null \
+    || cp -a /tmp/modelos_kunsama/models--* .hf_cache/hub/
+rm -rf /tmp/modelos_kunsama
 # si modelos.tar.gz vació el caché fuera de analitica/.models, revisar su estructura interna
 # (varía según qué versión del script lo generó) y copiar cada pieza a donde este compose la monta.
 

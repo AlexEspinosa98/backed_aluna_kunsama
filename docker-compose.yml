@@ -45,11 +45,14 @@ services:
       - ./media:/app/media
       - ./staticfiles:/app/staticfiles
       # El modelo LLM local (2 GB, gitignored) y la caché de sentence-transformers NO viven en la
-      # imagen ni se descargan en cada build — se montan desde el host. `python manage.py
-      # download_llm_model` (ver analitica/management/commands/download_llm_model.py) los deja en
-      # `./analitica/.models`; la caché de HF se puebla sola la primera vez que corre un análisis.
+      # imagen ni se descargan en cada build — se montan desde el host, igual que media/ y
+      # staticfiles/ (bind mount, no volumen con nombre: así restaurar un respaldo es un `cp` a
+      # una ruta del proyecto, sin tener que entrar a un volumen de Docker). `python manage.py
+      # download_llm_model` (ver analitica/management/commands/download_llm_model.py) deja el
+      # modelo en `./analitica/.models`; `./.hf_cache` se puebla sola la primera vez que corre un
+      # análisis (o se restaura desde un respaldo — ver docs/DOCKER.md).
       - ./analitica/.models:/app/analitica/.models
-      - aluna_kunsama_hf_cache:/home/kunsama/.cache/huggingface
+      - ./.hf_cache:/home/kunsama/.cache/huggingface
     command: >
       gunicorn config.wsgi:application
       --bind 0.0.0.0:8000
@@ -61,5 +64,3 @@ services:
 volumes:
   aluna_kunsama_pg_data:
     name: aluna_kunsama_pg_data
-  aluna_kunsama_hf_cache:
-    name: aluna_kunsama_hf_cache
