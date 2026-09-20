@@ -1,20 +1,35 @@
 # Integración frontend — Análisis v2 (contrato `kunsamu.analisis/v2`)
 
 Implementa la entrega `docs/mejora_promps/` (20-sep-2026), plan de ejecución en
-[`docs/mejora_promps/plan_implementacion/`](mejora_promps/plan_implementacion/README.md). Lo que
-el frontend recibe en `resultado` es EXACTAMENTE el JSON de
+[`docs/mejora_promps/plan_implementacion/`](mejora_promps/plan_implementacion/README.md).
+
+**Rediseño (20-sep-2026, HU-78 en `docs/USER_STORIES_COMPLETO.md`):** la primera implementación
+levantó el contrato v2 como una vía aparte, `POST /api/admin/analisis-v2/` (HU-73 a HU-77). El
+dueño del repo corrigió el rumbo: la intención siempre fue que el contrato v2 **reemplazara** la
+salida de los tres endpoints que el frontend ya integraba (`analisis-jornada-ia/`,
+`analisis-momento-ia/`, `reportes/`), no que conviviera aparte de ellos. Desde entonces, esos tres
+endpoints corren el mismo pipeline v2 por dentro y devuelven el mismo JSON — **sin que el frontend
+tenga que cambiar ninguna llamada**: cuerpos de petición idénticos a los de siempre, mismos campos
+de respuesta de siempre (`resultado`/`analisis`), ahora con el contrato v2 adentro. La §1 de abajo
+es la referencia completa de ese mapeo; el resto del documento (§2 en adelante, sin cambios de
+fondo respecto a la versión anterior de esta guía) describe `POST /api/admin/analisis-v2/`, que
+sigue existiendo como vía adicional con la misma salida, pero ya NO es el camino principal.
+
+Lo que el frontend recibe en el campo de resultado (`resultado` en los tres endpoints existentes y
+en `analisis-v2/`; `analisis` en `reportes/`) es EXACTAMENTE el JSON de
 [`analisis.schema.json`](mejora_promps/analisis.schema.json), ya validado (esquema + reglas de
 negocio) — nunca llega un resultado inválido: si la IA no logra producir uno válido tras un
-reintento de reparación, el trabajo termina en `estado: "error"` con `resultado: {}`, nunca con un
-JSON a medias. Los tres análisis legacy (`reportes/`, `analisis-momento-ia/`,
-`analisis-jornada-ia/`, ver [INTEGRACION_FRONTEND_ANALISIS_GUIADO.md](INTEGRACION_FRONTEND_ANALISIS_GUIADO.md))
-siguen funcionando exactamente igual para el histórico; el frontend elige renderer por la
-presencia (o no) del campo `version` en el item.
+reintento de reparación, el trabajo termina en `estado: "error"` con `resultado`/`analisis: {}`,
+nunca con un JSON a medias. Los registros generados ANTES del rediseño conservan su formato
+jerárquico de siempre (ver
+[INTEGRACION_FRONTEND_ANALISIS_GUIADO.md](INTEGRACION_FRONTEND_ANALISIS_GUIADO.md)) — el frontend
+elige renderer por la presencia (o no) del campo `version` en el item (§1, §4).
 
 Sin `enfoque`: el contrato v2 lo elimina. El modelo decide, pregunta por pregunta, el método más
 adecuado y lo declara en `naturaleza`/`metodos` de cada hallazgo — la personalización del usuario
 viaja como `contexto`/`instrucciones` (generales y por momento), nunca como una instrucción de
-formato.
+formato. `enfoque` (y `plantilla`, en `reportes/`) se siguen aceptando y guardando en los tres
+endpoints existentes por compatibilidad con el frontend actual, pero ya no influyen en nada (§1).
 
 ---
 
@@ -34,7 +49,83 @@ que todo `analitica/`.
 
 ---
 
-## 1. Pedir un análisis — `POST /api/admin/analisis-v2/`
+## 1. Los endpoints de siempre ya devuelven v2 (sin cambiar las llamadas)
+
+Los tres endpoints que el frontend ya integraba (ver
+[INTEGRACION_FRONTEND_ANALISIS_GUIADO.md](INTEGRACION_FRONTEND_ANALISIS_GUIADO.md)) corren ahora
+`analitica/v2/procesar.py::ejecutar_analisis_v2` por dentro (`analisis_ia_openai.py::
+analizar_momento_ia`/`analizar_jornada_ia`, `analysis.py::procesar_reporte`). El cuerpo de la
+petición NO cambia — sigue siendo el de siempre — y el campo donde ya se leía el resultado sigue
+siendo el mismo campo; lo único que cambia es lo que hay adentro.
+
+| Endpoint | Pipeline v2 | Modo v2 | Campo con el JSON v2 |
+|---|---|---|---|
+| `POST /api/admin/analisis-jornada-ia/` | `llm` | `integral` — todos los momentos de la jornada, un solo informe | `resultado` |
+| `POST /api/admin/analisis-momento-ia/` | `llm` | `por_momento` de ESE momento | `resultado` |
+| `POST /api/admin/reportes/` | `bertopic_llm` | `momentos=[]` → `integral`; `momentos` con ids → `por_momento` (un informe por cada momento) | `analisis` |
+
+- `contexto_momento`/`instrucciones_momento` (el par que ya mandaban `analisis-momento-ia/` y, en
+  `reportes/`, un reporte de un único momento) viajan al pipeline v2 como
+  `personalizacion_momentos=[{"momento": <id>, "contexto": ..., "instrucciones": ...}]`, que
+  `analitica/v2/entrada.py::construir_entrada` vuelca en
+  `entrada.personalizacion.instrucciones_por_momento` (`[{"momento_id", "instrucciones",
+  "contexto"}, ...]`) — mismo lugar del sobre de entrada que llena `personalizacion_momentos` en
+  `POST /api/admin/analisis-v2/` (§2).
+- En `reportes/`, `Reporte.texto_reporte` (el resumen narrativo que ya exponía el serializer) ahora
+  sale de `resumen_de_salida(resultado)`: la concatenación de los `resumen` de cada informe del
+  JSON v2, en vez de la síntesis del pipeline multiagente anterior.
+- **`enfoque` (los tres endpoints) y `plantilla` (`reportes/`) se siguen aceptando y guardando en
+  el registro por compatibilidad con el frontend actual, pero ya NO influyen en el análisis** — el
+  contrato v2 no tiene noción de enfoque; el modelo decide método/gráfica por hallazgo (ver la
+  intro de este documento).
+- Los tres modelos (`Reporte`, `AnalisisMomentoIA`, `AnalisisJornadaIA`) ganan los mismos cuatro
+  campos de auditoría que ya tenía `AnalisisV2` (mixin `ResultadoV2Mixin`, migración
+  `analitica/migrations/0019_resultado_v2_en_analisis_existentes.py`):
+
+  | Campo | Qué es | ¿Sale en el `GET`? |
+  |---|---|---|
+  | `entrada` | El sobre exacto que se le mandó al modelo (`ENTRADA_Y_BERTOPIC.md`), guardado ANTES de llamar a la IA. | No — pesa (contiene el corpus completo); solo vive en la base. |
+  | `diagnostico` | `{"bertopic": [...], "intentos": [...]}`, mismo formato que en `AnalisisV2` (§2). | Sí. |
+  | `version_prompt` | Versión del prompt usado (`"v2.0"`). | Sí. |
+  | `version_esquema` | Versión del esquema de salida validado (`"v2.0"`). | Sí. |
+
+  Es decir: los `GET` de detalle y de lista de los tres endpoints exponen `diagnostico`,
+  `version_prompt` y `version_esquema`, pero nunca `entrada` — mismo criterio que
+  `AnalisisV2ListaSerializer`/`AnalisisV2Serializer` (§2).
+- **Lista unificada `GET /api/admin/analisis/`**: TODOS los items (los tres tipos legacy más
+  `analisis_v2`) traen ahora las claves `version` y `estado_analitico` (`_claves_v2` en
+  `admin_views.py`). Un item generado con el contrato v2 trae `version: "kunsamu.analisis/v2"`; un
+  registro de ANTES del rediseño (formato jerárquico, con `hallazgos[].tipo_grafica` a la antigua)
+  trae `version: null`. `estado_analitico` es `resultado.estado` (o `null` si `version` es
+  `null`). **Es exactamente lo que le dice al frontend qué renderer usar** — no hace falta
+  inspeccionar la forma del JSON: basta mirar `version`.
+- **Infografía**: `_obtener_datos_analitica` (`analitica/infografia_ia_openai.py`) ahora traduce el
+  resultado v2 venga de cualquiera de las cuatro fuentes — `reporte`, `analisis_momento`,
+  `analisis_jornada` o `analisis_v2` — con la misma lógica (`_datos_desde_resultado_v2`). Pedir una
+  infografía de un `Reporte`/`AnalisisMomentoIA`/`AnalisisJornadaIA` generado después del rediseño
+  funciona igual que antes, sin cambios en `POST /api/admin/infografias/`.
+- **Presentación HTML y PDF de un reporte v2 → `400`**: `POST
+  /api/admin/reportes/{id}/generar-presentacion/` y `GET /api/admin/reportes/{id}/pdf/` leen el
+  formato jerárquico ANTERIOR de `Reporte.analisis` (`participacion` + `momentos` + `preguntas`);
+  un reporte generado con el contrato v2 no tiene esa forma, así que ambos responden `400` con un
+  mensaje claro (`MENSAJE_SIN_PRESENTACION_V2` en `admin_views.py`) en vez de una página o un PDF
+  vacíos:
+
+  ```json
+  {
+    "detail": "Este reporte está en el formato kunsamu.analisis/v2: la presentación HTML y el PDF del servidor todavía no soportan ese formato (se renderiza en el panel). Sigue disponible para los reportes generados antes del rediseño."
+  }
+  ```
+
+  Sigue funcionando sin cambios para los reportes generados ANTES del rediseño. Adaptar esas dos
+  capas al contrato v2 es una HU aparte.
+- **Transcripciones vinculadas a la jornada** (`incluir_en_analisis_jornada=True`) todavía no
+  entran al análisis v2 de jornada (`analisis-jornada-ia/`) — antes del rediseño sí se incluían
+  como resúmenes en el análisis de jornada anterior. Limitación conocida, HU aparte.
+
+---
+
+## 2. Pedir un análisis — `POST /api/admin/analisis-v2/`
 
 Cuerpo (`AnalisisV2CrearSerializer`, ver `analitica/serializers.py`):
 
@@ -56,13 +147,13 @@ Cuerpo (`AnalisisV2CrearSerializer`, ver `analitica/serializers.py`):
 | `jornada` | int (pk) | — obligatorio | Debe pertenecer a la dependencia del usuario (o ser admin completo). |
 | `modo` | `"integral"` \| `"por_momento"` | — obligatorio | `integral` = TODOS los momentos de la jornada, activos o no, un solo informe. `por_momento` = solo los `momentos` indicados, un informe por cada uno, en el orden de `Momento.orden` (no en el orden en que se mandaron los ids). |
 | `momentos` | array de int (pks) | `[]` | **Obligatorio y no vacío** en `por_momento`; **no se acepta** (debe ir vacío o ausente) en `integral`. Cada id debe pertenecer a `jornada`. |
-| `pipeline` | `"llm"` \| `"bertopic_llm"` | `"llm"` | `bertopic_llm` agrega, antes de llamar a la IA, una ejecución de BERTopic por cada pregunta de texto (`abierta`/`audio`) con 8 o más respuestas no vacías (ver §4). |
+| `pipeline` | `"llm"` \| `"bertopic_llm"` | `"llm"` | `bertopic_llm` agrega, antes de llamar a la IA, una ejecución de BERTopic por cada pregunta de texto (`abierta`/`audio`) con 8 o más respuestas no vacías (ver §5). |
 | `contexto` | string, ≤4000 caracteres | `""` | Contexto general de quien pide el análisis. Viaja como dato en `entrada.personalizacion.contexto_usuario` — nunca se anexa al system prompt. |
 | `instrucciones` | string, ≤4000 caracteres | `""` | Ídem, en `entrada.personalizacion.instrucciones_usuario`. Ajusta énfasis y tono; el formato del informe (el esquema) es fijo por contrato, no lo cambian las instrucciones. |
 | `personalizacion_momentos` | array de `{"momento": <id>, "contexto": "", "instrucciones": ""}` | `[]` | Opcional. Cada `momento` debe estar en el alcance de este análisis (todos los de la jornada en `integral`, los indicados en `por_momento`) y aparecer como máximo una vez. |
 
 Respuesta `201` con el análisis recién creado en `estado: "pendiente"` (serializer de detalle,
-`AnalisisV2Serializer` — ver §2; `resultado`/`entrada`/`diagnostico` llegan vacíos porque el
+`AnalisisV2Serializer` — ver §3; `resultado`/`entrada`/`diagnostico` llegan vacíos porque el
 trabajo todavía no corrió):
 
 ```json
@@ -116,7 +207,7 @@ aunque para efectos prácticos el orquestador sí congela la lista real al const
 | `409` | Ya hay un `AnalisisV2` `pendiente`/`procesando` con la MISMA jornada, el MISMO `modo` y el MISMO conjunto de momentos | `{"detail": "Ya hay un análisis v2 en proceso para este mismo alcance — espera a que termine (o falle) antes de pedir otro."}`. Dos alcances distintos de la misma jornada (por ejemplo un `integral` y un `por_momento` de un solo momento) sí pueden correr en paralelo. |
 
 **No hay `400` por "el alcance no tiene respuestas"**: `sin_datos` es un estado ANALÍTICO válido
-del contrato (ver §4) — el backend lo produce sin llamar a la IA y el frontend lo renderiza como
+del contrato (ver §5) — el backend lo produce sin llamar a la IA y el frontend lo renderiza como
 un estado vacío, igual que cualquier otro `resultado.estado`.
 
 Antes de evaluar el `409`, la vista sanea automáticamente cualquier `AnalisisV2` de esa jornada
@@ -127,7 +218,7 @@ clustering por pregunta.
 
 ---
 
-## 2. Consultar
+## 3. Consultar
 
 ### `GET /api/admin/analisis-v2/?jornada=<id>` | `?momento=<id>`
 
@@ -175,7 +266,7 @@ Detalle (`AnalisisV2Serializer`) — todo lo de la lista más `resultado`, `entr
 
 | Campo | Notas |
 |---|---|
-| `resultado` | El JSON `kunsamu.analisis/v2` validado (ver §4). `{}` mientras `estado` no es `completo`. |
+| `resultado` | El JSON `kunsamu.analisis/v2` validado (ver §5). `{}` mientras `estado` no es `completo`. |
 | `entrada` | El sobre exacto (`ENTRADA_Y_BERTOPIC.md`) que se mandó al modelo — guardado ANTES de llamar y nunca recalculado. Sirve para resolver en el cliente los `localizador` (JSON Pointer) de las citas y de los documentos BERTopic, si se quiere mostrar el texto fuente exacto. |
 | `diagnostico` | `{"bertopic": [...], "intentos": [...]}` — notas del adaptador BERTopic (una por pregunta: `ok`/`insuficiente`/`error`) y metadatos de cada llamada a OpenAI (`modo_salida`, `finish_reason`, `usage`, errores de validación de intentos fallidos). Nunca incluye el nombre del proveedor/modelo real. |
 | `prompt_usado` | El contenido íntegro de `SYSTEM_PROMPT_LLM.md` o `SYSTEM_PROMPT_BERTOPIC.md` tal cual se mandó como `system` — `""` cuando el resultado es `sin_datos` (no hubo llamada). |
@@ -201,7 +292,7 @@ Borra el registro (sin soft-delete), mismo criterio que el resto del módulo.
 
 ---
 
-## 3. Lista unificada — `GET /api/admin/analisis/`
+## 4. Lista unificada — `GET /api/admin/analisis/`
 
 Los items de `AnalisisV2` (`_item_analisis_v2` en `admin_views.py`) llegan con `tipo:
 "analisis_v2"` junto a las claves comunes de siempre (`id`, `jornada`, `momento`,
@@ -243,7 +334,7 @@ Los items de `AnalisisV2` (`_item_analisis_v2` en `admin_views.py`) llegan con `
 
 ---
 
-## 4. Leer `resultado`
+## 5. Leer `resultado`
 
 El JSON completo, sus 17 tipos de visualización y las reglas semánticas de cada uno están
 documentados en la entrega original — no se repiten acá:
@@ -284,7 +375,7 @@ plan):
 
 ---
 
-## 5. Infografía desde un `AnalisisV2`
+## 6. Infografía desde un `AnalisisV2`
 
 `POST /api/admin/infografias/` acepta `analisis_v2: <id>` como una cuarta opción, mutuamente
 excluyente con `reporte`/`analisis_momento`/`analisis_jornada` (exactamente uno de los cuatro,
@@ -316,17 +407,20 @@ POST /api/admin/infografias/
 
 ---
 
-## 6. Qué NO cambió
+## 7. Qué NO cambió
 
-Los tres endpoints legacy (`reportes/`, `analisis-momento-ia/`, `analisis-jornada-ia/`), sus
-formatos de request/response y `analisis-sugerencias/` (que sigue aceptando `enfoque` opcional; el
-asistente de sugerencias puede dejar de mandarlo sin que nada cambie, porque tiene un default).
-Presentación HTML/PDF, Excel e infografía automática **no existen** para `AnalisisV2` (salvo el
-punto §5, que siempre requiere un `POST` explícito) — fuera de alcance del plan.
+Los cuerpos de petición de `reportes/`, `analisis-momento-ia/` y `analisis-jornada-ia/` no
+cambiaron (§1) — mismos campos de siempre. Tampoco cambió `analisis-sugerencias/` (que sigue
+aceptando `enfoque` opcional; el asistente de sugerencias puede dejar de mandarlo sin que nada
+cambie, porque tiene un default). Presentación HTML/PDF, Excel e infografía automática **no
+existen** para `AnalisisV2` como modelo propio (salvo el punto §6, que siempre requiere un `POST`
+explícito) — fuera de alcance del plan; para un reporte v2 generado vía `reportes/`, la
+presentación HTML y el PDF del servidor responden `400` con un mensaje claro en vez de faltar en
+silencio (§1).
 
 ---
 
-## 7. Checklist de mapeo para el frontend
+## 8. Checklist de mapeo para el frontend
 
 - [ ] El wizard manda `jornada` + `modo` + `momentos` (solo en `por_momento`) + `pipeline` +
       `contexto`/`instrucciones` (+ `personalizacion_momentos`) a `POST /api/admin/analisis-v2/`;

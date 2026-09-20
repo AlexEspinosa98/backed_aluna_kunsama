@@ -97,6 +97,13 @@ cada función en vez de llamar a `ensamblar_system` directamente, pero con la mi
 
 ## 2. Pipeline local — `analitica/analysis.py`
 
+> **Nota (rediseño 2026-09-20, HU-78 en `docs/USER_STORIES_COMPLETO.md`): estos prompts YA NO
+> corren en ningún análisis nuevo.** `procesar_reporte` corre hoy `analitica/v2/procesar.py::
+> ejecutar_analisis_v2` con el pipeline `bertopic_llm` y produce el contrato `kunsamu.analisis/v2`
+> directamente en `Reporte.analisis` — ver §7. `analizar_pregunta`/`_sintetizar_momento`/
+> `analizar_jornada` y los prompts de esta sección se conservan en el código y en este documento
+> como referencia HISTÓRICA de cómo se generaron los `Reporte` anteriores a esa fecha.
+
 BERTopic (clustering de tópicos) + estadísticas son 100% determinísticos, locales, sin LLM. La
 redacción de cada agente sí llama a OpenAI vía `_llamar_llm(system, user, max_tokens, temperature)`
 (mismo patrón threading+timeout que el resto del proyecto, ver `analisis_ia_openai.py`), desde el
@@ -239,6 +246,14 @@ convención de no exponer el proveedor/modelo real que ya usaba `analisis_ia_ope
 ---
 
 ## 3. Análisis integral vía OpenAI — `analitica/analisis_ia_openai.py`
+
+> **Nota (rediseño 2026-09-20, HU-78 en `docs/USER_STORIES_COMPLETO.md`): estos prompts YA NO
+> corren en ningún análisis nuevo.** `analizar_momento_ia`/`analizar_jornada_ia` corren hoy
+> `analitica/v2/procesar.py::ejecutar_analisis_v2` con el pipeline `llm` (modo `por_momento`/
+> `integral` respectivamente) y guardan el contrato `kunsamu.analisis/v2` directamente en
+> `resultado` — ver §7. `SYSTEM_PROMPT`/`SYSTEM_PROMPT_JORNADA` y el resto de esta sección se
+> conservan en el código y en este documento como referencia HISTÓRICA de cómo se generaron los
+> `AnalisisMomentoIA`/`AnalisisJornadaIA` anteriores a esa fecha.
 
 Una sola llamada por momento o por jornada completa (a diferencia de §2, que hace una llamada por
 pregunta + una por momento + una de cierre). Usa `ensamblar_system()` de `prompt_comun.py` — mismo
@@ -439,15 +454,15 @@ Fila en la tabla resumen: ver abajo.
 
 ## Resumen: qué mecanismo usa cada módulo
 
-| Módulo | Llama a | `bloque_enfoque`/`ensamblar_system` | Formato de salida |
-|---|---|---|---|
-| `analysis.py` (pipeline local) | OpenAI (desde 2026-09-20; antes LLM local 3B) | Sí | Jerárquico viejo (`participacion`+`momentos`) |
-| `analisis_ia_openai.py` (momento/jornada) | OpenAI, 1 llamada | Sí | Plano: `resumen_ejecutivo`+`hallazgos[]` (`tipo_grafica`/`datos`, sin `evidencia`/`naturaleza`) |
-| `infografia_ia_openai.py` | OpenAI, modelo de IMAGEN | No | N/A (imagen, no JSON) |
-| `presentacion.py` (reporte local → HTML) | OpenAI | No | Lee el jerárquico viejo, produce HTML |
-| `transcripciones/informe_ia.py` | OpenAI, mapa-reducción | No (siempre cualitativo, sin switch) | `resumen_ejecutivo`+`temas_discutidos`+`hallazgos[]` con `citas` planas |
-| `transcripciones/presentacion.py` | OpenAI | No | Lee el formato de arriba, produce HTML |
-| `analitica/v2/` (contrato `kunsamu.analisis/v2`) | OpenAI, `response_format` json_schema estricto | No (sin `enfoque`; prompt = archivo íntegro, sin anexos) | `kunsamu.analisis/v2`: `informes[]`, `cobertura[]`, `fuentes[]`, `visualizaciones[]` tipadas — validado contra `analisis.schema.json` + reglas de negocio |
+| Módulo | ¿Vigente en análisis nuevos? | Llama a | `bloque_enfoque`/`ensamblar_system` | Formato de salida |
+|---|---|---|---|---|
+| `analysis.py` (pipeline local) | **No** — histórico, ver §2 y §7. `procesar_reporte` corre `analitica/v2/` desde el rediseño (2026-09-20). | OpenAI (desde 2026-09-20; antes LLM local 3B) | Sí | Jerárquico viejo (`participacion`+`momentos`), solo en registros anteriores al rediseño |
+| `analisis_ia_openai.py` (momento/jornada) | **No** — histórico, ver §3 y §7. `analizar_momento_ia`/`analizar_jornada_ia` corren `analitica/v2/` desde el rediseño. | OpenAI, 1 llamada | Sí | Plano: `resumen_ejecutivo`+`hallazgos[]` (`tipo_grafica`/`datos`, sin `evidencia`/`naturaleza`), solo en registros anteriores al rediseño |
+| `infografia_ia_openai.py` | Sí | OpenAI, modelo de IMAGEN | No | N/A (imagen, no JSON) — desde el rediseño traduce resultados v2 de las cuatro fuentes además del jerárquico viejo (§7) |
+| `presentacion.py` (reporte local → HTML) | Sí, pero solo para reportes anteriores al rediseño — un `Reporte` v2 da `400` (ver `docs/INTEGRACION_FRONTEND_ANALISIS_V2.md` §1) | OpenAI | No | Lee el jerárquico viejo, produce HTML |
+| `transcripciones/informe_ia.py` | Sí | OpenAI, mapa-reducción | No (siempre cualitativo, sin switch) | `resumen_ejecutivo`+`temas_discutidos`+`hallazgos[]` con `citas` planas |
+| `transcripciones/presentacion.py` | Sí | OpenAI | No | Lee el formato de arriba, produce HTML |
+| `analitica/v2/` (contrato `kunsamu.analisis/v2`) | **Sí — es el mecanismo vigente.** Desde el rediseño (2026-09-20) corre en `analisis-jornada-ia/`, `analisis-momento-ia/` y `reportes/`, además de `analisis-v2/`. | OpenAI, `response_format` json_schema estricto | No (sin `enfoque`; prompt = archivo íntegro, sin anexos) | `kunsamu.analisis/v2`: `informes[]`, `cobertura[]`, `fuentes[]`, `visualizaciones[]` tipadas — validado contra `analisis.schema.json` + reglas de negocio |
 
 El formato `aluna.analisis/v1` de `docs/enfoque_analisis/` no aparece en ninguna fila de esta
 tabla porque no se implementó en ningún módulo.
