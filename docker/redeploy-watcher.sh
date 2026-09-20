@@ -32,6 +32,9 @@ git config --global --add safe.directory "$REPO_DIR"
 if [ -d /ssh-host ]; then
     mkdir -p /root/.ssh
     cp -a /ssh-host/. /root/.ssh/
+    # `cp -a` preserva el dueño original (el uid del host, no root) — hay que forzarlo aparte,
+    # es justo lo que openssh viene a rechazar si se deja tal cual.
+    chown -R root:root /root/.ssh
     chmod 700 /root/.ssh
     find /root/.ssh -type f -exec chmod 600 {} \;
 fi
