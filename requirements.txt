@@ -4,6 +4,7 @@ psycopg2-binary
 django-environ
 django-cors-headers
 drf-spectacular
+jsonschema
 gunicorn
 bertopic
 sentence-transformers

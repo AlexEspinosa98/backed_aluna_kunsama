@@ -1,0 +1,200 @@
+{
+  "solicitud": {
+    "modo": "por_momento",
+    "jornada_id": "j-ejemplo",
+    "momento_ids": [
+      "m1",
+      "m2"
+    ]
+  },
+  "jornada": {
+    "id": "j-ejemplo",
+    "nombre": "Horarios del taller — DATOS FICTICIOS",
+    "objetivo": "Evaluar alternativas de horario",
+    "contexto": "Fixture sintético de integración. No representa una jornada real."
+  },
+  "momentos": [
+    {
+      "id": "m1",
+      "nombre": "Encuesta de horarios",
+      "tipo": "individual",
+      "contexto": "Seis personas ficticias; respuestas completas.",
+      "preguntas": [
+        {
+          "id": "q1",
+          "texto": "¿Le sirve el horario actual?",
+          "tipo": "seleccion_unica",
+          "opciones": [
+            {
+              "id": "si",
+              "etiqueta": "Sí"
+            },
+            {
+              "id": "no",
+              "etiqueta": "No"
+            }
+          ],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        },
+        {
+          "id": "q2",
+          "texto": "Explique su respuesta sobre el horario.",
+          "tipo": "texto",
+          "opciones": [],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "nombre": "Mesa de alternativas",
+      "tipo": "mesa",
+      "contexto": "Una respuesta colectiva. No se conoce cuántas personas integran la mesa ni si participaron en m1.",
+      "preguntas": [
+        {
+          "id": "q3",
+          "texto": "¿Qué alternativa de horario propone la mesa?",
+          "tipo": "texto",
+          "opciones": [],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        }
+      ]
+    }
+  ],
+  "personalizacion": {
+    "instrucciones_usuario": "Prioriza decisiones concretas sobre horarios.",
+    "contexto_usuario": "",
+    "instrucciones_por_momento": []
+  },
+  "fuentes": [
+    {
+      "id": "f1",
+      "tipo": "respuestas",
+      "etiqueta": "Encuesta ficticia completa",
+      "momento_ids": [
+        "m1"
+      ],
+      "pregunta_ids": [
+        "q1",
+        "q2"
+      ],
+      "cobertura": "completa",
+      "datos": {
+        "unidad_analisis": "respuesta_individual",
+        "respuestas": [
+          {
+            "id": "res-q1-1",
+            "pregunta_id": "q1",
+            "sujeto_id": "s1",
+            "valor": "si"
+          },
+          {
+            "id": "res-q1-2",
+            "pregunta_id": "q1",
+            "sujeto_id": "s2",
+            "valor": "si"
+          },
+          {
+            "id": "res-q1-3",
+            "pregunta_id": "q1",
+            "sujeto_id": "s3",
+            "valor": "si"
+          },
+          {
+            "id": "res-q1-4",
+            "pregunta_id": "q1",
+            "sujeto_id": "s4",
+            "valor": "si"
+          },
+          {
+            "id": "res-q1-5",
+            "pregunta_id": "q1",
+            "sujeto_id": "s5",
+            "valor": "no"
+          },
+          {
+            "id": "res-q1-6",
+            "pregunta_id": "q1",
+            "sujeto_id": "s6",
+            "valor": "no"
+          },
+          {
+            "id": "res-q2-1",
+            "pregunta_id": "q2",
+            "sujeto_id": "s1",
+            "valor": "Mantendría el horario."
+          },
+          {
+            "id": "res-q2-2",
+            "pregunta_id": "q2",
+            "sujeto_id": "s2",
+            "valor": "La sesión termina antes de mi turno."
+          },
+          {
+            "id": "res-q2-3",
+            "pregunta_id": "q2",
+            "sujeto_id": "s3",
+            "valor": "El horario me sirve."
+          },
+          {
+            "id": "res-q2-4",
+            "pregunta_id": "q2",
+            "sujeto_id": "s4",
+            "valor": "Puedo asistir en ese horario."
+          },
+          {
+            "id": "res-q2-5",
+            "pregunta_id": "q2",
+            "sujeto_id": "s5",
+            "valor": "Necesito una opción al final de la tarde."
+          },
+          {
+            "id": "res-q2-6",
+            "pregunta_id": "q2",
+            "sujeto_id": "s6",
+            "valor": "Mi turno coincide con la sesión."
+          }
+        ]
+      }
+    },
+    {
+      "id": "f2",
+      "tipo": "respuestas",
+      "etiqueta": "Respuesta ficticia de una mesa",
+      "momento_ids": [
+        "m2"
+      ],
+      "pregunta_ids": [
+        "q3"
+      ],
+      "cobertura": "completa",
+      "datos": {
+        "unidad_analisis": "respuesta_de_mesa",
+        "respuestas": [
+          {
+            "id": "res-q3-mesa",
+            "pregunta_id": "q3",
+            "sujeto_id": "mesa-a",
+            "valor": "Proponemos probar otra franja al final de la tarde sin retirar la actual."
+          }
+        ]
+      }
+    }
+  ],
+  "bertopic": null
+}

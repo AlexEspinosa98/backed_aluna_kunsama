@@ -1,0 +1,87 @@
+{
+  "version": "kunsamu.analisis/v2",
+  "pipeline": "llm",
+  "estado": "sin_datos",
+  "alcance": {
+    "modo": "integral",
+    "jornada_id": "j-ejemplo",
+    "momento_ids": [
+      "m1",
+      "m2"
+    ]
+  },
+  "fuentes": [
+    {
+      "id": "f1",
+      "tipo": "respuestas",
+      "etiqueta": "Encuesta ficticia completa",
+      "momento_ids": [
+        "m1"
+      ],
+      "pregunta_ids": [
+        "q1",
+        "q2"
+      ],
+      "cobertura": "completa"
+    },
+    {
+      "id": "f2",
+      "tipo": "respuestas",
+      "etiqueta": "Respuesta ficticia de una mesa",
+      "momento_ids": [
+        "m2"
+      ],
+      "pregunta_ids": [
+        "q3"
+      ],
+      "cobertura": "completa"
+    }
+  ],
+  "cobertura": [
+    {
+      "momento_id": "m1",
+      "pregunta_id": "q1",
+      "estado": "sin_datos",
+      "metodos": [],
+      "nota": "Ausencia confirmada de respuestas al cierre."
+    },
+    {
+      "momento_id": "m1",
+      "pregunta_id": "q2",
+      "estado": "sin_datos",
+      "metodos": [],
+      "nota": "Ausencia confirmada de respuestas al cierre."
+    },
+    {
+      "momento_id": "m2",
+      "pregunta_id": "q3",
+      "estado": "sin_datos",
+      "metodos": [],
+      "nota": "Ausencia confirmada de respuestas al cierre."
+    }
+  ],
+  "limitaciones": [
+    {
+      "codigo": "ejemplo_sintetico",
+      "descripcion": "Datos ficticios para comprobar el contrato; no sustentan decisiones reales.",
+      "fuente_ids": [
+        "f1",
+        "f2"
+      ]
+    }
+  ],
+  "informes": [
+    {
+      "id": "i1",
+      "momento_ids": [
+        "m1",
+        "m2"
+      ],
+      "titulo": "Horarios del taller — ejemplo ficticio",
+      "resumen": "No se recibieron respuestas en ninguno de los dos momentos. No hay evidencia para formular hallazgos o recomendaciones.",
+      "hallazgos": [],
+      "recomendaciones": []
+    }
+  ],
+  "visualizaciones": []
+}

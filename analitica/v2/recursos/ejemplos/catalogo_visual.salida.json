@@ -1,0 +1,862 @@
+{
+  "version": "kunsamu.analisis/v2",
+  "pipeline": "llm",
+  "estado": "completo",
+  "alcance": {
+    "modo": "integral",
+    "jornada_id": "j-demo",
+    "momento_ids": [
+      "m-demo"
+    ]
+  },
+  "fuentes": [
+    {
+      "id": "f-catalogo",
+      "tipo": "agregado",
+      "etiqueta": "Catálogo sintético de componentes; no contiene evidencia de una jornada real.",
+      "momento_ids": [
+        "m-demo"
+      ],
+      "pregunta_ids": [
+        "p-demo"
+      ],
+      "cobertura": "completa"
+    }
+  ],
+  "cobertura": [
+    {
+      "momento_id": "m-demo",
+      "pregunta_id": "p-demo",
+      "estado": "analizada",
+      "metodos": [
+        "descriptivo",
+        "tematico"
+      ],
+      "nota": "Registro ficticio para validar la interfaz de salida y los 17 componentes visuales."
+    }
+  ],
+  "limitaciones": [
+    {
+      "codigo": "fixture_catalogo",
+      "descripcion": "Catálogo sintético exclusivo para pruebas de renderizado. Cada visualización usa valores independientes, fijados para mostrar la forma de datos. No representa un análisis real, no tiene un archivo de entrada y no puede usarse para validar evidencia ni tomar decisiones.",
+      "fuente_ids": [
+        "f-catalogo"
+      ]
+    }
+  ],
+  "informes": [
+    {
+      "id": "i-demo",
+      "momento_ids": [
+        "m-demo"
+      ],
+      "titulo": "Catálogo ficticio de visualizaciones",
+      "resumen": "Demostración técnica de los 17 tipos visuales del contrato v2.",
+      "hallazgos": [
+        {
+          "id": "h-demo",
+          "titulo": "Demostración de componentes",
+          "naturaleza": "mixta",
+          "afirmacion": "Catálogo ficticio de renderizado; no representa una jornada real",
+          "implicacion": null,
+          "metodos": [
+            "descriptivo",
+            "tematico"
+          ],
+          "fuente_ids": [
+            "f-catalogo"
+          ],
+          "pregunta_ids": [
+            "p-demo"
+          ],
+          "metricas": [],
+          "citas": [],
+          "limitaciones": [
+            "No utilizar este catálogo como análisis ni como fuente de recomendaciones."
+          ],
+          "visualizacion_ids": [
+            "v_barras",
+            "v_barras_agrupadas",
+            "v_barras_apiladas",
+            "v_barras_100",
+            "v_dona",
+            "v_radar",
+            "v_lineas",
+            "v_areas",
+            "v_dispersion",
+            "v_pendientes",
+            "v_histograma",
+            "v_caja_bigotes",
+            "v_mapa_calor",
+            "v_nube_palabras",
+            "v_red_semantica",
+            "v_tabla",
+            "v_matriz_cualitativa"
+          ]
+        }
+      ],
+      "recomendaciones": []
+    }
+  ],
+  "visualizaciones": [
+    {
+      "id": "v_barras",
+      "tipo": "barras",
+      "titulo": "Diferencia entre cero y valor ausente",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteos sintéticos; null significa dato ausente.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de barras. Diferencia entre cero y valor ausente.",
+      "datos": {
+        "unidad": "respuestas",
+        "orden_categorias": [
+          "A",
+          "B",
+          "Sin medición"
+        ],
+        "rango": null,
+        "filas": [
+          {
+            "categoria": "A",
+            "serie": "Total",
+            "valor": 8,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "B",
+            "serie": "Total",
+            "valor": 0,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Sin medición",
+            "serie": "Total",
+            "valor": null,
+            "numerador": null,
+            "denominador": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_barras_agrupadas",
+      "tipo": "barras_agrupadas",
+      "titulo": "Comparación de dos grupos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteos sintéticos por categoría y grupo.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de barras_agrupadas. Comparación de dos grupos.",
+      "datos": {
+        "unidad": "respuestas",
+        "orden_categorias": [
+          "Sí",
+          "No"
+        ],
+        "rango": null,
+        "filas": [
+          {
+            "categoria": "Sí",
+            "serie": "Grupo A",
+            "valor": 6,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Sí",
+            "serie": "Grupo B",
+            "valor": 4,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "No",
+            "serie": "Grupo A",
+            "valor": 2,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "No",
+            "serie": "Grupo B",
+            "valor": 4,
+            "numerador": null,
+            "denominador": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_barras_apiladas",
+      "tipo": "barras_apiladas",
+      "titulo": "Composición y tamaño de dos grupos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteos sintéticos de categorías excluyentes.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de barras_apiladas. Composición y tamaño de dos grupos.",
+      "datos": {
+        "unidad": "respuestas",
+        "orden_categorias": [
+          "Grupo A",
+          "Grupo B"
+        ],
+        "rango": null,
+        "filas": [
+          {
+            "categoria": "Grupo A",
+            "serie": "Sí",
+            "valor": 6,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Grupo A",
+            "serie": "No",
+            "valor": 2,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Grupo B",
+            "serie": "Sí",
+            "valor": 4,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Grupo B",
+            "serie": "No",
+            "valor": 4,
+            "numerador": null,
+            "denominador": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_barras_100",
+      "tipo": "barras_100",
+      "titulo": "Composición porcentual de dos grupos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Porcentaje sintético = 100 × numerador / denominador; total por grupo 100%.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de barras_100. Composición porcentual de dos grupos.",
+      "datos": {
+        "unidad": "%",
+        "orden_categorias": [
+          "Grupo A",
+          "Grupo B"
+        ],
+        "rango": {
+          "min": 0,
+          "max": 100
+        },
+        "filas": [
+          {
+            "categoria": "Grupo A",
+            "serie": "Sí",
+            "valor": 75,
+            "numerador": 6,
+            "denominador": 8
+          },
+          {
+            "categoria": "Grupo A",
+            "serie": "No",
+            "valor": 25,
+            "numerador": 2,
+            "denominador": 8
+          },
+          {
+            "categoria": "Grupo B",
+            "serie": "Sí",
+            "valor": 50,
+            "numerador": 4,
+            "denominador": 8
+          },
+          {
+            "categoria": "Grupo B",
+            "serie": "No",
+            "valor": 50,
+            "numerador": 4,
+            "denominador": 8
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_dona",
+      "tipo": "dona",
+      "titulo": "Composición simple",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Porcentajes sintéticos de selección única, base 10.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de dona. Composición simple.",
+      "datos": {
+        "unidad": "%",
+        "orden_categorias": [
+          "Sí",
+          "No"
+        ],
+        "rango": {
+          "min": 0,
+          "max": 100
+        },
+        "filas": [
+          {
+            "categoria": "Sí",
+            "serie": "Total",
+            "valor": 80,
+            "numerador": 8,
+            "denominador": 10
+          },
+          {
+            "categoria": "No",
+            "serie": "Total",
+            "valor": 20,
+            "numerador": 2,
+            "denominador": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_radar",
+      "tipo": "radar",
+      "titulo": "Perfil en tres dimensiones",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Valores sintéticos sobre escala común 0–5; valores altos tienen el mismo sentido en los tres ejes.",
+      "unidad_analisis": "puntuación de demostración",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de radar. Perfil en tres dimensiones.",
+      "datos": {
+        "unidad": "puntos",
+        "orden_categorias": [
+          "Claridad",
+          "Acceso",
+          "Utilidad"
+        ],
+        "rango": {
+          "min": 0,
+          "max": 5
+        },
+        "filas": [
+          {
+            "categoria": "Claridad",
+            "serie": "Grupo A",
+            "valor": 4,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Acceso",
+            "serie": "Grupo A",
+            "valor": 3,
+            "numerador": null,
+            "denominador": null
+          },
+          {
+            "categoria": "Utilidad",
+            "serie": "Grupo A",
+            "valor": 5,
+            "numerador": null,
+            "denominador": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_lineas",
+      "tipo": "lineas",
+      "titulo": "Evolución con una medición ausente",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Valores sintéticos temporales; no interpolar el dato ausente.",
+      "unidad_analisis": "medición agregada",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de lineas. Evolución con una medición ausente.",
+      "datos": {
+        "tipo_x": "fecha",
+        "etiqueta_x": "Fecha",
+        "unidad_x": "día",
+        "etiqueta_y": "Puntuación",
+        "unidad_y": "puntos",
+        "filas": [
+          {
+            "serie": "Total",
+            "x": "2026-09-01",
+            "y": 3,
+            "n": 10
+          },
+          {
+            "serie": "Total",
+            "x": "2026-09-02",
+            "y": null,
+            "n": null
+          },
+          {
+            "serie": "Total",
+            "x": "2026-09-03",
+            "y": 4,
+            "n": 10
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_areas",
+      "tipo": "areas",
+      "titulo": "Magnitud a lo largo del tiempo",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteos sintéticos por fecha; área independiente, no apilada.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de areas. Magnitud a lo largo del tiempo.",
+      "datos": {
+        "tipo_x": "fecha",
+        "etiqueta_x": "Fecha",
+        "unidad_x": "día",
+        "etiqueta_y": "Respuestas",
+        "unidad_y": "respuestas",
+        "filas": [
+          {
+            "serie": "Total",
+            "x": "2026-09-01",
+            "y": 5,
+            "n": 5
+          },
+          {
+            "serie": "Total",
+            "x": "2026-09-02",
+            "y": 8,
+            "n": 8
+          },
+          {
+            "serie": "Total",
+            "x": "2026-09-03",
+            "y": 6,
+            "n": 6
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_dispersion",
+      "tipo": "dispersion",
+      "titulo": "Pares de duración y puntuación",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Pares numéricos sintéticos; n=1 por punto.",
+      "unidad_analisis": "observación",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de dispersion. Pares de duración y puntuación.",
+      "datos": {
+        "tipo_x": "numero",
+        "etiqueta_x": "Duración",
+        "unidad_x": "minutos",
+        "etiqueta_y": "Puntuación",
+        "unidad_y": "puntos",
+        "filas": [
+          {
+            "serie": "Observaciones",
+            "x": 10,
+            "y": 6,
+            "n": 1
+          },
+          {
+            "serie": "Observaciones",
+            "x": 15,
+            "y": 8,
+            "n": 1
+          },
+          {
+            "serie": "Observaciones",
+            "x": 20,
+            "y": 7,
+            "n": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_pendientes",
+      "tipo": "pendientes",
+      "titulo": "Cambio entre entrada y salida",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Dos puntos sintéticos por grupo en una escala de puntuación común.",
+      "unidad_analisis": "medición agregada",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": "Ejemplo de comparación agregada; no representa seguimiento individual.",
+      "descripcion_accesible": "Ejemplo ficticio de pendientes. Cambio entre entrada y salida.",
+      "datos": {
+        "tipo_x": "numero",
+        "etiqueta_x": "Medición: 1 = entrada; 2 = salida",
+        "unidad_x": "medición",
+        "etiqueta_y": "Puntuación",
+        "unidad_y": "puntos",
+        "filas": [
+          {
+            "serie": "Grupo A",
+            "x": 1,
+            "y": 3,
+            "n": 10
+          },
+          {
+            "serie": "Grupo A",
+            "x": 2,
+            "y": 4,
+            "n": 10
+          },
+          {
+            "serie": "Grupo B",
+            "x": 1,
+            "y": 2,
+            "n": 8
+          },
+          {
+            "serie": "Grupo B",
+            "x": 2,
+            "y": 3.5,
+            "n": 8
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_histograma",
+      "tipo": "histograma",
+      "titulo": "Distribución por intervalos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Intervalos sintéticos del mismo ancho; incluye el límite superior del último intervalo.",
+      "unidad_analisis": "observación",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de histograma. Distribución por intervalos.",
+      "datos": {
+        "unidad": "minutos",
+        "intervalos": [
+          {
+            "desde": 0,
+            "hasta": 10,
+            "conteo": 2
+          },
+          {
+            "desde": 10,
+            "hasta": 20,
+            "conteo": 6
+          },
+          {
+            "desde": 20,
+            "hasta": 30,
+            "conteo": 2
+          }
+        ],
+        "cierre_ultimo": true
+      }
+    },
+    {
+      "id": "v_caja_bigotes",
+      "tipo": "caja_bigotes",
+      "titulo": "Resumen de distribución con atípico",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Estadísticos sintéticos fijados para el ejemplo; no se presentan como cálculo de una muestra real.",
+      "unidad_analisis": "observación",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de caja_bigotes. Resumen de distribución con atípico.",
+      "datos": {
+        "unidad": "puntos",
+        "regla_bigotes": "Extremos observados dentro de Q1 - 1.5 × RIQ y Q3 + 1.5 × RIQ.",
+        "grupos": [
+          {
+            "etiqueta": "Grupo A",
+            "n": 20,
+            "min": 2,
+            "q1": 4,
+            "mediana": 5,
+            "q3": 7,
+            "max": 9,
+            "atipicos": [
+              14
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_mapa_calor",
+      "tipo": "mapa_calor",
+      "titulo": "Matriz con cero y dato ausente",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Porcentajes sintéticos por celda, base 10; null significa dato ausente.",
+      "unidad_analisis": "respuesta",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de mapa_calor. Matriz con cero y dato ausente.",
+      "datos": {
+        "unidad": "%",
+        "etiqueta_x": "Momento",
+        "etiqueta_y": "Tema",
+        "filas": [
+          {
+            "x": "Entrada",
+            "y": "Claridad",
+            "valor": 60,
+            "numerador": 6,
+            "denominador": 10
+          },
+          {
+            "x": "Salida",
+            "y": "Claridad",
+            "valor": 80,
+            "numerador": 8,
+            "denominador": 10
+          },
+          {
+            "x": "Entrada",
+            "y": "Acceso",
+            "valor": 0,
+            "numerador": 0,
+            "denominador": 10
+          },
+          {
+            "x": "Salida",
+            "y": "Acceso",
+            "valor": null,
+            "numerador": null,
+            "denominador": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_nube_palabras",
+      "tipo": "nube_palabras",
+      "titulo": "Frecuencia documental de tres términos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Frecuencias documentales sintéticas sobre 10 documentos; sin lematización ni agrupación de sinónimos.",
+      "unidad_analisis": "documento",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de nube_palabras. Frecuencia documental de tres términos.",
+      "datos": {
+        "tipo_peso": "frecuencia_documental",
+        "terminos": [
+          {
+            "texto": "acompañamiento",
+            "peso": 6
+          },
+          {
+            "texto": "acceso",
+            "peso": 4
+          },
+          {
+            "texto": "claridad",
+            "peso": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_red_semantica",
+      "tipo": "red_semantica",
+      "titulo": "Relaciones interpretativas sin pesos",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Relaciones ficticias sin cuantificación; nodos y aristas sin pesos y con tamaños uniformes.",
+      "unidad_analisis": "relación interpretativa",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de red_semantica. Relaciones interpretativas sin pesos.",
+      "datos": {
+        "tipo_relacion": "interpretativa",
+        "dirigida": false,
+        "tipo_peso": "sin_peso",
+        "nodos": [
+          {
+            "id": "n_acceso",
+            "etiqueta": "Acceso",
+            "peso": null
+          },
+          {
+            "id": "n_horarios",
+            "etiqueta": "Horarios",
+            "peso": null
+          },
+          {
+            "id": "n_participacion",
+            "etiqueta": "Participación",
+            "peso": null
+          }
+        ],
+        "aristas": [
+          {
+            "origen": "n_acceso",
+            "destino": "n_horarios",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración; no procede de respuestas reales.",
+            "fuente_ids": [
+              "f-catalogo"
+            ]
+          },
+          {
+            "origen": "n_horarios",
+            "destino": "n_participacion",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración; no procede de respuestas reales.",
+            "fuente_ids": [
+              "f-catalogo"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_tabla",
+      "tipo": "tabla",
+      "titulo": "Tabla con texto, número, fecha y ausencia",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Valores sintéticos con tipos de columna explícitos.",
+      "unidad_analisis": "registro de demostración",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de tabla. Tabla con texto, número, fecha y ausencia.",
+      "datos": {
+        "columnas": [
+          {
+            "id": "nombre",
+            "etiqueta": "Nombre",
+            "tipo": "texto",
+            "unidad": null
+          },
+          {
+            "id": "cantidad",
+            "etiqueta": "Cantidad",
+            "tipo": "numero",
+            "unidad": "respuestas"
+          },
+          {
+            "id": "fecha",
+            "etiqueta": "Fecha",
+            "tipo": "fecha",
+            "unidad": null
+          }
+        ],
+        "filas": [
+          {
+            "id": "t_1",
+            "celdas": [
+              "Grupo A",
+              0,
+              "2026-09-01"
+            ]
+          },
+          {
+            "id": "t_2",
+            "celdas": [
+              "Grupo B",
+              null,
+              "2026-09-02"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_matriz_cualitativa",
+      "tipo": "matriz_cualitativa",
+      "titulo": "Matriz de temas e interpretación",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Contenido ficticio sin conteos ni citas literales de personas.",
+      "unidad_analisis": "tema de demostración",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de matriz_cualitativa. Matriz de temas e interpretación.",
+      "datos": {
+        "columnas": [
+          {
+            "id": "tema",
+            "etiqueta": "Tema",
+            "tipo": "texto",
+            "unidad": null
+          },
+          {
+            "id": "observacion",
+            "etiqueta": "Observación",
+            "tipo": "texto",
+            "unidad": null
+          },
+          {
+            "id": "implicacion",
+            "etiqueta": "Implicación",
+            "tipo": "texto",
+            "unidad": null
+          }
+        ],
+        "filas": [
+          {
+            "id": "m_1",
+            "celdas": [
+              "Acceso",
+              "Ejemplo ficticio de barrera de horario.",
+              "Ejemplo ficticio de ajuste de horario."
+            ]
+          },
+          {
+            "id": "m_2",
+            "celdas": [
+              "Claridad",
+              "Ejemplo ficticio de instrucciones ambiguas.",
+              null
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

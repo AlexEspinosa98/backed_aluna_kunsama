@@ -1,0 +1,120 @@
+{
+  "solicitud": {
+    "modo": "integral",
+    "jornada_id": "j-ejemplo",
+    "momento_ids": [
+      "m1",
+      "m2"
+    ]
+  },
+  "jornada": {
+    "id": "j-ejemplo",
+    "nombre": "Horarios del taller — DATOS FICTICIOS",
+    "objetivo": "Evaluar alternativas de horario",
+    "contexto": "Fixture sintético de integración. No representa una jornada real."
+  },
+  "momentos": [
+    {
+      "id": "m1",
+      "nombre": "Encuesta de horarios",
+      "tipo": "individual",
+      "contexto": "Ausencia confirmada de respuestas al cierre de este ejemplo ficticio.",
+      "preguntas": [
+        {
+          "id": "q1",
+          "texto": "¿Le sirve el horario actual?",
+          "tipo": "seleccion_unica",
+          "opciones": [
+            {
+              "id": "si",
+              "etiqueta": "Sí"
+            },
+            {
+              "id": "no",
+              "etiqueta": "No"
+            }
+          ],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        },
+        {
+          "id": "q2",
+          "texto": "Explique su respuesta sobre el horario.",
+          "tipo": "texto",
+          "opciones": [],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "m2",
+      "nombre": "Mesa de alternativas",
+      "tipo": "mesa",
+      "contexto": "Ausencia confirmada de respuestas al cierre de este ejemplo ficticio.",
+      "preguntas": [
+        {
+          "id": "q3",
+          "texto": "¿Qué alternativa de horario propone la mesa?",
+          "tipo": "texto",
+          "opciones": [],
+          "reglas_elegibilidad": {
+            "descripcion": "Todas las unidades del momento ficticio",
+            "filtro": null,
+            "unidad_esperada": "respuesta",
+            "escala": null
+          }
+        }
+      ]
+    }
+  ],
+  "personalizacion": {
+    "instrucciones_usuario": "Prioriza decisiones concretas sobre horarios.",
+    "contexto_usuario": "",
+    "instrucciones_por_momento": []
+  },
+  "fuentes": [
+    {
+      "id": "f1",
+      "tipo": "respuestas",
+      "etiqueta": "Encuesta ficticia completa",
+      "momento_ids": [
+        "m1"
+      ],
+      "pregunta_ids": [
+        "q1",
+        "q2"
+      ],
+      "cobertura": "completa",
+      "datos": {
+        "unidad_analisis": "respuesta_individual",
+        "respuestas": []
+      }
+    },
+    {
+      "id": "f2",
+      "tipo": "respuestas",
+      "etiqueta": "Respuesta ficticia de una mesa",
+      "momento_ids": [
+        "m2"
+      ],
+      "pregunta_ids": [
+        "q3"
+      ],
+      "cobertura": "completa",
+      "datos": {
+        "unidad_analisis": "respuesta_de_mesa",
+        "respuestas": []
+      }
+    }
+  ],
+  "bertopic": null
+}
