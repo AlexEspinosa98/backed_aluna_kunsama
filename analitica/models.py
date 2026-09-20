@@ -319,14 +319,15 @@ class InfografiaJornada(models.Model):
     del módulo —el pipeline local (`Reporte`), el reporte integral de jornada (`AnalisisJornadaIA`)
     o el de un momento (`AnalisisMomentoIA`)— y exigir un `Reporte` dejaba sin salida a quien usara
     las otras: tenía que crear y esperar un reporte que no necesitaba solo para desbloquear el
-    botón. `reporte`, `analisis_momento` y `analisis_jornada` quedan como referencia opcional de
-    sobre qué se disparó — y, desde que una jornada/momento puede acumular VARIOS análisis
-    completos a la vez (HU-71, distintos métodos y enfoques), son la forma de fijar exactamente
-    CUÁL usar. Sin uno explícito, `infografia_ia_openai._obtener_datos_analitica` sigue cayendo al
-    más reciente completo de ese alcance (comportamiento de siempre, para no romper una petición
-    que solo manda `jornada`/`momento`) — pero un panel que ya sabe qué tarjeta de la lista
-    unificada (`GET /api/admin/analisis/`) generó el clic debe mandar el id explícito, no confiar
-    en que "el más reciente" siga siendo el que el usuario está mirando.
+    botón. `reporte`, `analisis_momento` y `analisis_jornada` son NULLABLE a nivel de columna (solo
+    uno aplica según el alcance) pero `InfografiaJornadaCrearSerializer` exige EXACTAMENTE uno de
+    los tres al crear (HU-73) — nunca "la jornada"/"el momento" solos. Antes de HU-73 los tres eran
+    opcionales y, sin ninguno, `_obtener_datos_analitica` caía al análisis MÁS RECIENTE completo de
+    ese alcance; desde que una jornada/momento puede acumular varias VERSIONES de análisis a la vez
+    (HU-71, distintos métodos y enfoques), esa caída silenciosa significaba que dos versiones
+    podían terminar compartiendo la misma infografía, o que una generada mirando la versión A
+    mostrara datos de la versión B que se volvió "la más reciente" mientras tanto — exactamente lo
+    que una infografía aislada por versión no puede permitir.
 
     `jornada` sigue siendo obligatoria incluso cuando la infografía es de un momento (se deriva de
     `momento.jornada`): es lo que sostiene el scoping por propietario sin duplicar reglas, y evita

@@ -176,17 +176,15 @@ class InfografiaJornadaSerializer(serializers.ModelSerializer):
 
 
 class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
-    """Se pide sobre UN alcance: la jornada completa (`jornada`) o un momento (`momento`), nunca
-    ambos. Con `momento`, la jornada se deriva sola de `momento.jornada` — pedirla también sería
-    darle al cliente la oportunidad de mandar una combinación incoherente.
-
-    `reporte`/`analisis_jornada` (alcance jornada) y `analisis_momento` (alcance momento) fijan
-    de qué análisis concreto salen los datos, en vez del más reciente completo de ese alcance —
-    una jornada o un momento puede tener varios análisis a la vez (HU-71: distintos métodos y
-    enfoques), y "el más reciente" no es necesariamente el que quien pide la infografía está
-    mirando en ese momento. Todos opcionales: sin ninguno, cae al más reciente (comportamiento de
-    siempre). Ver el comentario en `InfografiaJornada` (models.py) y en
-    `infografia_ia_openai._obtener_datos_analitica`.
+    """HU-73: cada infografía queda ATADA a una versión EXACTA de análisis — manda
+    EXACTAMENTE uno de `reporte` (pipeline local), `analisis_momento` (lectura IA de un momento) o
+    `analisis_jornada` (lectura IA de jornada completa). `jornada`/`momento` se DERIVAN solos de
+    esa versión (read-only en la salida, ignorados si vienen en el POST) — nunca se aceptan
+    sueltos, porque desde HU-71 una jornada o un momento acumulan varias versiones de análisis a
+    la vez (distintos métodos y enfoques) y aceptar solo "la jornada"/"el momento" obligaba a
+    caer en el más reciente completo de ese alcance: dos versiones distintas podían terminar
+    compartiendo o confundiéndose de infografía, exactamente lo que esta HU prohíbe. Ver el
+    comentario en `InfografiaJornada` (models.py).
 
     `instrucciones` es texto libre que se integra al prompt con precedencia sobre el estilo y la
     estructura por defecto — ver `_construir_prompt` en infografia_ia_openai.py."""
@@ -197,57 +195,30 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
             'id', 'jornada', 'momento', 'reporte', 'analisis_momento', 'analisis_jornada',
             'instrucciones', 'estado', 'creado_en',
         ]
-        read_only_fields = ['id', 'estado', 'creado_en']
-        extra_kwargs = {'jornada': {'required': False}}
+        read_only_fields = ['id', 'jornada', 'momento', 'estado', 'creado_en']
 
     def validate(self, attrs):
-        jornada = attrs.get('jornada')
-        momento = attrs.get('momento')
         reporte = attrs.get('reporte')
         analisis_momento = attrs.get('analisis_momento')
         analisis_jornada = attrs.get('analisis_jornada')
 
-        if bool(jornada) == bool(momento):
+        elegidos = [v for v in (reporte, analisis_momento, analisis_jornada) if v is not None]
+        if len(elegidos) != 1:
             raise serializers.ValidationError(
-                'Manda exactamente uno: "jornada" (para la jornada completa) o "momento" (para '
-                'un momento). No ambos, y no ninguno.'
+                'Manda EXACTAMENTE uno de "reporte", "analisis_momento" o "analisis_jornada" — '
+                'la infografía queda atada a esa versión exacta del análisis, nunca a "la '
+                'jornada" o "el momento" en general (ver HU-73).'
             )
 
-        if momento is not None:
-            if reporte is not None:
-                raise serializers.ValidationError({'reporte': (
-                    'Un reporte es de jornada completa, así que no se combina con "momento".'
-                )})
-            if analisis_jornada is not None:
-                raise serializers.ValidationError({'analisis_jornada': (
-                    'Un AnalisisJornadaIA es de jornada completa, así que no se combina con '
-                    '"momento" — para fijar el análisis de un momento usa "analisis_momento".'
-                )})
-            if analisis_momento is not None and analisis_momento.momento_id != momento.id:
-                raise serializers.ValidationError({'analisis_momento': (
-                    'Ese análisis no pertenece al momento seleccionado.'
-                )})
-            # Derivada, no pedida: así no hay forma de mandar un momento de otra jornada.
-            attrs['jornada'] = momento.jornada
+        if analisis_momento is not None:
+            attrs['momento'] = analisis_momento.momento
+            attrs['jornada'] = analisis_momento.momento.jornada
+        elif analisis_jornada is not None:
+            attrs['momento'] = None
+            attrs['jornada'] = analisis_jornada.jornada
         else:
-            if analisis_momento is not None:
-                raise serializers.ValidationError({'analisis_momento': (
-                    'Un AnalisisMomentoIA es de un momento puntual — con alcance de jornada usa '
-                    '"analisis_jornada" (o "reporte" para el pipeline local).'
-                )})
-            if reporte is not None and analisis_jornada is not None:
-                raise serializers.ValidationError((
-                    'Manda como mucho uno de "reporte" o "analisis_jornada" — son dos métodos '
-                    'distintos, no se combinan en la misma infografía.'
-                ))
-            if reporte is not None and reporte.jornada_id != jornada.id:
-                raise serializers.ValidationError(
-                    {'reporte': 'Ese reporte no pertenece a la jornada seleccionada.'}
-                )
-            if analisis_jornada is not None and analisis_jornada.jornada_id != jornada.id:
-                raise serializers.ValidationError(
-                    {'analisis_jornada': 'Ese análisis no pertenece a la jornada seleccionada.'}
-                )
+            attrs['momento'] = None
+            attrs['jornada'] = reporte.jornada
         return attrs
 
 

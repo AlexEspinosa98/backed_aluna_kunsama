@@ -137,8 +137,9 @@ class AnalisisJornadaIAScopingTests(APITestCase):
 
 
 class InfografiaSinReporteTests(APITestCase):
-    """La infografía se pide a nivel de JORNADA. Exigir un `Reporte` dejaba sin salida al panel,
-    que usa el reporte integral (AnalisisJornadaIA) y no el pipeline local."""
+    """La infografía se pide sobre una VERSIÓN exacta de análisis (HU-73) — acá, la vía
+    `analisis_jornada` (reporte integral vía IA), sin necesidad de un `Reporte` del pipeline
+    local."""
 
     def setUp(self):
         self.admin = crear_admin_completo('admin')
@@ -152,44 +153,74 @@ class InfografiaSinReporteTests(APITestCase):
             resultado={'resumen_ejecutivo': 'Hubo consenso.', 'hallazgos': [{'titulo': 'Tema'}]},
         )
 
-    def test_genera_desde_el_reporte_integral_sin_reporte_local(self):
-        self._analisis_integral_completo(self.jornada)
+    def test_genera_desde_analisis_jornada_fijado_sin_reporte_local(self):
+        analisis = self._analisis_integral_completo(self.jornada)
         self.client.force_authenticate(user=self.admin)
         with patch('analitica.admin_views.threading.Thread'):
             resp = self.client.post(
-                '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+                '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
             )
-        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(resp.status_code, 201, resp.data)
         infografia = InfografiaJornada.objects.get(id=resp.data['id'])
         self.assertEqual(infografia.jornada, self.jornada)
+        self.assertEqual(infografia.analisis_jornada, analisis)
         self.assertIsNone(infografia.reporte)
         self.assertEqual(Reporte.objects.count(), 0)
 
-    def test_400_si_la_jornada_no_tiene_analitica(self):
-        """Se avisa de una vez, en vez de crear un registro que va a fallar en background."""
+    def test_sin_ningun_pin_da_400(self):
+        """HU-73: `jornada`/`momento` solos ya no alcanzan — hay que fijar la versión exacta."""
+        self._analisis_integral_completo(self.jornada)
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(
             '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
         )
         self.assertEqual(resp.status_code, 400)
+        self.assertIn('EXACTAMENTE uno', str(resp.data))
         self.assertEqual(InfografiaJornada.objects.count(), 0)
 
-    def test_409_si_ya_hay_una_en_curso(self):
-        self._analisis_integral_completo(self.jornada)
-        InfografiaJornada.objects.create(
-            jornada=self.jornada, estado=InfografiaJornada.ESTADO_PROCESANDO,
+    def test_400_si_el_analisis_fijado_no_esta_completo(self):
+        """Se avisa de una vez, en vez de crear un registro que va a fallar en background."""
+        analisis = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_PENDIENTE,
         )
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(
-            '/api/admin/infografias/', {'jornada': self.jornada.id}, format='json',
+            '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(InfografiaJornada.objects.count(), 0)
+
+    def test_409_si_ya_hay_una_en_curso_para_la_misma_version(self):
+        analisis = self._analisis_integral_completo(self.jornada)
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, analisis_jornada=analisis, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        resp = self.client.post(
+            '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
         )
         self.assertEqual(resp.status_code, 409)
 
+    def test_una_version_en_curso_no_bloquea_a_otra_version_distinta(self):
+        """HU-73, el punto central: dos versiones de análisis de la MISMA jornada son trabajos
+        aislados — una en curso nunca debe bloquear a la otra."""
+        version_a = self._analisis_integral_completo(self.jornada)
+        version_b = self._analisis_integral_completo(self.jornada)
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, analisis_jornada=version_a, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_jornada': version_b.id}, format='json',
+            )
+        self.assertEqual(resp.status_code, 201, resp.data)
+
     def test_dependencia_no_puede_pedirla_para_jornada_ajena(self):
-        self._analisis_integral_completo(self.ajena)
+        analisis_ajeno = self._analisis_integral_completo(self.ajena)
         self.client.force_authenticate(user=self.dependencia)
         resp = self.client.post(
-            '/api/admin/infografias/', {'jornada': self.ajena.id}, format='json',
+            '/api/admin/infografias/', {'analisis_jornada': analisis_ajeno.id}, format='json',
         )
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(InfografiaJornada.objects.count(), 0)
@@ -201,17 +232,6 @@ class InfografiaSinReporteTests(APITestCase):
         resp = self.client.get('/api/admin/infografias/')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual([i['jornada'] for i in resp.data], [self.jornada.id])
-
-    def test_rechaza_un_reporte_de_otra_jornada(self):
-        reporte_ajeno = Reporte.objects.create(
-            jornada=self.ajena, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
-        )
-        self._analisis_integral_completo(self.jornada)
-        self.client.force_authenticate(user=self.admin)
-        resp = self.client.post('/api/admin/infografias/', {
-            'jornada': self.jornada.id, 'reporte': reporte_ajeno.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
 
     def test_el_atajo_desde_un_reporte_sigue_funcionando(self):
         reporte = Reporte.objects.create(
@@ -226,37 +246,40 @@ class InfografiaSinReporteTests(APITestCase):
         self.assertEqual(infografia.jornada, self.jornada)
         self.assertEqual(infografia.reporte, reporte)
 
+    def test_el_atajo_de_un_reporte_no_bloquea_al_de_otro_reporte_de_la_misma_jornada(self):
+        reporte_a = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+            analisis={'participacion': {'total': 1}},
+        )
+        reporte_b = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+            analisis={'participacion': {'total': 2}},
+        )
+        InfografiaJornada.objects.create(
+            jornada=self.jornada, reporte=reporte_a, estado=InfografiaJornada.ESTADO_PROCESANDO,
+        )
+        self.client.force_authenticate(user=self.admin)
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post(f'/api/admin/reportes/{reporte_b.id}/generar-infografia/')
+        self.assertEqual(resp.status_code, 202, resp.data)
+
 
 class InfografiaFijaAnalisisExactoTests(APITestCase):
     """Una jornada o un momento pueden tener VARIOS análisis completos a la vez (HU-71: distintos
-    métodos y enfoques) — la infografía debe poder fijar exactamente cuál usar, no caer siempre
-    en "el más reciente" (que puede no ser el que la persona está mirando cuando pide la
-    infografía desde una tarjeta concreta de la lista unificada)."""
+    métodos y enfoques) — la infografía queda atada a exactamente uno (HU-73), fijado siempre por
+    el cliente: ya no existe "el más reciente" como comportamiento por defecto. `jornada`/
+    `momento` se derivan solos del análisis fijado, así que no hay forma de mandar una
+    combinación incoherente entre ellos — solo entre los TRES campos de fijado entre sí."""
 
     def setUp(self):
         self.admin = crear_admin_completo('admin')
         self.jornada = crear_jornada('jornada-fijar-analisis')
         self.momento = crear_momento_con_respuesta(self.jornada)
-        self.otra_jornada = crear_jornada('jornada-fijar-analisis-otra')
         self.client.force_authenticate(user=self.admin)
 
-    # --- Nivel función pura: _obtener_datos_analitica usa el fijado, no el más reciente ---
-
-    def test_momento_sin_fijar_usa_el_mas_reciente(self):
-        from .infografia_ia_openai import _obtener_datos_analitica
-
-        AnalisisMomentoIA.objects.create(
-            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
-            resultado={'resumen_ejecutivo': 'Viejo', 'hallazgos': []},
-        )
-        nuevo = AnalisisMomentoIA.objects.create(
-            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO,
-            resultado={'resumen_ejecutivo': 'Nuevo', 'hallazgos': []},
-        )
-        datos, error = _obtener_datos_analitica(self.jornada, momento=self.momento)
-        self.assertIsNone(error)
-        self.assertEqual(datos['resumen_ejecutivo'], 'Nuevo')
-        self.assertEqual(nuevo.resultado['resumen_ejecutivo'], 'Nuevo')  # sanity
+    # --- Nivel función pura: _obtener_datos_analitica usa el fijado, no el más reciente. Esta
+    # función se mantiene flexible (con fallback) como utilidad general — la garantía de
+    # aislamiento de HU-73 se exige en la capa de creación (serializer/vista), probada más abajo.
 
     def test_momento_fijando_el_mas_viejo_lo_usa_pese_a_que_hay_uno_mas_reciente(self):
         from .infografia_ia_openai import _obtener_datos_analitica
@@ -288,72 +311,54 @@ class InfografiaFijaAnalisisExactoTests(APITestCase):
         self.assertIsNone(error)
         self.assertEqual(datos['resumen_ejecutivo'], 'Viejo cualitativo')
 
-    # --- Nivel API: se guarda el id fijado y se validan las combinaciones incoherentes ---
+    # --- Nivel API: se exige exactamente uno, jornada/momento se derivan, se guarda el fijado ---
 
-    def test_api_guarda_analisis_momento_fijado(self):
+    def test_api_guarda_analisis_momento_fijado_y_deriva_momento_y_jornada(self):
         analisis = AnalisisMomentoIA.objects.create(
             momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
         )
         with patch('analitica.admin_views.threading.Thread'):
-            resp = self.client.post('/api/admin/infografias/', {
-                'momento': self.momento.id, 'analisis_momento': analisis.id,
-            }, format='json')
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_momento': analisis.id}, format='json',
+            )
         self.assertEqual(resp.status_code, 201, resp.data)
         infografia = InfografiaJornada.objects.get(id=resp.data['id'])
         self.assertEqual(infografia.analisis_momento_id, analisis.id)
+        self.assertEqual(infografia.momento_id, self.momento.id)
+        self.assertEqual(infografia.jornada_id, self.jornada.id)
 
-    def test_api_guarda_analisis_jornada_fijado(self):
+    def test_api_guarda_analisis_jornada_fijado_y_deriva_jornada_sin_momento(self):
         analisis = AnalisisJornadaIA.objects.create(
             jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
         )
         with patch('analitica.admin_views.threading.Thread'):
-            resp = self.client.post('/api/admin/infografias/', {
-                'jornada': self.jornada.id, 'analisis_jornada': analisis.id,
-            }, format='json')
+            resp = self.client.post(
+                '/api/admin/infografias/', {'analisis_jornada': analisis.id}, format='json',
+            )
         self.assertEqual(resp.status_code, 201, resp.data)
         infografia = InfografiaJornada.objects.get(id=resp.data['id'])
         self.assertEqual(infografia.analisis_jornada_id, analisis.id)
+        self.assertIsNone(infografia.momento_id)
+        self.assertEqual(infografia.jornada_id, self.jornada.id)
 
-    def test_analisis_momento_de_otra_jornada_da_400(self):
-        momento_ajeno = crear_momento_con_respuesta(self.otra_jornada)
-        analisis_ajeno = AnalisisMomentoIA.objects.create(
-            momento=momento_ajeno, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
-        )
-        resp = self.client.post('/api/admin/infografias/', {
-            'momento': self.momento.id, 'analisis_momento': analisis_ajeno.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('analisis_momento', resp.data)
-
-    def test_analisis_jornada_de_otra_jornada_da_400(self):
-        analisis_ajeno = AnalisisJornadaIA.objects.create(
-            jornada=self.otra_jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
-        )
-        resp = self.client.post('/api/admin/infografias/', {
-            'jornada': self.jornada.id, 'analisis_jornada': analisis_ajeno.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('analisis_jornada', resp.data)
-
-    def test_analisis_jornada_combinado_con_momento_da_400(self):
-        analisis = AnalisisJornadaIA.objects.create(
-            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
-        )
-        resp = self.client.post('/api/admin/infografias/', {
-            'momento': self.momento.id, 'analisis_jornada': analisis.id,
-        }, format='json')
-        self.assertEqual(resp.status_code, 400)
-        self.assertIn('analisis_jornada', resp.data)
-
-    def test_analisis_momento_combinado_con_jornada_da_400(self):
+    def test_jornada_y_momento_del_cuerpo_se_ignoran_manda_lo_que_sea(self):
+        """`jornada`/`momento` son read-only — mandarlos no rompe nada, simplemente no se usan
+        para nada más que ser ignorados; lo único que decide el alcance es la versión fijada."""
+        otra_jornada = crear_jornada('jornada-fijar-analisis-otra-para-ignorar')
         analisis = AnalisisMomentoIA.objects.create(
             momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
         )
-        resp = self.client.post('/api/admin/infografias/', {
-            'jornada': self.jornada.id, 'analisis_momento': analisis.id,
-        }, format='json')
+        with patch('analitica.admin_views.threading.Thread'):
+            resp = self.client.post('/api/admin/infografias/', {
+                'jornada': otra_jornada.id, 'analisis_momento': analisis.id,
+            }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        infografia = InfografiaJornada.objects.get(id=resp.data['id'])
+        self.assertEqual(infografia.jornada_id, self.jornada.id)  # NO otra_jornada
+
+    def test_ningun_pin_da_400(self):
+        resp = self.client.post('/api/admin/infografias/', {}, format='json')
         self.assertEqual(resp.status_code, 400)
-        self.assertIn('analisis_momento', resp.data)
 
     def test_reporte_y_analisis_jornada_a_la_vez_da_400(self):
         reporte = Reporte.objects.create(
@@ -363,7 +368,22 @@ class InfografiaFijaAnalisisExactoTests(APITestCase):
             jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
         )
         resp = self.client.post('/api/admin/infografias/', {
-            'jornada': self.jornada.id, 'reporte': reporte.id, 'analisis_jornada': analisis.id,
+            'reporte': reporte.id, 'analisis_jornada': analisis.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_los_tres_pines_a_la_vez_da_400(self):
+        reporte = Reporte.objects.create(
+            jornada=self.jornada, alcance=Reporte.ALCANCE_JORNADA, estado=Reporte.ESTADO_COMPLETO,
+        )
+        analisis_j = AnalisisJornadaIA.objects.create(
+            jornada=self.jornada, estado=AnalisisJornadaIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        analisis_m = AnalisisMomentoIA.objects.create(
+            momento=self.momento, estado=AnalisisMomentoIA.ESTADO_COMPLETO, resultado={'hallazgos': []},
+        )
+        resp = self.client.post('/api/admin/infografias/', {
+            'reporte': reporte.id, 'analisis_jornada': analisis_j.id, 'analisis_momento': analisis_m.id,
         }, format='json')
         self.assertEqual(resp.status_code, 400)
 
