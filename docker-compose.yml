@@ -1,3 +1,7 @@
+# Stack completo de la app — db + gunicorn, sin nginx a propósito: el proxy/TLS lo resuelve cada
+# servidor por fuera (nginx a secas en producción, nginx-proxy-manager en casa), apuntando a
+# ${APP_PORT} en 127.0.0.1. Ver docs/DOCKER.md para cómo desplegar y qué variables de `.env`
+# hacen falta.
 services:
   db:
     image: postgres:16
@@ -17,6 +21,45 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    container_name: aluna_kunsama_app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de compose el host de Postgres es el nombre del servicio `db`, nunca lo
+      # que traiga `.env` (que suele decir `localhost`, pensado para un despliegue sin Docker) —
+      # se pisa acá para no tener que mantener dos `.env` distintos por esto solo.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    volumes:
+      # media/ y staticfiles/ como bind mount (no volumen con nombre): así un proxy externo que
+      # corra fuera de Docker en el mismo host (como el nginx de producción, que sirve `static/`
+      # con un `alias` a una ruta de disco) puede leerlos sin tener que entrar al contenedor.
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+      # El modelo LLM local (2 GB, gitignored) y la caché de sentence-transformers NO viven en la
+      # imagen ni se descargan en cada build — se montan desde el host. `python manage.py
+      # download_llm_model` (ver analitica/management/commands/download_llm_model.py) los deja en
+      # `./analitica/.models`; la caché de HF se puebla sola la primera vez que corre un análisis.
+      - ./analitica/.models:/app/analitica/.models
+      - aluna_kunsama_hf_cache:/home/kunsama/.cache/huggingface
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers ${GUNICORN_WORKERS:-3}
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      --access-logfile -
+      --error-logfile -
+
 volumes:
   aluna_kunsama_pg_data:
     name: aluna_kunsama_pg_data
+  aluna_kunsama_hf_cache:
+    name: aluna_kunsama_hf_cache
