@@ -97,3 +97,37 @@ Un párrafo corto: qué archivos se crearon/modificaron, qué comando de verific
 qué dio, hash del commit, y la línea de "qué quedó sin probar y cuál es el riesgo". Si algo del
 plan resultó imposible o incorrecto contra el código real, **decirlo explícitamente en el
 reporte** en vez de improvisar otra cosa en silencio.
+
+## Estado de ejecución
+
+Registro real de lo que se ejecutó en `develop` (no pusheado a `origin` al cierre de la fase 7).
+Todas las fases se verificaron con `py_compile`, `manage.py validar_ejemplos_v2`,
+`manage.py makemigrations --check` y `manage.py check` — en ninguna fase se corrió
+`manage.py test` (regla del dueño del repo, ver "Reglas de trabajo" arriba); los tests que cada
+fase debía escribir sí quedaron escritos en `analitica/tests_v2.py`, listos para cuando el dueño
+decida correr la suite.
+
+| Fase | Commit | Fecha | Notas |
+|---|---|---|---|
+| 0 — Preparación | `72be863` | 2026-09-20 | Recursos congelados (`analitica/v2/recursos/`) + `contrato.py` + docs de la entrega. Sin desviaciones. |
+| 1 — Validación | `a35944d` | 2026-09-20 | `validacion.py` + comando `validar_ejemplos_v2`. Sin desviaciones. |
+| 2 — Entrada y sin_datos | `e67de88` | 2026-09-20 | `entrada.py` + `sin_datos.py`. Sin desviaciones. |
+| 3 — LLM y orquestador | `d81c62d` | 2026-09-20 | `llm.py` + `procesar.py` + stub de `bertopic_adaptador.py`. Sin desviaciones. |
+| 4 — Modelo y API | `de1c641` | 2026-09-20 | Modelo `AnalisisV2`, migración `0017`, serializers, `AnalisisV2ViewSet`, lista unificada, admin. Activa el flujo de punta a punta (`pipeline=llm`). |
+| 4 (fix) — `verbose_name` | `5398114` | 2026-09-20 | Única desviación del plan: `verbose_name`/`verbose_name_plural` de `AnalisisV2` se acortaron a `'Análisis v2'` porque el nombre largo original hacía que el nombre de permiso de Django superara los 50 caracteres (`makemigrations`/`migrate` fallaban). No afecta el contrato ni la API, solo metadatos internos de Django. |
+| 5 — BERTopic | `5146283` | 2026-09-20 | `bertopic_adaptador.py` real, reemplaza el stub de la fase 3 para `pipeline=bertopic_llm`. Sin desviaciones adicionales. |
+| 6 — Infografía | `1447934` | 2026-09-20 | `InfografiaJornada.analisis_v2` (FK, migración `0018`), `_obtener_datos_analitica` traduce el resultado v2. Sin desviaciones. |
+| 7 — Documentación y cierre | (este commit) | 2026-09-20 | `docs/INTEGRACION_FRONTEND_ANALISIS_V2.md` (nuevo), HU-73 a HU-77 en `docs/USER_STORIES_COMPLETO.md`, §7 + fila de tabla en `docs/SYSTEM_PROMPTS.md`, bloque de variables en `.env.example`, esta tabla. |
+
+**Qué quedó sin probar y cuál es el riesgo**: en ninguna fase se corrió `manage.py test` ni se hizo
+una prueba de humo contra el servidor de pruebas (`https://kunsamu.josec.ddns.net`) con una llamada
+real a OpenAI — todo se verificó con `py_compile`, el comando `validar_ejemplos_v2` (validación de
+esquema/negocio contra los ejemplos congelados, sin red), `makemigrations --check --dry-run` y
+`manage.py check`. El riesgo principal es de integración en caliente: el comportamiento real de
+`response_format=json_schema` estricto contra el modelo de producción, el tiempo real de una
+llamada `bertopic_llm` (embeddings + clustering + LLM) dentro de `KUNSAMU_V2_TIMEOUT_SECONDS`, y el
+scoping/permisos de los endpoints nuevos bajo carga real no se ejercitaron end-to-end. Al cierre de
+esta fase, `develop` tiene los ocho commits de la tabla sin pushear a `origin/develop` — el push, el
+merge a `main` y el `migrate` + restart de producción quedan a decisión del dueño del repo. Los
+cambios retenidos de `Dockerfile`/`docker-compose.yml` (pedidos explícitamente por el dueño, sin
+commitear ni pushear) siguen sin tocarse en ningún commit de este plan.

@@ -13,7 +13,8 @@ ningún `.py` del repo, y ningún módulo produce ese schema. Lo que sí se cons
 esfuerzo, es algo más simple: un mecanismo compartido de **bloques de enfoque** (§1 abajo) que se
 **anexa** a los prompts que ya existían antes de HU-71, sin reescribirlos. Si en algún momento se
 retoma el plan de `docs/enfoque_analisis/`, este documento es el punto de partida real, no el de
-llegada.
+llegada. El contrato que sí se implementó es `kunsamu.analisis/v2` (`docs/mejora_promps/`, plan en
+`docs/mejora_promps/plan_implementacion/`) — ver §7.
 
 Todos los módulos de IA del proyecto usan OpenAI (`OPENAI_MODEL`, default `gpt-4o`; algunos leen
 también `OPENAI_REASONING_EFFORT`). El pipeline local (`analitica/analysis.py`) usó hasta
@@ -399,6 +400,43 @@ de cualitativo puro, pero acá es la única variante que existe (no hay una vers
 
 ---
 
+## 7. Análisis v2 (`analitica/v2/`)
+
+Contrato `kunsamu.analisis/v2` (docs/mejora_promps/, plan en
+`docs/mejora_promps/plan_implementacion/`; guía de integración en
+[`docs/INTEGRACION_FRONTEND_ANALISIS_V2.md`](INTEGRACION_FRONTEND_ANALISIS_V2.md)). Un mecanismo
+completamente distinto del de §1–§6, deliberadamente: no usa `bloque_enfoque`, no usa
+`ensamblar_system`, no tiene el concepto `enfoque` en absoluto, y el prompt no se compone en
+código — el **archivo entero** es el `system`.
+
+**Los prompts son dos archivos íntegros**, copias congeladas de la entrega en
+`analitica/v2/recursos/`: `SYSTEM_PROMPT_LLM.md` (pipeline `llm`) y `SYSTEM_PROMPT_BERTOPIC.md`
+(pipeline `bertopic_llm`), cargados por `analitica/v2/contrato.py::cargar_prompt` y versionados con
+la constante `VERSION_PROMPT` (`'v2.0'`) del mismo archivo — no se transcriben acá por longitud,
+son el texto completo de la entrega, sin resumir. Se mandan **sin ningún anexo**: nada de bloques
+de enfoque, nada de `prompt_comun.ensamblar_system`, nada de `REGLA_DATOS_ANALISIS`. El README de
+la entrega lo pide explícito: "no se deben anexar los antiguos bloques de enfoque ni las
+instrucciones que permiten al prompt del usuario prevalecer sobre el system".
+
+El `user` no es texto libre ni una plantilla — es `json.dumps(entrada, ensure_ascii=False)`, el
+sobre normalizado que arma `analitica/v2/entrada.py::construir_entrada` desde los modelos reales
+de `jornadas`/`participantes` (ver `docs/mejora_promps/ENTRADA_Y_BERTOPIC.md`). El contexto y las
+instrucciones que escribe quien pide el análisis viajan **dentro** de ese JSON
+(`entrada.personalizacion.contexto_usuario` / `instrucciones_usuario`), nunca mezclados en el
+`system` como sí ocurre con `bloque_contexto`/`bloque_instrucciones` en §1.
+
+La salida se fuerza con `response_format` de tipo `json_schema` **estricto** (esquema congelado en
+`analitica/v2/recursos/analisis.schema.json`, versión `VERSION_ESQUEMA`), con respaldo a
+`json_object` + esquema anexado al `system` si el proveedor rechaza el modo estricto
+(`analitica/v2/llm.py::llamar_openai_estructurado`). En ambos casos la respuesta pasa después por
+`analitica/v2/validacion.py` (esquema + reglas de negocio); si falla, hay un único reintento de
+reparación con la conversación extendida antes de terminar en `error`. Nunca se publica un
+`resultado` que no haya pasado esa validación completa.
+
+Fila en la tabla resumen: ver abajo.
+
+---
+
 ## Resumen: qué mecanismo usa cada módulo
 
 | Módulo | Llama a | `bloque_enfoque`/`ensamblar_system` | Formato de salida |
@@ -409,6 +447,7 @@ de cualitativo puro, pero acá es la única variante que existe (no hay una vers
 | `presentacion.py` (reporte local → HTML) | OpenAI | No | Lee el jerárquico viejo, produce HTML |
 | `transcripciones/informe_ia.py` | OpenAI, mapa-reducción | No (siempre cualitativo, sin switch) | `resumen_ejecutivo`+`temas_discutidos`+`hallazgos[]` con `citas` planas |
 | `transcripciones/presentacion.py` | OpenAI | No | Lee el formato de arriba, produce HTML |
+| `analitica/v2/` (contrato `kunsamu.analisis/v2`) | OpenAI, `response_format` json_schema estricto | No (sin `enfoque`; prompt = archivo íntegro, sin anexos) | `kunsamu.analisis/v2`: `informes[]`, `cobertura[]`, `fuentes[]`, `visualizaciones[]` tipadas — validado contra `analisis.schema.json` + reglas de negocio |
 
 El formato `aluna.analisis/v1` de `docs/enfoque_analisis/` no aparece en ninguna fila de esta
 tabla porque no se implementó en ningún módulo.
