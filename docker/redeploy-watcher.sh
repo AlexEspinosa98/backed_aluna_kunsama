@@ -64,7 +64,9 @@ while true; do
             # datos no se pierden (viven en el volumen con nombre, no en el contenedor), pero un
             # redeploy de código no tiene ningún motivo para tocar la base — este flag lo hace
             # imposible de raíz, no solo improbable.
-            if docker compose -f "$REPO_DIR/docker-compose.yml" up -d --build --no-deps app; then
+            # El stack con `app` vive en docker-compose.dev.yaml, no en el docker-compose.yml por
+            # defecto (que en producción solo levanta Postgres) — ver la cabecera de ambos.
+            if docker compose -f "$REPO_DIR/docker-compose.dev.yaml" up -d --build --no-deps app; then
                 echo "[redeploy-watcher] Redeploy OK ($(git rev-parse --short HEAD))."
             else
                 echo "[redeploy-watcher] 'docker compose up' falló — revisar logs del build."

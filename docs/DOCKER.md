@@ -1,12 +1,24 @@
 # Despliegue con Docker
 
-El stack (`docker-compose.yml`) levanta **Postgres + gunicorn**, es decir toda la app. **No
-incluye nginx a propósito**: el proxy/TLS de cara al público lo resuelve cada servidor por fuera
-del compose (nginx a secas en producción, `nginx-proxy-manager` en el servidor de casa) apuntando
-a `127.0.0.1:${APP_PORT}` — exactamente el mismo patrón que ya usa producción con gunicorn detrás
-de systemd (ver `project_despliegue` en la memoria del proyecto).
+**Hay dos archivos de compose y no son intercambiables:**
 
-## 1. Qué corre
+| Archivo | Qué levanta | Dónde se usa |
+|---|---|---|
+| `docker-compose.yml` (por defecto) | **solo `db`** (Postgres) | **Producción.** La app corre fuera de Docker: venv + gunicorn bajo systemd (`aluna-kunsama-backend.service`, `127.0.0.1:8004`) detrás del nginx del host, en una máquina compartida con otros proyectos. |
+| `docker-compose.dev.yaml` | `db` + `app` (+ `git-sync` con profile) | **Servidor de pruebas y local.** Toda la app en contenedores. |
+
+Están separados a propósito: producción hace `git pull` sobre este mismo repo, y un
+`docker compose up -d` a secas allí no debe levantar una `app` en contenedor que competiría con
+el servicio de systemd. Todo lo que sigue sobre la app en contenedores usa **siempre**
+`-f docker-compose.dev.yaml`; los comandos de solo-base (respaldo/restauración, RUNBOOK de
+migración) funcionan con cualquiera de los dos, porque ambos definen `db` igual.
+
+**No incluye nginx a propósito**: el proxy/TLS de cara al público lo resuelve cada servidor por
+fuera del compose (nginx a secas en producción, `nginx-proxy-manager` en el servidor de pruebas)
+apuntando a `127.0.0.1:${APP_PORT}` — el mismo patrón que ya usa producción con gunicorn detrás de
+systemd (ver `project_despliegue` en la memoria del proyecto).
+
+## 1. Qué corre (stack completo, `docker-compose.dev.yaml`)
 
 | Servicio | Imagen | Puerto en el host |
 |---|---|---|
@@ -17,16 +29,20 @@ de systemd (ver `project_despliegue` en la memoria del proyecto).
 arranque (`docker/entrypoint.sh`), corre `migrate` y `collectstatic` **antes** de exec'ar
 gunicorn — así un contenedor nuevo nunca sirve tráfico contra un esquema desactualizado.
 
-## 2. Primer arranque (cualquier servidor)
+## 2. Primer arranque (servidor de pruebas o local)
 
 ```bash
 cp .env.example .env   # y completar SECRET_KEY, POSTGRES_PASSWORD, OPENAI_API_KEY, etc.
-docker compose up -d --build
+docker compose -f docker-compose.dev.yaml up -d --build
 ```
+
+Para no repetir `-f` en cada comando, en el `.env` de ese servidor:
+`COMPOSE_FILE=docker-compose.dev.yaml` (docker compose lo lee solo). En producción **no** se
+define esa variable, así que allí `docker compose` sigue usando el archivo de solo-base.
 
 Todo el análisis con IA (minería de textos/BERTopic incluida, ver `analitica/analysis.py`) usa
 OpenAI — no hay ningún modelo local que descargar. `OPENAI_API_KEY` en `.env` es obligatoria para
-que ese análisis funcione; `./.hf_cache` (ver `docker-compose.yml`) solo cachea los embeddings de
+que ese análisis funcione; `./.hf_cache` (ver `docker-compose.dev.yaml`) solo cachea los embeddings de
 sentence-transformers que usa BERTopic para el clustering (determinístico, sin LLM), se puebla
 solo la primera vez que corre un análisis.
 
@@ -40,7 +56,7 @@ GUNICORN_TIMEOUT=120
 
 El resto de `.env` es el mismo de siempre (`SECRET_KEY`, `POSTGRES_*`, `OPENAI_*`, `MEDIA_URL`,
 `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`…) — **una sola excepción**: dentro del compose,
-`POSTGRES_HOST`/`POSTGRES_PORT` los pisa `docker-compose.yml` (`db`/`5432`, el nombre del
+`POSTGRES_HOST`/`POSTGRES_PORT` los pisa `docker-compose.dev.yaml` (`db`/`5432`, el nombre del
 servicio en la red interna) sin importar lo que diga `.env`, porque ese archivo normalmente trae
 `localhost`, pensado para correr sin Docker.
 
@@ -58,7 +74,7 @@ Con un respaldo hecho con `scripts/backup_produccion.sh` (ver
 ```bash
 BACKUP=~/backups/aluna_kunsama/<timestamp>
 
-# 1. Base de datos — con el stack ya levantado (`docker compose up -d db`)
+# 1. Base de datos — con el stack ya levantado (`docker compose up -d db`, con cualquiera de los dos archivos)
 docker exec -i aluna_kunsama_db pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
     --no-owner --clean --if-exists < "$BACKUP/db/aluna_kunsamu.dump"
 
@@ -78,9 +94,9 @@ rm -rf /tmp/modelos_kunsama
 # (varía según qué versión del script lo generó) y copiar cada pieza a donde este compose la monta.
 
 # 3. Levantar la app (corre migrate/collectstatic solo) y verificar
-docker compose up -d --build
+docker compose -f docker-compose.dev.yaml up -d --build
 curl -s 127.0.0.1:${APP_PORT:-8000}/api/schema/ | head -3
-docker compose exec app python manage.py shell -c \
+docker compose -f docker-compose.dev.yaml exec app python manage.py shell -c \
     "from jornadas.models import Jornada; print(Jornada.objects.count())"
 # comparar contra db/conteo_origen.txt del respaldo
 ```
@@ -93,14 +109,14 @@ Docker.
 ## 6. Comandos sueltos de Django
 
 ```bash
-docker compose exec app python manage.py <comando>      # con el stack ya arriba
-docker compose run --rm app python manage.py <comando>  # sin necesidad de que esté arriba
+docker compose -f docker-compose.dev.yaml exec app python manage.py <comando>      # con el stack ya arriba
+docker compose -f docker-compose.dev.yaml run --rm app python manage.py <comando>  # sin necesidad de que esté arriba
 ```
 
 ## 7. Logs
 
 ```bash
-docker compose logs -f app
+docker compose -f docker-compose.dev.yaml logs -f app
 docker compose logs -f db
 ```
 
@@ -111,7 +127,7 @@ al inicio de `docker/redeploy-watcher.sh` de por qué esa imagen oficial no sirv
 agregarle herramientas: es deliberadamente mínima, sin shell ni CLI de Docker, así que no puede
 disparar un rebuild real por sí sola). Cada `${GIT_SYNC_PERIOD_SECONDS:-30}`s hace `git fetch` de
 `origin/${GIT_SYNC_BRANCH:-develop}` y, si hay un commit nuevo, `git pull --ff-only` +
-`docker compose up -d --build app` — automatiza lo que hasta ahora se corría a mano por SSH tras
+`docker compose -f docker-compose.dev.yaml up -d --build app` — automatiza lo que hasta ahora se corría a mano por SSH tras
 cada push.
 
 **⚠️ Antes de activarlo, pesar esto:** el contenedor necesita el socket de Docker del host
@@ -149,18 +165,18 @@ para el `git fetch`/`pull` de un repo privado — la misma que se generó en
 Activarlo:
 
 ```bash
-docker compose --profile auto-deploy up -d
+docker compose -f docker-compose.dev.yaml --profile auto-deploy up -d
 ```
 
 Desactivarlo (para todo lo demás sigue funcionando igual, sin el vigilante):
 
 ```bash
-docker compose stop git-sync
-docker compose rm -f git-sync
+docker compose -f docker-compose.dev.yaml stop git-sync
+docker compose -f docker-compose.dev.yaml rm -f git-sync
 ```
 
 Logs:
 
 ```bash
-docker compose logs -f git-sync
+docker compose -f docker-compose.dev.yaml logs -f git-sync
 ```
