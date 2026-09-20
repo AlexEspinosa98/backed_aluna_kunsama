@@ -393,6 +393,43 @@ def _indice_ids_fuente(fuente):
     return indice
 
 
+def _textos_de_fuente(fuente):
+    """(puntero, texto) de todo texto citable de una fuente: respuestas escalares, celdas de
+    matriz/lista, documentos BERTopic y segmentos de transcripción."""
+    datos = fuente.get('datos') or {}
+    for i, r in enumerate(datos.get('respuestas') or []):
+        valor = r.get('valor')
+        if isinstance(valor, str):
+            yield f'/respuestas/{i}/valor', valor
+        elif isinstance(valor, dict):
+            for j, celda in enumerate(valor.get('celdas') or []):
+                if isinstance(celda.get('valor'), str):
+                    yield f'/respuestas/{i}/valor/celdas/{j}/valor', celda['valor']
+    for i, d in enumerate(datos.get('documentos') or []):
+        if isinstance(d.get('texto'), str):
+            yield f'/documentos/{i}/texto', d['texto']
+    for i, s in enumerate(datos.get('segmentos') or []):
+        if isinstance(s.get('texto'), str):
+            yield f'/segmentos/{i}/texto', s['texto']
+
+
+def _buscar_cita(texto, fuente):
+    """Dónde está `texto` dentro de la fuente: primero como subcadena exacta, después tolerando
+    diferencias de espacios/saltos de línea (el modelo colapsa los `\\n` de una respuesta larga).
+    Devuelve (puntero, fragmento_exacto_del_original) o None."""
+    if not isinstance(texto, str) or not texto.strip():
+        return None
+    for puntero, original in _textos_de_fuente(fuente):
+        if texto in original:
+            return puntero, texto
+    patron = re.compile(r'\s+'.join(re.escape(t) for t in texto.split()))
+    for puntero, original in _textos_de_fuente(fuente):
+        m = patron.search(original)
+        if m:
+            return puntero, m.group(0)
+    return None
+
+
 def normalizar_salida(salida, entrada):
     """Correcciones de REPRESENTACIÓN que el backend puede hacer sin inventar nada, antes de
     validar — observadas en respuestas reales del modelo (AnalisisJornadaIA #11, 2026-09-20), donde
@@ -400,12 +437,24 @@ def normalizar_salida(salida, entrada):
     1. `localizador`/`ruta` con el ID de una respuesta o documento (`r2442`) en vez del JSON
        Pointer normativo → se resuelve al puntero de ese id dentro de la misma fuente. El id está
        en la entrada, así que la cita sigue siendo auditable.
-    2. `orden_categorias` que lista las SERIES (p. ej. los niveles Likert) y ninguna categoría de
+    2. Cita cuyo texto SÍ existe en la fuente pero con el puntero equivocado (el modelo cuenta mal
+       la posición en un array de miles de respuestas — corrida real #13) → se relocaliza al
+       puntero donde el texto está de verdad; si solo coincide salvo espacios/saltos de línea, el
+       texto de la cita pasa a ser el fragmento exacto del original. Si no está en la fuente
+       declarada pero sí en otra fuente de la salida, se corrige `fuente_id` y se declara en el
+       hallazgo.
+    3. Cita o referencia a una fuente que la salida declara pero el hallazgo no lista en
+       `fuente_ids` → se agrega al hallazgo (consistencia de declaración, no de datos).
+    4. `barras_100` con categoría y serie intercambiadas (cada SERIE suma 100 y cada categoría no)
+       → se intercambian en todas las filas.
+    5. `orden_categorias` que lista las SERIES (p. ej. los niveles Likert) y ninguna categoría de
        las filas → se reconstruye con las categorías de las filas en orden de aparición.
     Muta `salida` y devuelve la lista de normalizaciones aplicadas (para `diagnostico`). Nunca
-    toca cifras ni textos; lo que no encaja se deja tal cual para que la validación lo reporte."""
+    inventa cifras ni textos; lo que no encaja se deja tal cual para que la validación lo reporte."""
     notas = []
-    indices = {f['id']: _indice_ids_fuente(f) for f in entrada.get('fuentes', [])}
+    fuentes = {f['id']: f for f in entrada.get('fuentes', [])}
+    indices = {fid: _indice_ids_fuente(f) for fid, f in fuentes.items()}
+    declaradas = [f['id'] for f in salida.get('fuentes') or [] if f.get('id') in fuentes]
 
     def _resolver(fuente_id, ruta):
         if isinstance(ruta, str) and not ruta.startswith('/'):
@@ -414,32 +463,102 @@ def normalizar_salida(salida, entrada):
                 return puntero
         return ruta
 
+    def _es_literal(fuente_id, ruta, texto):
+        fuente = fuentes.get(fuente_id)
+        if fuente is None:
+            return False
+        try:
+            original = resolver_puntero(fuente.get('datos') or {}, ruta)
+        except PunteroInvalido:
+            return False
+        return isinstance(original, str) and bool(texto) and texto in original
+
     for informe in salida.get('informes') or []:
         for h in informe.get('hallazgos') or []:
+            hp = f"hallazgos[{h.get('id')}]"
+            fuente_ids = h.setdefault('fuente_ids', [])
             for cita in h.get('citas') or []:
                 nuevo = _resolver(cita.get('fuente_id'), cita.get('localizador'))
                 if nuevo != cita.get('localizador'):
-                    notas.append(f"cita {cita.get('localizador')!r} → {nuevo}")
+                    notas.append(f"{hp}: cita {cita.get('localizador')!r} → {nuevo}")
                     cita['localizador'] = nuevo
+                if not _es_literal(cita.get('fuente_id'), cita.get('localizador'), cita.get('texto')):
+                    # Primero en la fuente declarada, después en las demás fuentes de la salida.
+                    candidatas = [cita.get('fuente_id')] + [f for f in declaradas if f != cita.get('fuente_id')]
+                    for fid in candidatas:
+                        if fid not in fuentes:
+                            continue
+                        hallado = _buscar_cita(cita.get('texto'), fuentes[fid])
+                        if hallado:
+                            puntero, fragmento = hallado
+                            notas.append(f"{hp}: cita relocalizada {cita.get('fuente_id')}{cita.get('localizador')} → {fid}{puntero}")
+                            cita['fuente_id'], cita['localizador'], cita['texto'] = fid, puntero, fragmento
+                            break
+                if cita.get('fuente_id') in declaradas and cita['fuente_id'] not in fuente_ids:
+                    fuente_ids.append(cita['fuente_id'])
+                    notas.append(f"{hp}: fuente {cita['fuente_id']} agregada a fuente_ids (la usa una cita)")
             for m in h.get('metricas') or []:
                 for ref in m.get('referencias') or []:
                     nuevo = _resolver(ref.get('fuente_id'), ref.get('ruta'))
                     if nuevo != ref.get('ruta'):
-                        notas.append(f"referencia {ref.get('ruta')!r} → {nuevo}")
+                        notas.append(f"{hp}: referencia {ref.get('ruta')!r} → {nuevo}")
                         ref['ruta'] = nuevo
+                    if ref.get('fuente_id') in declaradas and ref['fuente_id'] not in fuente_ids:
+                        fuente_ids.append(ref['fuente_id'])
+                        notas.append(f"{hp}: fuente {ref['fuente_id']} agregada a fuente_ids (la usa una métrica)")
 
     for v in salida.get('visualizaciones') or []:
         if v.get('tipo') not in TIPOS_CATEGORICOS:
             continue
         datos = v.get('datos') or {}
         filas = datos.get('filas') or []
+        vp = f"visualizaciones[{v.get('id')}]"
+        if v.get('tipo') == 'barras_100' and filas:
+            def _sumas(clave):
+                acumulado = {}
+                for f in filas:
+                    if _es_numero(f.get('valor')):
+                        acumulado[f.get(clave)] = acumulado.get(f.get(clave), 0) + f['valor']
+                return acumulado
+            por_categoria, por_serie = _sumas('categoria'), _sumas('serie')
+            if (
+                por_categoria and any(abs(s - 100) > TOLERANCIA_BARRAS_100 for s in por_categoria.values())
+                and por_serie and all(abs(s - 100) <= TOLERANCIA_BARRAS_100 for s in por_serie.values())
+            ):
+                for f in filas:
+                    f['categoria'], f['serie'] = f.get('serie'), f.get('categoria')
+                notas.append(f'{vp}: barras_100 con categoría y serie intercambiadas; corregido')
         orden = datos.get('orden_categorias') or []
         categorias = [f.get('categoria') for f in filas]
         series = {f.get('serie') for f in filas}
         if filas and orden and not (set(orden) & set(categorias)) and series <= set(orden):
             datos['orden_categorias'] = list(dict.fromkeys(categorias))
-            notas.append(f"visualizaciones[{v.get('id')}]: orden_categorias listaba las series; reconstruido con las categorías de las filas")
+            notas.append(f'{vp}: orden_categorias listaba las series; reconstruido con las categorías de las filas')
     return notas
+
+
+def recortar_citas_no_verificables(salida, entrada):
+    """Último recurso tras el reintento de reparación (procesar.py): retira solo las citas cuyo
+    texto no existe en ninguna fuente (paráfrasis) en vez de tumbar el análisis completo por
+    ellas. Nunca publica una cita no literal; lo retirado queda en `diagnostico`. Devuelve la
+    lista de citas descartadas."""
+    fuentes = {f['id']: f for f in entrada.get('fuentes', [])}
+    descartadas = []
+    for informe in salida.get('informes') or []:
+        for h in informe.get('hallazgos') or []:
+            conservadas = []
+            for cita in h.get('citas') or []:
+                fuente = fuentes.get(cita.get('fuente_id'))
+                try:
+                    original = resolver_puntero((fuente or {}).get('datos') or {}, cita.get('localizador'))
+                except PunteroInvalido:
+                    original = None
+                if isinstance(original, str) and cita.get('texto') and cita['texto'] in original:
+                    conservadas.append(cita)
+                else:
+                    descartadas.append({'hallazgo_id': h.get('id'), **cita})
+            h['citas'] = conservadas
+    return descartadas
 
 
 def validar_salida(salida, entrada, pipeline_esperado=None):

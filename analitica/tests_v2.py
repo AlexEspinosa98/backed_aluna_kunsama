@@ -741,3 +741,58 @@ class NormalizacionSalidaTests(SimpleTestCase):
     def test_no_toca_una_salida_correcta(self):
         salida, entrada = _ejemplo('bertopic_integral.salida.json'), _ejemplo('bertopic_integral.entrada.json')
         self.assertEqual(normalizar_salida(salida, entrada), [])
+
+
+from .v2.validacion import recortar_citas_no_verificables
+
+
+class RelocalizacionDeCitasTests(SimpleTestCase):
+    """Corrida real #13: citas con texto real pero puntero equivocado, barras_100 con categoría y
+    serie intercambiadas, y una cita parafraseada que no existe en ninguna fuente."""
+
+    def _caso(self):
+        salida, entrada = _ejemplo('llm_por_momento.salida.json'), _ejemplo('llm_por_momento.entrada.json')
+        h = salida['informes'][0]['hallazgos'][0]
+        h['citas'][0]['localizador'] = '/respuestas/0/valor'
+        h['citas'][1]['texto'] = 'Mi  turno coincide con la   sesión.'
+        h['citas'].append({'fuente_id': 'f1', 'texto': 'Esto no lo dijo nadie', 'localizador': '/respuestas/1/valor'})
+        h['fuente_ids'] = []
+        return salida, entrada, h
+
+    def test_relocaliza_y_declara_fuente(self):
+        salida, entrada, h = self._caso()
+        notas = normalizar_salida(salida, entrada)
+        self.assertEqual(h['citas'][0]['localizador'], '/respuestas/10/valor')
+        self.assertEqual(h['citas'][1]['texto'], 'Mi turno coincide con la sesión.')
+        self.assertEqual(h['fuente_ids'], ['f1'])
+        self.assertTrue(any('relocalizada' in n for n in notas))
+        restantes = validar_negocio(salida, entrada)
+        self.assertEqual(len(restantes), 1)
+        self.assertIn('citas[2]', restantes[0])
+
+    def test_recorte_solo_retira_la_parafrasis(self):
+        salida, entrada, h = self._caso()
+        normalizar_salida(salida, entrada)
+        descartadas = recortar_citas_no_verificables(salida, entrada)
+        self.assertEqual([c['texto'] for c in descartadas], ['Esto no lo dijo nadie'])
+        self.assertEqual(len(h['citas']), 2)
+        self.assertEqual(validar_negocio(salida, entrada), [])
+
+    def test_barras_100_con_categoria_y_serie_intercambiadas(self):
+        salida, entrada = _ejemplo('llm_por_momento.salida.json'), _ejemplo('llm_por_momento.entrada.json')
+        v = salida['visualizaciones'][0]
+        v['tipo'] = 'barras_100'
+        # Como salió del modelo: categoria = nivel, serie = enunciado (cada enunciado suma 100).
+        v['datos']['filas'] = [
+            {'categoria': 'Sí', 'serie': 'Enunciado A', 'valor': 66.67, 'numerador': 4, 'denominador': 6},
+            {'categoria': 'No', 'serie': 'Enunciado A', 'valor': 33.33, 'numerador': 2, 'denominador': 6},
+            {'categoria': 'Sí', 'serie': 'Enunciado B', 'valor': 50, 'numerador': 3, 'denominador': 6},
+            {'categoria': 'No', 'serie': 'Enunciado B', 'valor': 50, 'numerador': 3, 'denominador': 6},
+        ]
+        v['datos']['orden_categorias'] = ['Sí', 'No']
+        self.assertTrue(any('barras_100' in e for e in validar_negocio(salida, entrada)))
+        notas = normalizar_salida(salida, entrada)
+        self.assertTrue(any('intercambiadas' in n for n in notas))
+        self.assertEqual(v['datos']['orden_categorias'], ['Enunciado A', 'Enunciado B'])
+        self.assertEqual([f['categoria'] for f in v['datos']['filas']][:2], ['Enunciado A', 'Enunciado A'])
+        self.assertEqual(validar_negocio(salida, entrada), [])
