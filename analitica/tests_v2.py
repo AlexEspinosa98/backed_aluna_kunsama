@@ -235,3 +235,27 @@ class SalidaSinDatosTests(TestCase):
             self.assertEqual(validar_salida(salida, entrada, 'llm'), [], modo)
             self.assertEqual(salida['estado'], 'sin_datos')
             self.assertEqual(salida['cobertura'][0]['estado'], 'sin_datos')
+
+
+from unittest.mock import patch
+
+from .v2.contrato import cargar_esquema
+from .v2.llm import cargar_json_estricto, esquema_para_openai, llamar_openai_estructurado
+
+
+class LlmEstructuradoTests(SimpleTestCase):
+    def test_esquema_para_openai_quita_claves_informativas_sin_mutar_el_original(self):
+        e = esquema_para_openai(cargar_esquema())
+        self.assertNotIn('$schema', e)
+        self.assertIn('$defs', e)
+        self.assertIn('$schema', cargar_esquema())
+
+    def test_json_estricto_rechaza_nan(self):
+        with self.assertRaises(ValueError):
+            cargar_json_estricto('{"a": NaN}')
+
+    @patch.dict('os.environ', {'OPENAI_API_KEY': ''})
+    def test_sin_api_key_devuelve_error_sin_lanzar(self):
+        salida, error, meta = llamar_openai_estructurado('s', 'u')
+        self.assertIsNone(salida)
+        self.assertIn('OPENAI_API_KEY', error)
