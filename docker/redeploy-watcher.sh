@@ -57,7 +57,14 @@ while true; do
         echo "[redeploy-watcher] Nuevo commit en origin/$RAMA: $REMOTO (local: $LOCAL). Actualizando..."
         if git pull --ff-only origin "$RAMA"; then
             echo "[redeploy-watcher] Pull OK — reconstruyendo y reiniciando app..."
-            if docker compose -f "$REPO_DIR/docker-compose.yml" up -d --build app; then
+            # --no-deps: SOLO `app`, nunca sus dependencias. Sin esto, `up` reevalúa `db` como
+            # parte del grafo de dependencias (por `depends_on`) y, según cómo compose recalcule
+            # el hash de config en esta invocación, puede terminar recreándolo igual — pasó en
+            # producción real (2026-09-20): el primer redeploy automático recreó `db` de paso. Los
+            # datos no se pierden (viven en el volumen con nombre, no en el contenedor), pero un
+            # redeploy de código no tiene ningún motivo para tocar la base — este flag lo hace
+            # imposible de raíz, no solo improbable.
+            if docker compose -f "$REPO_DIR/docker-compose.yml" up -d --build --no-deps app; then
                 echo "[redeploy-watcher] Redeploy OK ($(git rev-parse --short HEAD))."
             else
                 echo "[redeploy-watcher] 'docker compose up' falló — revisar logs del build."
