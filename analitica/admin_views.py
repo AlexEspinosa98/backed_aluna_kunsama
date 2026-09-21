@@ -1,6 +1,7 @@
 import threading
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -8,23 +9,28 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+
 from jornadas.permissions import EsAdminCompleto
-from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
+from jornadas.scoping import es_dependencia, filtrar_por_propietario, verificar_acceso_jornada
 
 from .analisis_ia_openai import analizar_jornada_ia, analizar_momento_ia
 from .analysis import _estadisticas_pregunta, procesar_reporte
 from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
 from .models import (
-    AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis, Reporte,
+    AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis,
+    PresentacionDiseno, Reporte,
 )
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
+from .presentacion_diseno_ia import ErrorGeneracionDiseno, TIPOS_DIAPOSITIVA_VALIDOS, generar_diseno
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
     AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
     AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
     AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
-    InfografiaJornadaSerializer, PlantillaAnalisisSerializer, ReporteCrearSerializer, ReporteSerializer,
+    InfografiaJornadaSerializer, PlantillaAnalisisSerializer, PresentacionDisenoSerializer,
+    ReporteCrearSerializer, ReporteSerializer,
 )
 from .sugerencias_ia_openai import generar_sugerencias
 from .v2.contrato import VERSION as VERSION_V2
@@ -1137,3 +1143,197 @@ class ReporteExcelPorMomentoView(_ReporteExcelJornadaViewBase):
     Resumen, Índice, Participantes, Mesas, y una hoja por cada momento con TODAS sus preguntas
     apiladas (cada una con su caracterización vía fórmulas y el detalle de cada respuesta)."""
     constructor_respuesta = staticmethod(construir_excel_response_por_momento)
+
+
+# --- Diseño de presentación con IA (HU-79, docs/HU_BACKEND_DISENO_PRESENTACION.md) -----------
+
+# Mismo patrón "exactamente uno de reporte/analisis_momento/analisis_jornada" que ya usa
+# InfografiaJornadaCrearSerializer (HU-73) — acá se resuelve a mano en la vista (y no en un
+# serializer de entrada) porque la HU pide códigos de error distintos según el motivo (400 forma
+# inválida/fuente ausente o doble, 404 id inexistente) más finos de lo que da un
+# PrimaryKeyRelatedField común.
+CAMPOS_FUENTE_PRESENTACION = ('reporte', 'analisis_momento', 'analisis_jornada')
+MODELOS_FUENTE_PRESENTACION = {
+    'reporte': Reporte,
+    'analisis_momento': AnalisisMomentoIA,
+    'analisis_jornada': AnalisisJornadaIA,
+}
+
+
+def _leer_fuente_presentacion(datos):
+    """(campo, valor, error) — exactamente una de las tres claves debe traer un valor no vacío
+    (HU §2.1/§2.3); cualquier otra combinación es un 400."""
+    presentes = {
+        campo: datos.get(campo) for campo in CAMPOS_FUENTE_PRESENTACION
+        if datos.get(campo) not in (None, '')
+    }
+    if len(presentes) != 1:
+        return None, None, (
+            'Manda exactamente una de "reporte", "analisis_momento" o "analisis_jornada".'
+        )
+    campo, valor = next(iter(presentes.items()))
+    return campo, valor, None
+
+
+def _resolver_analisis_presentacion(campo, valor):
+    """El análisis (o None) para `campo=valor` — nunca lanza, para que la vista decida el 404
+    con el mensaje exacto de la HU en un solo lugar."""
+    modelo = MODELOS_FUENTE_PRESENTACION[campo]
+    try:
+        return modelo.objects.get(pk=valor)
+    except (modelo.DoesNotExist, ValueError, TypeError):
+        return None
+
+
+def _jornada_y_resultado_presentacion(analisis, campo):
+    """(jornada, resultado_v2_o_analisis) de cualquiera de las tres fuentes — misma derivación
+    que ya usa InfografiaJornadaCrearSerializer.validate (HU-73): `analisis_momento.momento.
+    jornada`, `analisis_jornada.jornada`, `reporte.jornada`."""
+    if campo == 'analisis_momento':
+        return analisis.momento.jornada, analisis.resultado
+    if campo == 'analisis_jornada':
+        return analisis.jornada, analisis.resultado
+    return analisis.jornada, analisis.analisis  # reporte
+
+
+def _titulo_analisis_presentacion(resultado):
+    """Título representativo del análisis para el contexto que recibe el modelo (HU §5.2). La
+    lista unificada (`AnalisisUnificadoView`) no expone un campo `titulo` propio — se usa el
+    título del primer informe del contrato v2, que sí existe siempre y es estable."""
+    informes = (resultado or {}).get('informes') or []
+    return informes[0].get('titulo', '') if informes else ''
+
+
+def _validar_diapositivas_presentacion(diapositivas):
+    """`None` si son válidas, o el mensaje de error para un 400 (HU §2.1: "Lista vacía o con un
+    tipo desconocido → 400"). El backend no reconstruye ni completa la lista — solo valida su
+    forma mínima antes de guardarla y pasarla al modelo."""
+    if not isinstance(diapositivas, list) or not diapositivas:
+        return 'Manda una lista no vacía de diapositivas.'
+    for item in diapositivas:
+        if not isinstance(item, dict) or not item.get('id'):
+            return 'Cada diapositiva necesita "id" y "tipo".'
+        if item.get('tipo') not in TIPOS_DIAPOSITIVA_VALIDOS:
+            return f'Tipo de diapositiva desconocido: {item.get("tipo")!r}.'
+    return None
+
+
+class PresentacionDisenoViewSet(
+    mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet,
+):
+    """`presentacion-diseno` (HU-79): diagramación de una presentación decidida por un modelo de
+    OpenAI con visión sobre los assets de la jornada — opcional y bajo demanda, nunca se genera
+    sola. `list` NO es un listado real: devuelve EL diseño guardado de la fuente indicada por
+    query param, o `404` si no hay ninguno — nunca genera nada. Sin `retrieve`/`update` a
+    propósito: no existe "el diseño número X" suelto, siempre se pide por análisis."""
+    serializer_class = PresentacionDisenoSerializer
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        # Solo lo usan destroy()/get_object() (DELETE por pk) — list()/create() resuelven la
+        # fuente a mano (ver _resolver_analisis_presentacion) porque necesitan códigos de error
+        # más finos que los que da filtrar un queryset.
+        queryset = PresentacionDiseno.objects.select_related(
+            'reporte__jornada', 'analisis_momento__momento__jornada', 'analisis_jornada__jornada',
+        )
+        if es_dependencia(self.request.user):
+            queryset = queryset.filter(
+                Q(reporte__jornada__propietarios=self.request.user)
+                | Q(analisis_momento__momento__jornada__propietarios=self.request.user)
+                | Q(analisis_jornada__jornada__propietarios=self.request.user)
+            ).distinct()
+        return queryset
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('reporte', int, required=False, description='Id de Reporte'),
+            OpenApiParameter(
+                'analisis_momento', int, required=False, description='Id de AnalisisMomentoIA',
+            ),
+            OpenApiParameter(
+                'analisis_jornada', int, required=False, description='Id de AnalisisJornadaIA',
+            ),
+        ],
+        responses={200: PresentacionDisenoSerializer},
+        description='Manda exactamente una de las tres query params. `200` con el diseño '
+                    'guardado, `404` si no hay ninguno. Nunca genera nada.',
+    )
+    def list(self, request, *args, **kwargs):
+        campo, valor, error = _leer_fuente_presentacion(request.query_params)
+        if error:
+            return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+
+        analisis = _resolver_analisis_presentacion(campo, valor)
+        if analisis is None:
+            return Response(
+                {'detail': 'No existe un análisis con ese id.'}, status=status.HTTP_404_NOT_FOUND,
+            )
+
+        jornada, _ = _jornada_y_resultado_presentacion(analisis, campo)
+        verificar_acceso_jornada(request.user, jornada)
+
+        diseno = getattr(analisis, 'presentacion_diseno', None)
+        if diseno is None:
+            return Response(
+                {'detail': 'No hay un diseño guardado para este análisis.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(PresentacionDisenoSerializer(diseno).data)
+
+    @extend_schema(
+        request=PresentacionDisenoSerializer, responses={201: PresentacionDisenoSerializer},
+    )
+    def create(self, request, *args, **kwargs):
+        campo, valor, error = _leer_fuente_presentacion(request.data)
+        if error:
+            return Response({'detail': error}, status=status.HTTP_400_BAD_REQUEST)
+
+        analisis = _resolver_analisis_presentacion(campo, valor)
+        if analisis is None:
+            return Response(
+                {'detail': 'No existe un análisis con ese id.'}, status=status.HTTP_404_NOT_FOUND,
+            )
+
+        diapositivas = request.data.get('diapositivas')
+        error_diapositivas = _validar_diapositivas_presentacion(diapositivas)
+        if error_diapositivas:
+            return Response({'detail': error_diapositivas}, status=status.HTTP_400_BAD_REQUEST)
+
+        jornada, resultado = _jornada_y_resultado_presentacion(analisis, campo)
+        verificar_acceso_jornada(request.user, jornada)
+
+        if not _es_resultado_v2(resultado):
+            return Response(
+                {'detail': 'El análisis no está en formato v2'}, status=status.HTTP_409_CONFLICT,
+            )
+
+        contexto_analisis = {
+            'titulo': _titulo_analisis_presentacion(resultado),
+            'estado': resultado.get('estado'),
+            'modo': (resultado.get('alcance') or {}).get('modo'),
+            'resumen': (resultado.get('informes') or [{}])[0].get('resumen', ''),
+            'hallazgos': sum(len(i.get('hallazgos', [])) for i in resultado.get('informes', [])),
+            'recomendaciones': sum(
+                len(i.get('recomendaciones', [])) for i in resultado.get('informes', [])
+            ),
+        }
+
+        try:
+            diseno, correcciones, modelo_usado, assets_enviados = generar_diseno(
+                jornada, contexto_analisis, diapositivas,
+            )
+        except ErrorGeneracionDiseno as exc:
+            return Response({'detail': exc.detail}, status=exc.status_code)
+
+        # update_or_create con el campo de fuente como lookup: un POST repetido sobre el mismo
+        # análisis actualiza la misma fila (el «Rediseñar» del usuario, HU §1.3), nunca crea
+        # otra — la OneToOneField de las otras dos fuentes queda en None por defecto al crear.
+        instancia, _creada = PresentacionDiseno.objects.update_or_create(
+            **{campo: analisis},
+            defaults={
+                'modelo': modelo_usado, 'diapositivas': diapositivas, 'diseno': diseno,
+                'correcciones': correcciones, 'assets': assets_enviados,
+            },
+        )
+        salida = PresentacionDisenoSerializer(instancia)
+        return Response(salida.data, status=status.HTTP_201_CREATED)
