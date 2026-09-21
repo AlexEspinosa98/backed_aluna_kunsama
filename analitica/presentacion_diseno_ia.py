@@ -633,9 +633,13 @@ def _sanear_diapositivas(diapositivas_entrada, diapositivas_modelo, assets_sanea
         if tipo == 'hallazgo':
             if plantilla in PLANTILLAS_HALLAZGO_VISUAL and not item_entrada.get('tiene_visual'):
                 plantilla = 'hallazgo_cita' if item_entrada.get('tiene_citas') else 'hallazgo_texto'
-                correcciones.append(f'hallazgo {id_slide} sin visualización; plantilla de texto')
+                # El texto nombra la plantilla que quedó de verdad: la corrección se le muestra a
+                # quien pidió el diseño, y decir "de texto" cuando terminó en cita confunde.
+                cual = 'de cita' if plantilla == 'hallazgo_cita' else 'de texto'
+                correcciones.append(f'hallazgo {id_slide} sin visualización; plantilla {cual}')
             elif plantilla == 'hallazgo_cita' and not item_entrada.get('tiene_citas'):
                 plantilla = 'hallazgo_texto'
+                correcciones.append(f'hallazgo {id_slide} sin citas; plantilla de texto')
 
         asset_id = None
         if plantilla in PLANTILLAS_CON_ILUSTRACION:
