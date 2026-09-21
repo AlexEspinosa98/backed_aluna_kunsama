@@ -407,7 +407,30 @@ POST /api/admin/infografias/
 
 ---
 
-## 7. Qué NO cambió
+## 7. Diagramar la presentación con IA (guía aparte)
+
+Un análisis v2 se proyecta como presentación por diapositivas, y el backend puede **diagramarla**
+(paleta, tipografía, papel de cada asset de la jornada y plantilla de cada diapositiva) con un
+modelo de visión sobre los assets. Contrato `kunsamu.presentacion/v1`, endpoints
+`GET`/`POST`/`DELETE` en `/api/admin/presentacion-diseno/`:
+
+- **`GET /api/admin/presentacion-diseno/?analisis_jornada=<id>`** (o `?reporte=`,
+  `?analisis_momento=`) → `200` con el diseño guardado, `404` si no hay. **Nunca genera nada**, así
+  que se puede llamar al abrir la presentación sin gastar tokens.
+- **`POST`** con el análisis y la secuencia de diapositivas → genera, guarda y devuelve `201`
+  (síncrono, ~16 s medidos). Repetirlo reemplaza el diseño de ese análisis, nunca crea un segundo.
+- **`DELETE /api/admin/presentacion-diseno/<id>/`** → `204`, se vuelve al diseño institucional.
+- Solo sobre análisis en formato v2 (`409` si es histórico) y jornadas con assets o guía de marca
+  escrita (`422`, sin llamar al proveedor).
+
+Todo el detalle —cuerpo del `POST`, el contrato completo, plantillas admisibles por tipo de
+diapositiva, tabla de errores y qué corrige el saneamiento del backend— está en
+[INTEGRACION_FRONTEND_PRESENTACION_DISENO.md](INTEGRACION_FRONTEND_PRESENTACION_DISENO.md)
+(HU-79). Es opcional: sin diseño guardado, la presentación se pinta con el diseño institucional.
+
+---
+
+## 8. Qué NO cambió
 
 Los cuerpos de petición de `reportes/`, `analisis-momento-ia/` y `analisis-jornada-ia/` no
 cambiaron (§1) — mismos campos de siempre. Tampoco cambió `analisis-sugerencias/` (que sigue
@@ -420,7 +443,7 @@ silencio (§1).
 
 ---
 
-## 8. Checklist de mapeo para el frontend
+## 9. Checklist de mapeo para el frontend
 
 - [ ] El wizard manda `jornada` + `modo` + `momentos` (solo en `por_momento`) + `pipeline` +
       `contexto`/`instrucciones` (+ `personalizacion_momentos`) a `POST /api/admin/analisis-v2/`;
