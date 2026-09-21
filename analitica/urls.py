@@ -4,8 +4,8 @@ from rest_framework.routers import DefaultRouter
 from .admin_views import (
     AnalisisJornadaIAViewSet, AnalisisMomentoIAViewSet, AnalisisSugerenciasView,
     AnalisisUnificadoView, AnalisisV2ViewSet, EstadisticasPreguntasView, InfografiaJornadaViewSet,
-    MesasView, PlantillaAnalisisViewSet, ProgresoParticipantesView, ReporteExcelPorMomentoView,
-    ReporteExcelPorPreguntaView, ReporteViewSet,
+    MesasView, PlantillaAnalisisViewSet, PresentacionDisenoViewSet, ProgresoParticipantesView,
+    ReporteExcelPorMomentoView, ReporteExcelPorPreguntaView, ReporteViewSet,
 )
 
 router = DefaultRouter()
@@ -15,6 +15,9 @@ router.register('analisis-momento-ia', AnalisisMomentoIAViewSet, basename='admin
 router.register('analisis-jornada-ia', AnalisisJornadaIAViewSet, basename='admin-analisis-jornada-ia')
 router.register('analisis-v2', AnalisisV2ViewSet, basename='admin-analisis-v2')
 router.register('infografias', InfografiaJornadaViewSet, basename='admin-infografia')
+router.register(
+    'presentacion-diseno', PresentacionDisenoViewSet, basename='admin-presentacion-diseno',
+)
 
 urlpatterns = router.urls + [
     path('analisis/', AnalisisUnificadoView.as_view(), name='admin-analisis-unificado'),

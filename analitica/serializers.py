@@ -4,7 +4,7 @@ from jornadas.models import Jornada, Momento
 
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaImagen, InfografiaJornada,
-    PlantillaAnalisis, Reporte,
+    PlantillaAnalisis, PresentacionDiseno, Reporte,
 )
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
 from .v2.contrato import VERSION
@@ -233,6 +233,21 @@ class InfografiaJornadaCrearSerializer(serializers.ModelSerializer):
             attrs['momento'] = None
             attrs['jornada'] = reporte.jornada
         return attrs
+
+
+class PresentacionDisenoSerializer(serializers.ModelSerializer):
+    """Salida idéntica en forma para el `GET` y el `POST` (HU-79, §2.2 de
+    docs/HU_BACKEND_DISENO_PRESENTACION.md) — sin serializer de entrada propio: la vista valida
+    a mano la fuente (exactamente una de `reporte`/`analisis_momento`/`analisis_jornada`) y las
+    `diapositivas`, porque necesita distinguir 400 (forma inválida) de 404 (id inexistente) de
+    forma más precisa de lo que da un `PrimaryKeyRelatedField` común."""
+    class Meta:
+        model = PresentacionDiseno
+        fields = [
+            'id', 'reporte', 'analisis_momento', 'analisis_jornada', 'version', 'modelo',
+            'correcciones', 'diseno', 'diapositivas', 'assets', 'creado', 'actualizado',
+        ]
+        read_only_fields = fields
 
 
 class AnalisisSugerenciasSerializer(serializers.Serializer):

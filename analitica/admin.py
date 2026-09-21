@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AnalisisV2, PlantillaAnalisis, Reporte
+from .models import AnalisisV2, PlantillaAnalisis, PresentacionDiseno, Reporte
 
 
 @admin.register(PlantillaAnalisis)
@@ -26,3 +26,9 @@ class AnalisisV2Admin(admin.ModelAdmin):
         'entrada', 'resultado', 'diagnostico', 'prompt_usado', 'modelo_usado', 'error_mensaje',
         'version_prompt', 'version_esquema', 'completado_en',
     ]
+
+
+@admin.register(PresentacionDiseno)
+class PresentacionDisenoAdmin(admin.ModelAdmin):
+    list_display = ['id', '__str__', 'modelo', 'creado', 'actualizado']
+    readonly_fields = ['diseno', 'diapositivas', 'correcciones', 'assets', 'modelo']

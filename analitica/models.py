@@ -504,3 +504,58 @@ class AnalisisV2(models.Model):
 
     def __str__(self):
         return f'Análisis v2 {self.id} · {self.jornada} · {self.modo} · {self.pipeline} · {self.estado}'
+
+
+class PresentacionDiseno(models.Model):
+    """Diagramación de una presentación (colores, tipografía, papel de cada asset, plantilla de
+    cada diapositiva) decidida por un modelo de OpenAI con visión sobre los assets de la jornada
+    (docs/HU_BACKEND_DISENO_PRESENTACION.md). Opcional y bajo demanda: nunca se genera sola —
+    sólo cuando el usuario pulsa «Diagramar con IA» en el frontend — y el resultado se guarda
+    para no volver a gastar tokens cada vez que se abre la presentación.
+
+    Un diseño pertenece a UN análisis concreto, mismo patrón que `InfografiaJornada` (HU-73):
+    exactamente uno de `reporte`/`analisis_momento`/`analisis_jornada` no nulo. La regla de
+    integridad se valida en la vista antes de crear/actualizar (mismo criterio que
+    `InfografiaJornadaCrearSerializer.validate`), no acá — ver `analitica/admin_views.py`.
+
+    Es `OneToOneField` y no `ForeignKey` a propósito: un análisis tiene A LO SUMO un diseño
+    guardado a la vez — un `POST` repetido sobre el mismo análisis ACTUALIZA esa fila (el
+    «Rediseñar» del usuario), nunca crea una segunda."""
+    reporte = models.OneToOneField(
+        'Reporte', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='presentacion_diseno',
+    )
+    analisis_momento = models.OneToOneField(
+        'AnalisisMomentoIA', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='presentacion_diseno',
+    )
+    analisis_jornada = models.OneToOneField(
+        'AnalisisJornadaIA', null=True, blank=True, on_delete=models.CASCADE,
+        related_name='presentacion_diseno',
+    )
+    version = models.CharField(max_length=40, default='kunsamu.presentacion/v1')
+    # Único campo del proyecto que SÍ guarda el nombre real del modelo de OpenAI que respondió
+    # (la HU lo pide explícitamente en §2.2) — el resto del código lo trata como secreto de
+    # proveedor y nunca lo expone en un campo genérico.
+    modelo = models.CharField(max_length=60)
+    diapositivas = models.JSONField(
+        help_text='La secuencia recibida en el POST, tal cual — el backend nunca la reconstruye '
+        'ni la altera, sólo la guarda y se la pasa al modelo.',
+    )
+    diseno = models.JSONField(
+        help_text='Contrato kunsamu.presentacion/v1 ya saneado (ver presentacion_diseno_ia.py).',
+    )
+    correcciones = models.JSONField(default=list, blank=True)
+    assets = models.JSONField(
+        default=list, blank=True, help_text='Ids de JornadaAsset enviados al modelo.',
+    )
+    creado = models.DateTimeField(auto_now_add=True)
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Diseño de presentación (IA)'
+        verbose_name_plural = 'Diseños de presentación (IA)'
+
+    def __str__(self):
+        fuente = self.reporte or self.analisis_momento or self.analisis_jornada
+        return f'Diseño de presentación {self.id} · {fuente}'
