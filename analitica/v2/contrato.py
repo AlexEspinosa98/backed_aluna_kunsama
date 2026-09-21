@@ -13,7 +13,12 @@ VERSION = 'kunsamu.analisis/v2'
 VERSION_ESQUEMA = 'v2.0'
 # v2.1 (2026-09-20): SYSTEM_PROMPT_LLM.md reemplazado por la versión "analista principal" que
 # mandó el frontend (rol experto, cálculos que la evidencia permita, títulos como conclusión).
-VERSION_PROMPT = 'v2.1'
+# v2.2 (2026-09-20): tercera versión del FE para la ruta `llm` — el LLM es responsable de ejecutar
+# el análisis y dejarlo listo para renderizar; las instrucciones del usuario se evalúan con criterio
+# y hay que explicar lo que no se atendió; `nube_palabras` con frecuencias calculadas por él; y la
+# aclaración de que en las barras `categoria` es cada barra y `serie` cada opción (justo lo que
+# `validacion.normalizar_salida` venía corrigiendo a posteriori).
+VERSION_PROMPT = 'v2.2'
 
 MODO_INTEGRAL = 'integral'
 MODO_POR_MOMENTO = 'por_momento'
