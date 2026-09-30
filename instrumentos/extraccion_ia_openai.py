@@ -11,16 +11,22 @@ Dos vías de lectura del documento, elegidas automáticamente:
   las páginas como imágenes (PyMuPDF) y se mandan con capacidad de visión (gpt-4o) — mismo modelo,
   solo cambia qué contenido lleva el mensaje.
 
+La transcripción se pide en VARIAS llamadas, una por lote de preguntas (ver
+PRESUPUESTO_CELDAS_POR_LLAMADA): el documento entero viaja en todas, pero cada una solo pide las
+celdas de su lote. El instrumento de diagnóstico de articulación académica tiene ~350 celdas entre
+sus cinco matrices y sus preguntas abiertas; pedirlas todas en un único JSON pasaba el tope de
+tokens de salida, la respuesta salía cortada a mitad y la extracción moría con "OpenAI devolvió
+JSON inválido" sin ninguna pista de la causa real.
+
 El resultado nunca se acepta solo: cae siempre en AplicacionInstrumento.estado='pendiente' con
 generado_por_ia=True para revisión humana (ver ExtraccionInstrumento en models.py)."""
-import base64
 import json
 import os
 import threading
 
 from django.utils import timezone
 
-from jornadas import emparejamiento
+from jornadas import emparejamiento, lectura_documentos
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
@@ -28,12 +34,20 @@ GENERATION_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_TOKENS = 8000
 # Nunca se expone el nombre real del modelo de un proveedor externo en la respuesta de la API.
 MODELO_USADO_LABEL = 'Generado con IA'
-# Tope de páginas enviadas como imagen — un PDF escaneado de 90 preguntas rara vez pasa de esto, y
-# limita el costo/tiempo de una sola llamada con visión.
-MAX_PAGINAS_IMAGEN = 20
-# Si el texto extraído promedia menos que esto por página, se asume PDF escaneado/a mano y se cae
-# al modo visión en vez de mandar un texto casi vacío.
-UMBRAL_CARACTERES_POR_PAGINA = 40
+# Cuántas celdas (entradas de salida esperadas) se le piden como máximo en UNA llamada. Con
+# MAX_OUTPUT_TOKENS=8000 y ~35 tokens de estructura JSON por entrada más el texto transcrito, 80
+# entradas dejan margen de sobra incluso si cada celda trae una frase larga. Es el tope que
+# garantiza que la respuesta no se trunque; subirlo obliga a subir MAX_OUTPUT_TOKENS con él.
+PRESUPUESTO_CELDAS_POR_LLAMADA = 80
+# Mensaje de la extracción que terminó sin una sola respuesta utilizable. El caso real y más
+# frecuente es haber subido la plantilla en blanco en vez de la copia diligenciada, así que se
+# nombra explícitamente en vez de dejar una extracción "completa" y vacía que parece un fallo del
+# modelo (ver procesar_extraccion_instrumento).
+MENSAJE_SIN_RESPUESTAS = (
+    'El documento no traía ninguna respuesta que se pudiera transcribir: todas sus casillas y '
+    'celdas están en blanco, o no corresponden a las preguntas de este instrumento. Verifica que '
+    'el archivo subido sea la copia YA DILIGENCIADA del formato y no la plantilla vacía.'
+)
 
 SYSTEM_PROMPT_EXTRACCION = (
     "Eres un transcriptor de formularios. Se te entrega, en JSON, el ESQUEMA completo de un "
@@ -85,81 +99,83 @@ SYSTEM_PROMPT_EXTRACCION = (
 )
 
 
-def _extraer_texto_docx(archivo):
-    from docx import Document
-
-    documento = Document(archivo)
-    partes = [p.text for p in documento.paragraphs if p.text.strip()]
-    for tabla in documento.tables:
-        for fila in tabla.rows:
-            celdas = [c.text.strip() for c in fila.cells]
-            if any(celdas):
-                partes.append(' | '.join(celdas))
-    return '\n'.join(partes), None
-
-
-def _extraer_texto_o_imagenes_pdf(archivo):
-    """Devuelve (texto, None) si el PDF tiene texto seleccionable suficiente, o (None,
-    lista_de_imagenes_base64) si hay que caer a visión (escaneado/a mano)."""
-    import pdfplumber
-
-    archivo.seek(0)
-    paginas_texto = []
-    with pdfplumber.open(archivo) as pdf:
-        n_paginas = len(pdf.pages)
-        for pagina in pdf.pages:
-            paginas_texto.append(pagina.extract_text() or '')
-
-    texto = '\n'.join(paginas_texto).strip()
-    if n_paginas and len(texto) / n_paginas >= UMBRAL_CARACTERES_POR_PAGINA:
-        return texto, None
-
-    import fitz  # PyMuPDF
-
-    archivo.seek(0)
-    imagenes = []
-    documento = fitz.open(stream=archivo.read(), filetype='pdf')
-    for pagina in documento[:MAX_PAGINAS_IMAGEN]:
-        pixmap = pagina.get_pixmap(dpi=150)
-        imagenes.append(base64.b64encode(pixmap.tobytes('png')).decode('ascii'))
-    documento.close()
-    return None, imagenes
-
-
 def _leer_documento(extraccion):
-    """Despacha por extensión de archivo. Devuelve (texto_o_None, imagenes_base64_o_None)."""
-    nombre = extraccion.nombre_archivo_original or extraccion.archivo.name
-    extension = nombre.rsplit('.', 1)[-1].lower() if '.' in nombre else ''
+    """Despacha por extensión de archivo. Devuelve (texto_o_None, imagenes_base64_o_None).
 
+    La lectura misma vive en `jornadas.lectura_documentos`, compartida con la extracción de momentos
+    — estaba duplicada y el bug de orden de los bloques del .docx hubo que arreglarlo en los dos
+    lados a la vez (ver el docstring de ese módulo)."""
+    nombre = extraccion.nombre_archivo_original or extraccion.archivo.name
     extraccion.archivo.open('rb')
     try:
-        if extension == 'docx':
-            texto, _ = _extraer_texto_docx(extraccion.archivo)
-            return texto, None
-        if extension == 'pdf':
-            return _extraer_texto_o_imagenes_pdf(extraccion.archivo)
-        raise ValueError(f'Formato de archivo no soportado: .{extension} (solo .pdf o .docx).')
+        return lectura_documentos.leer_documento(extraccion.archivo, nombre)
     finally:
         extraccion.archivo.close()
 
 
-def _construir_payload_esquema(instrumento):
-    secciones = []
+def _payload_pregunta(pregunta):
+    return {
+        'id': pregunta.id,
+        'texto': pregunta.texto,
+        'tipo': pregunta.tipo,
+        'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
+        'filas': [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()],
+        'columnas': [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()],
+    }
+
+
+def _pares_seccion_pregunta(instrumento):
+    """Las preguntas activas del instrumento en orden, cada una con su sección — la unidad con la
+    que se arman los lotes. Se reparte por PREGUNTA y no por sección porque una sola sección puede
+    pasarse del presupuesto por sí misma: la de análisis de coherencia son 3 matrices de 7×4 más 9
+    abiertas, 93 celdas."""
+    pares = []
     for seccion in instrumento.secciones.filter(activa=True).order_by('orden'):
         if seccion.tipo != seccion.TIPO_PREGUNTAS:
             continue
-        preguntas = []
         for pregunta in seccion.preguntas.filter(activa=True).order_by('orden'):
-            preguntas.append({
-                'id': pregunta.id,
-                'texto': pregunta.texto,
-                'tipo': pregunta.tipo,
-                'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
-                'filas': [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()],
-                'columnas': [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()],
-            })
-        secciones.append({'titulo': seccion.titulo, 'preguntas': preguntas})
+            pares.append((seccion, pregunta))
+    return pares
+
+
+def _celdas_esperadas(par):
+    """Cuántas entradas de salida puede llegar a producir una pregunta: una matriz, una por celda;
+    cualquier otro tipo, una sola."""
+    from .models import PreguntaInstrumento
+
+    _seccion, pregunta = par
+    if pregunta.tipo == PreguntaInstrumento.TIPO_MATRIZ:
+        return max(1, len(pregunta.filas.all()) * len(pregunta.columnas.all()))
+    return 1
+
+
+def _payload_de_lote(instrumento, lote):
+    """Arma, para un lote de pares (sección, pregunta), el MISMO payload que espera el prompt
+    ({'instrumento', 'secciones': [{'titulo', 'preguntas'}]}). Las secciones se reconstruyen tal
+    cual venían: el modelo necesita el título de la sección para ubicar la pregunta dentro del
+    documento, y una sección partida entre dos lotes aparece en los dos con su título."""
+    secciones = []
+    ultima_seccion_id = None
+    for seccion, pregunta in lote:
+        if seccion.id != ultima_seccion_id:
+            secciones.append({'titulo': seccion.titulo, 'preguntas': []})
+            ultima_seccion_id = seccion.id
+        secciones[-1]['preguntas'].append(_payload_pregunta(pregunta))
     return {'instrumento': instrumento.nombre, 'secciones': secciones}
+
+
+def _construir_payload_esquema(instrumento):
+    """El esquema completo, sin partir — se usa cuando hay que mirar el instrumento entero de una
+    sola vez (tests, depuración). El pipeline real usa `_lotes_de_esquema`."""
+    return _payload_de_lote(instrumento, _pares_seccion_pregunta(instrumento))
+
+
+def _lotes_de_esquema(instrumento):
+    """El esquema partido en payloads que caben, cada uno, en una respuesta del modelo."""
+    lotes = lectura_documentos.agrupar_en_lotes(
+        _pares_seccion_pregunta(instrumento), _celdas_esperadas, PRESUPUESTO_CELDAS_POR_LLAMADA,
+    )
+    return [_payload_de_lote(instrumento, lote) for lote in lotes]
 
 
 def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=None):
@@ -205,7 +221,18 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
             else:
                 kwargs['temperature'] = 0.2
             respuesta = client.chat.completions.create(**kwargs)
-            resultado['texto'] = respuesta.choices[0].message.content.strip()
+            eleccion = respuesta.choices[0]
+            # Truncado por tope de tokens: el JSON viene cortado a mitad, así que `json.loads` de
+            # más abajo falla con un "Expecting ',' delimiter" que no dice nada de la causa real.
+            # Se nombra acá, donde todavía se sabe qué pasó — es la señal de que el lote quedó
+            # grande (ver PRESUPUESTO_CELDAS_POR_LLAMADA).
+            if eleccion.finish_reason == 'length':
+                resultado['error'] = (
+                    f'La respuesta del modelo se truncó por el tope de {MAX_OUTPUT_TOKENS} tokens '
+                    'de salida: el bloque de preguntas pedido en esta llamada es demasiado grande.'
+                )
+                return
+            resultado['texto'] = eleccion.message.content.strip()
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
@@ -224,6 +251,46 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
         return json.loads(texto), None
     except json.JSONDecodeError as exc:
         return None, f'OpenAI devolvió JSON inválido: {exc}'
+
+
+def _fusionar_responsable(acumulado, crudo):
+    """Junta el bloque `responsable` de varias llamadas quedándose con el primer valor no vacío de
+    cada campo. El documento entero viaja en TODAS las llamadas, así que cualquiera puede leer el
+    encabezado donde está el responsable — lo normal es que lo traiga la primera, y las demás no
+    tienen por qué pisarlo."""
+    if not isinstance(crudo, dict):
+        return acumulado
+    fusionado = dict(acumulado)
+    for clave in ('nombre', 'correo', 'cargo', 'dependencia'):
+        valor = crudo.get(clave)
+        if not fusionado.get(clave) and isinstance(valor, str) and valor.strip():
+            fusionado[clave] = valor.strip()
+    return fusionado
+
+
+def _transcribir_por_lotes(instrumento, texto_documento=None, imagenes_base64=None):
+    """Pide la transcripción en varias llamadas —una por lote de preguntas— y las junta en un solo
+    resultado con la misma forma que devolvía la llamada única de antes.
+
+    Si CUALQUIER lote falla, falla toda la extracción. Quedarse con lo que sí salió sería peor:
+    quien revisa la transcripción no tendría forma de distinguir un bloque que el documento traía
+    en blanco de uno que se perdió por un error del proveedor."""
+    lotes = _lotes_de_esquema(instrumento)
+    if not lotes:
+        return None, 'El instrumento no tiene preguntas activas que transcribir.'
+
+    respuestas = []
+    responsable = {}
+    for numero, esquema in enumerate(lotes, start=1):
+        parcial, error = _llamar_openai_extraccion(
+            esquema, texto_documento=texto_documento, imagenes_base64=imagenes_base64,
+        )
+        if parcial is None:
+            return None, f'Bloque {numero} de {len(lotes)}: {error}'
+        respuestas.extend(parcial.get('respuestas') or [])
+        responsable = _fusionar_responsable(responsable, parcial.get('responsable'))
+
+    return {'responsable': responsable, 'respuestas': respuestas}, None
 
 
 def _guardar_respuestas(aplicacion, items_crudos, preguntas_validas):
@@ -336,6 +403,20 @@ def _escribir_aplicacion(extraccion, resultado):
     mismo trabajo, con la transcripción que ya estaba guardada."""
     from .models import AplicacionInstrumento, ExtraccionInstrumento, PreguntaInstrumento, PreregistroInstrumento
 
+    # Sin una sola respuesta transcrita no se crea nada: ni preregistro, ni AplicacionInstrumento
+    # vacía en estado "pendiente" (que aparecería en el panel como un instrumento entregado sin
+    # contenido), ni una extracción "completa" indistinguible de un fallo del modelo. Es el caso
+    # real de haber subido la plantilla en blanco en vez de la copia diligenciada.
+    if not (resultado.get('respuestas') or []):
+        extraccion.estado = ExtraccionInstrumento.ESTADO_ERROR
+        extraccion.error_mensaje = MENSAJE_SIN_RESPUESTAS
+        extraccion.modelo_usado = MODELO_USADO_LABEL
+        extraccion.save(update_fields=[
+            'estado', 'error_mensaje', 'modelo_usado', 'usuario', 'responsable_estado',
+            'resultado_crudo',
+        ])
+        return None
+
     preregistro, _ = PreregistroInstrumento.objects.get_or_create(
         instrumento=extraccion.instrumento, usuario=extraccion.usuario,
         defaults={'creado_por': extraccion.solicitado_por},
@@ -396,8 +477,22 @@ def procesar_extraccion_instrumento(extraccion_id):
         extraccion.save(update_fields=['estado'])
 
         texto, imagenes = _leer_documento(extraccion)
-        esquema = _construir_payload_esquema(extraccion.instrumento)
-        resultado, error = _llamar_openai_extraccion(esquema, texto_documento=texto, imagenes_base64=imagenes)
+
+        if not imagenes and not (texto or '').strip():
+            # Documento del que no se pudo sacar ni una línea (un .docx vacío, un PDF sin texto
+            # ni páginas rasterizables). No se gasta una llamada al proveedor para confirmarlo, y
+            # el mensaje dice qué pasó en vez de dejar una extracción vacía "completa".
+            extraccion.estado = ExtraccionInstrumento.ESTADO_ERROR
+            extraccion.error_mensaje = (
+                'No se pudo leer ningún texto del documento. Verifica que el archivo no esté '
+                'vacío ni dañado.'
+            )
+            extraccion.save(update_fields=['estado', 'error_mensaje'])
+            return
+
+        resultado, error = _transcribir_por_lotes(
+            extraccion.instrumento, texto_documento=texto, imagenes_base64=imagenes,
+        )
 
         if resultado is None:
             extraccion.estado = ExtraccionInstrumento.ESTADO_ERROR
@@ -406,9 +501,22 @@ def procesar_extraccion_instrumento(extraccion_id):
             return
 
         # La transcripción se guarda SIEMPRE, antes de saber a quién atribuirla: es el trabajo
-        # caro (una llamada a OpenAI con el documento entero) y no puede perderse porque el
+        # caro (varias llamadas a OpenAI con el documento entero) y no puede perderse porque el
         # responsable no se haya podido emparejar.
         extraccion.resultado_crudo = resultado
+
+        if not resultado.get('respuestas'):
+            # Antes del emparejamiento de responsable a propósito: un documento en blanco tampoco
+            # trae responsable, así que sin este corte la extracción terminaba en
+            # `sin_responsable` —apuntando a un problema que no es el real— en vez de decir que no
+            # había nada que transcribir.
+            extraccion.estado = ExtraccionInstrumento.ESTADO_ERROR
+            extraccion.error_mensaje = MENSAJE_SIN_RESPUESTAS
+            extraccion.modelo_usado = MODELO_USADO_LABEL
+            extraccion.save(update_fields=[
+                'resultado_crudo', 'estado', 'error_mensaje', 'modelo_usado',
+            ])
+            return
 
         if extraccion.usuario_id is None:
             detectado = _limpiar_responsable(resultado.get('responsable'))
