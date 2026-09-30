@@ -10,5 +10,8 @@ staticfiles/
 gunicorn-*.log
 media/
 .hf_cache/
+# Caché JIT de numba (NUMBA_CACHE_DIR en el Dockerfile). No se monta desde el host, pero en el
+# servidor de pruebas el bind mount del repo entero en /app la hace aparecer acá.
+.numba_cache/
 .claude/
 tmp/
