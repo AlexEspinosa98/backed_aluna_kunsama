@@ -41,7 +41,7 @@ GENERATION_TIMEOUT_SECONDS = 300
 TAMANO_INFOGRAFIA = os.environ.get('OPENAI_IMAGE_SIZE', '2048x1152')
 PROPORCION_INFOGRAFIA = '16:9'
 # Tope de assets tipo 'asset' que se mandan como referencia (+ 1 system_design aparte) — controla
-# costo/tiempo de la llamada, igual espíritu que MAX_PAGINAS_IMAGEN en extraccion_ia_openai.py.
+# costo/tiempo de la llamada, igual espíritu que MAX_PAGINAS_IMAGEN en jornadas/lectura_documentos.py.
 MAX_ASSETS_REFERENCIA = 4
 # Lado máximo (px) de una imagen de referencia antes de mandarla a la API — evita payloads gigantes.
 MAX_LADO_IMAGEN_REFERENCIA = 2048
@@ -134,7 +134,7 @@ def _normalizar_imagen(bytes_imagen):
 
 def _rasterizar_primera_pagina_pdf(archivo):
     """Primera página de un PDF (el system design puede subirse así) rasterizada a PNG — mismo
-    mecanismo que instrumentos/extraccion_ia_openai.py::_extraer_texto_o_imagenes_pdf (PyMuPDF),
+    mecanismo que jornadas/lectura_documentos.py::extraer_texto_o_imagenes_pdf (PyMuPDF),
     pero solo la portada: es una guía de marca de referencia, no un documento a transcribir."""
     import fitz  # PyMuPDF
 

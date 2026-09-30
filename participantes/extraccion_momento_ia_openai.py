@@ -1,7 +1,8 @@
-"""Lee un Momento ya diligenciado fuera de la web (PDF o Word) y lo transcribe con UNA sola
-llamada a OpenAI — mismo mecanismo que instrumentos.extraccion_ia_openai (ver ese módulo para el
-razonamiento completo de texto-vs-visión), portado acá porque este contenido vive en el modelo
-clásico `jornadas.Momento`/`jornadas.Pregunta`, no en el módulo `instrumentos`.
+"""Lee un Momento ya diligenciado fuera de la web (PDF o Word) y lo transcribe llamando a OpenAI —
+mismo mecanismo que instrumentos.extraccion_ia_openai (ver ese módulo para el razonamiento completo
+de texto-vs-visión y de por qué la transcripción se pide por lotes), portado acá porque este
+contenido vive en el modelo clásico `jornadas.Momento`/`jornadas.Pregunta`, no en el módulo
+`instrumentos`.
 
 El esquema que se le manda a la IA lleva, por pregunta, su id real, su tipo, sus opciones y —en
 las de tabla— sus filas y columnas con id propio. Transcribe los seis tipos de `Pregunta`,
@@ -13,7 +14,6 @@ normal desde la web (ver participantes.views).
 El resultado queda guardado en `ExtraccionMomento.resultado` (JSON) SIN tocar `Respuesta` — la
 escritura real pasa por `aprobar_extraccion_momento`, disparada a mano por un admin desde la
 vista (ver participantes/admin_views.py)."""
-import base64
 import json
 import os
 import threading
@@ -21,15 +21,25 @@ import threading
 from django.db import transaction
 from django.utils import timezone
 
-from jornadas import emparejamiento
+from jornadas import emparejamiento, lectura_documentos
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_TOKENS = 8000
 MODELO_USADO_LABEL = 'Generado con IA'
-MAX_PAGINAS_IMAGEN = 20
-UMBRAL_CARACTERES_POR_PAGINA = 40
+# Cuántas celdas (entradas de salida esperadas) se le piden como máximo en UNA llamada — ver
+# instrumentos.extraccion_ia_openai.PRESUPUESTO_CELDAS_POR_LLAMADA para el cálculo.
+PRESUPUESTO_CELDAS_POR_LLAMADA = 80
+# Cuántas filas agregadas se presupuestan para una pregunta que las acepta. No hay forma de saber
+# cuántas trae el documento antes de leerlo; 5 es lo que se ha visto en las jornadas reales y el
+# presupuesto de todos modos es un techo, no una cuota a llenar.
+FILAS_DINAMICAS_ESTIMADAS = 5
+MENSAJE_SIN_RESPUESTAS = (
+    'El documento no traía ninguna respuesta que se pudiera transcribir: todas sus casillas y '
+    'celdas están en blanco, o no corresponden a las preguntas de este momento. Verifica que el '
+    'archivo subido sea la copia YA DILIGENCIADA del formato y no la plantilla vacía.'
+)
 
 SYSTEM_PROMPT_EXTRACCION = (
     "Eres un transcriptor de formularios. Se te entrega, en JSON, el ESQUEMA completo de un "
@@ -96,87 +106,84 @@ SYSTEM_PROMPT_EXTRACCION = (
 )
 
 
-def _extraer_texto_docx(archivo):
-    from docx import Document
-
-    documento = Document(archivo)
-    partes = [p.text for p in documento.paragraphs if p.text.strip()]
-    for tabla in documento.tables:
-        for fila in tabla.rows:
-            celdas = [c.text.strip() for c in fila.cells]
-            if any(celdas):
-                partes.append(' | '.join(celdas))
-    return '\n'.join(partes)
-
-
-def _extraer_texto_o_imagenes_pdf(archivo):
-    import pdfplumber
-
-    archivo.seek(0)
-    paginas_texto = []
-    with pdfplumber.open(archivo) as pdf:
-        n_paginas = len(pdf.pages)
-        for pagina in pdf.pages:
-            paginas_texto.append(pagina.extract_text() or '')
-
-    texto = '\n'.join(paginas_texto).strip()
-    if n_paginas and len(texto) / n_paginas >= UMBRAL_CARACTERES_POR_PAGINA:
-        return texto, None
-
-    import fitz  # PyMuPDF
-
-    archivo.seek(0)
-    imagenes = []
-    documento = fitz.open(stream=archivo.read(), filetype='pdf')
-    for pagina in documento[:MAX_PAGINAS_IMAGEN]:
-        pixmap = pagina.get_pixmap(dpi=150)
-        imagenes.append(base64.b64encode(pixmap.tobytes('png')).decode('ascii'))
-    documento.close()
-    return None, imagenes
-
-
 def _leer_documento(extraccion):
-    nombre = extraccion.nombre_archivo_original or extraccion.archivo.name
-    extension = nombre.rsplit('.', 1)[-1].lower() if '.' in nombre else ''
+    """Despacha por extensión de archivo. Devuelve (texto_o_None, imagenes_base64_o_None).
 
+    La lectura misma vive en `jornadas.lectura_documentos`, compartida con la extracción de
+    instrumentos (ver el docstring de ese módulo: estaba duplicada y el bug de orden de los bloques
+    del .docx existía en las dos copias)."""
+    nombre = extraccion.nombre_archivo_original or extraccion.archivo.name
     extraccion.archivo.open('rb')
     try:
-        if extension == 'docx':
-            return _extraer_texto_docx(extraccion.archivo), None
-        if extension == 'pdf':
-            return _extraer_texto_o_imagenes_pdf(extraccion.archivo)
-        raise ValueError(f'Formato de archivo no soportado: .{extension} (solo .pdf o .docx).')
+        return lectura_documentos.leer_documento(extraccion.archivo, nombre)
     finally:
         extraccion.archivo.close()
 
 
-def _construir_payload_esquema(momento):
+def _payload_pregunta(pregunta):
     from jornadas.models import Pregunta
 
-    preguntas = []
-    for pregunta in momento.preguntas.filter(activa=True).order_by('orden'):
-        # Las columnas van tanto en matriz como en lista (una lista ES columnas fijas + filas
-        # dinámicas). Las filas predefinidas solo existen en matriz. `filas_adicionales` es lo que
-        # le dice a la IA si puede transcribir filas que no están en el esquema, usando
-        # fila_temporal — sin este dato en el payload la regla 6 del prompt no tendría cómo
-        # aplicarse pregunta por pregunta.
-        es_tabla = pregunta.tipo in (Pregunta.TIPO_MATRIZ, Pregunta.TIPO_LISTA)
-        preguntas.append({
-            'id': pregunta.id,
-            'texto': pregunta.texto,
-            'tipo': pregunta.tipo,
-            'filas_adicionales': pregunta.acepta_filas_dinamicas,
-            'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
-            'filas': (
-                [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()]
-                if pregunta.tipo == Pregunta.TIPO_MATRIZ else []
-            ),
-            'columnas': (
-                [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()]
-                if es_tabla else []
-            ),
-        })
-    return {'momento': momento.titulo, 'preguntas': preguntas}
+    # Las columnas van tanto en matriz como en lista (una lista ES columnas fijas + filas
+    # dinámicas). Las filas predefinidas solo existen en matriz. `filas_adicionales` es lo que
+    # le dice a la IA si puede transcribir filas que no están en el esquema, usando
+    # fila_temporal — sin este dato en el payload la regla 6 del prompt no tendría cómo
+    # aplicarse pregunta por pregunta.
+    es_tabla = pregunta.tipo in (Pregunta.TIPO_MATRIZ, Pregunta.TIPO_LISTA)
+    return {
+        'id': pregunta.id,
+        'texto': pregunta.texto,
+        'tipo': pregunta.tipo,
+        'filas_adicionales': pregunta.acepta_filas_dinamicas,
+        'opciones': [{'id': o.id, 'texto': o.texto} for o in pregunta.opciones.all()],
+        'filas': (
+            [{'id': f.id, 'texto': f.texto} for f in pregunta.filas.all()]
+            if pregunta.tipo == Pregunta.TIPO_MATRIZ else []
+        ),
+        'columnas': (
+            [{'id': c.id, 'texto': c.texto} for c in pregunta.columnas.all()]
+            if es_tabla else []
+        ),
+    }
+
+
+def _preguntas_activas(momento):
+    return list(momento.preguntas.filter(activa=True).order_by('orden'))
+
+
+def _construir_payload_esquema(momento):
+    """El esquema completo, sin partir. El pipeline real usa `_lotes_de_esquema`; esto queda como
+    la vista de "todo lo que la IA puede ver" para tests y depuración."""
+    return {
+        'momento': momento.titulo,
+        'preguntas': [_payload_pregunta(p) for p in _preguntas_activas(momento)],
+    }
+
+
+def _celdas_esperadas(pregunta):
+    """Cuántas entradas de salida puede llegar a producir una pregunta. Es lo que define el tamaño
+    de los lotes: una matriz de 14×4 sola ya son 56 entradas."""
+    from jornadas.models import Pregunta
+
+    if pregunta.tipo == Pregunta.TIPO_MATRIZ:
+        celdas = max(1, len(pregunta.filas.all()) * len(pregunta.columnas.all()))
+        if pregunta.acepta_filas_dinamicas:
+            celdas += len(pregunta.columnas.all()) * FILAS_DINAMICAS_ESTIMADAS
+        return celdas
+    if pregunta.tipo == Pregunta.TIPO_LISTA:
+        # Una lista no tiene filas predefinidas: todo lo que produzca son filas agregadas.
+        return max(1, len(pregunta.columnas.all()) * FILAS_DINAMICAS_ESTIMADAS)
+    return 1
+
+
+def _lotes_de_esquema(momento):
+    """El esquema partido en payloads que caben, cada uno, en una respuesta del modelo."""
+    lotes = lectura_documentos.agrupar_en_lotes(
+        _preguntas_activas(momento), _celdas_esperadas, PRESUPUESTO_CELDAS_POR_LLAMADA,
+    )
+    return [
+        {'momento': momento.titulo, 'preguntas': [_payload_pregunta(p) for p in lote]}
+        for lote in lotes
+    ]
 
 
 def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=None):
@@ -220,7 +227,16 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
             else:
                 kwargs['temperature'] = 0.2
             respuesta = client.chat.completions.create(**kwargs)
-            resultado['texto'] = respuesta.choices[0].message.content.strip()
+            eleccion = respuesta.choices[0]
+            # Truncado por tope de tokens: el JSON viene cortado a mitad y `json.loads` de más
+            # abajo falla con un error de sintaxis que no dice nada de la causa real.
+            if eleccion.finish_reason == 'length':
+                resultado['error'] = (
+                    f'La respuesta del modelo se truncó por el tope de {MAX_OUTPUT_TOKENS} tokens '
+                    'de salida: el bloque de preguntas pedido en esta llamada es demasiado grande.'
+                )
+                return
+            resultado['texto'] = eleccion.message.content.strip()
         except Exception as exc:  # noqa: BLE001
             resultado['error'] = str(exc)
 
@@ -239,6 +255,42 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
         return json.loads(texto), None
     except json.JSONDecodeError as exc:
         return None, f'OpenAI devolvió JSON inválido: {exc}'
+
+
+def _fusionar_responsable(acumulado, crudo):
+    """Junta el bloque `responsable` de varias llamadas quedándose con el primer valor no vacío de
+    cada campo — el documento entero viaja en todas, así que cualquiera puede leer el encabezado."""
+    if not isinstance(crudo, dict):
+        return acumulado
+    fusionado = dict(acumulado)
+    for clave in ('nombre', 'correo', 'cargo', 'dependencia'):
+        valor = crudo.get(clave)
+        if not fusionado.get(clave) and isinstance(valor, str) and valor.strip():
+            fusionado[clave] = valor.strip()
+    return fusionado
+
+
+def _transcribir_por_lotes(momento, texto_documento=None, imagenes_base64=None):
+    """Pide la transcripción en varias llamadas —una por lote de preguntas— y las junta en un solo
+    resultado con la misma forma que devolvía la llamada única de antes. Si cualquier lote falla,
+    falla toda la extracción: media transcripción sin avisar es indistinguible de un documento a
+    medio llenar."""
+    lotes = _lotes_de_esquema(momento)
+    if not lotes:
+        return None, 'El momento no tiene preguntas activas que transcribir.'
+
+    respuestas = []
+    responsable = {}
+    for numero, esquema in enumerate(lotes, start=1):
+        parcial, error = _llamar_openai_extraccion(
+            esquema, texto_documento=texto_documento, imagenes_base64=imagenes_base64,
+        )
+        if parcial is None:
+            return None, f'Bloque {numero} de {len(lotes)}: {error}'
+        respuestas.extend(parcial.get('respuestas') or [])
+        responsable = _fusionar_responsable(responsable, parcial.get('responsable'))
+
+    return {'responsable': responsable, 'respuestas': respuestas}, None
 
 
 def _limpiar_y_validar(resultado_crudo, momento):
@@ -343,8 +395,21 @@ def procesar_extraccion_momento(extraccion_id):
         extraccion.save(update_fields=['estado'])
 
         texto, imagenes = _leer_documento(extraccion)
-        esquema = _construir_payload_esquema(extraccion.momento)
-        resultado, error = _llamar_openai_extraccion(esquema, texto_documento=texto, imagenes_base64=imagenes)
+
+        if not imagenes and not (texto or '').strip():
+            # Documento del que no se pudo sacar ni una línea. No se gasta una llamada al proveedor
+            # para confirmarlo, y el mensaje dice qué pasó.
+            extraccion.estado = ExtraccionMomento.ESTADO_ERROR
+            extraccion.error_mensaje = (
+                'No se pudo leer ningún texto del documento. Verifica que el archivo no esté '
+                'vacío ni dañado.'
+            )
+            extraccion.save(update_fields=['estado', 'error_mensaje'])
+            return
+
+        resultado, error = _transcribir_por_lotes(
+            extraccion.momento, texto_documento=texto, imagenes_base64=imagenes,
+        )
 
         if resultado is None:
             extraccion.estado = ExtraccionMomento.ESTADO_ERROR
@@ -353,6 +418,22 @@ def procesar_extraccion_momento(extraccion_id):
             return
 
         limpio, omitidas = _limpiar_y_validar(resultado, extraccion.momento)
+
+        if not limpio['respuestas']:
+            # Ninguna respuesta utilizable: acá sí se mira DESPUÉS de validar (a diferencia de
+            # instrumentos, que no puede validar sin escribir), así que el corte cubre tanto el
+            # documento en blanco como el caso de que la IA haya devuelto solo ids inventados —
+            # `preguntas_omitidas` queda guardado para distinguir uno del otro. Sin esto la
+            # extracción quedaba en `completo` con cero respuestas: indistinguible de un fallo.
+            extraccion.resultado = limpio
+            extraccion.preguntas_omitidas = omitidas
+            extraccion.estado = ExtraccionMomento.ESTADO_ERROR
+            extraccion.error_mensaje = MENSAJE_SIN_RESPUESTAS
+            extraccion.modelo_usado = MODELO_USADO_LABEL
+            extraccion.save(update_fields=[
+                'resultado', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado',
+            ])
+            return
 
         # El responsable solo se busca si no lo dijeron al subir: un participante indicado a mano
         # es una decisión humana y no se pisa con lo que haya leído la IA.

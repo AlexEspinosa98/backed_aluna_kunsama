@@ -68,8 +68,10 @@ services:
       # vive en la imagen ni se descarga en cada build — se monta desde el host, igual que media/ y
       # staticfiles/ (bind mount, no volumen con nombre: así restaurar un respaldo es un `cp` a una
       # ruta del proyecto, sin tener que entrar a un volumen de Docker). Se puebla sola la primera
-      # vez que corre un análisis (o se restaura desde un respaldo — ver docs/DOCKER.md).
-      - ./.hf_cache:/home/kunsama/.cache/huggingface
+      # vez que corre un análisis (o se restaura desde un respaldo — ver docs/DOCKER.md). Montada
+      # DENTRO de /app (no en /home/kunsama) para no depender de nada fuera del árbol de la app —
+      # ver la nota de HF_HOME/NUMBA_CACHE_DIR en el Dockerfile.
+      - ./.hf_cache:/app/.hf_cache
     command: >
       gunicorn config.wsgi:application
       --bind 0.0.0.0:8000
