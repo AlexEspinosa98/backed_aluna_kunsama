@@ -31,10 +31,34 @@ respuestas reales.
 `aprobar/` **sigue existiendo y responde 200**, por si todavía le pegan desde algún flujo: es
 idempotente y no duplica nada. Pero ya no hace falta y conviene sacarlo.
 
-### El único caso que sigue necesitando un paso humano
+### Si el responsable no estaba registrado, se crea solo (HU-86)
+
+Antes, un responsable que no coincidía con nadie de la jornada obligaba a registrarlo a mano y
+después asignarle el documento. **Ya no**: se da de alta con el nombre del documento y la
+transcripción se escribe igual, en la misma pasada. `responsable_estado` llega como `creado`:
+
+```json
+{ "estado": "completo", "aprobado_en": "2026-10-04T15:40:02Z",
+  "participante": 88,
+  "responsable_detectado": {"nombre": "Rosa Elena Pardo Lince", "cargo": "Jefa de Departamento"},
+  "responsable_estado": "creado" }
+```
+
+Vale la pena mostrarlo distinto de `emparejado` en la pantalla de revisión: son personas nuevas
+creadas a partir de un papel, con `rol` en `"sin rol"` y —si el documento no traía correo— un
+correo de relleno en `@sin-registro.local` con el que no pueden entrar a la plataforma. Si después
+se registran de verdad, es la persona que hay que reconciliar.
+
+El segundo documento de esa misma persona **no la duplica**: llega como `emparejado` apuntando al
+participante ya creado, incluso si el nombre viene escrito con otras mayúsculas o tildes.
+
+### Los dos casos que todavía necesitan un paso humano
 
 Si la IA no pudo identificar de quién es el documento, no hay a nombre de quién guardar las
-respuestas. Ahí `estado` queda `completo` pero `aprobado_en` viene en `null`:
+respuestas. Pasa en dos casos: `ambiguo` (el nombre coincide con más de una persona ya registrada
+— ahí no se crea una tercera homónima a propósito) y `sin_dato` (el documento no traía responsable,
+así que no hay nombre con el que crear a nadie). En los dos, `estado` queda `completo` pero
+`aprobado_en` viene en `null`:
 
 ```json
 { "estado": "completo", "aprobado_en": null,
@@ -51,8 +75,9 @@ POST /api/admin/momento-extracciones/{id}/asignar-responsable/
 ```
 
 La respuesta vuelve con `aprobado_en` lleno. Valores posibles de `responsable_estado`:
-`sin_dato` (el documento no traía responsable), `sin_coincidencia` (lo leyó pero no coincide con
-nadie de la jornada), `ambiguo` (coincide con más de una persona).
+`emparejado` (coincidió con alguien ya registrado), `creado` (no coincidió y se dio de alta con el
+nombre del documento), `ambiguo` (coincide con más de una persona), `sin_dato` (el documento no
+traía responsable) y `no_buscado` (el responsable se indicó a mano al subir).
 
 ---
 
