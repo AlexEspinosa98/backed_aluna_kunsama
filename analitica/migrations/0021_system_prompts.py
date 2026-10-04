@@ -10,13 +10,14 @@ from django.db import migrations, models
 # `analitica/system_prompts_semilla/`. Esos archivos existen SOLO para esta siembra: lo que corre
 # es la tabla. No editarlos — un cambio a un prompt es una versión nueva desde la API.
 SEMILLA = Path(__file__).resolve().parent.parent / 'system_prompts_semilla'
+# (etiqueta ≤ 60 caracteres, de dónde salió el texto)
 ETIQUETAS = {
-    'analisis_llm': 'v2.2 — analista principal (era v2/recursos/SYSTEM_PROMPT_LLM.md)',
-    'analisis_bertopic': 'v2.2 (era v2/recursos/SYSTEM_PROMPT_BERTOPIC.md)',
-    'infografia': 'Prefijo de las láminas (era SYSTEM_PROMPT_PREFIJO)',
-    'presentacion': 'Presentación HTML (era presentacion.SYSTEM_PROMPT)',
-    'presentacion_diseno': 'Diagramación (era presentacion_diseno_ia.SYSTEM_PROMPT)',
-    'sugerencias': 'Sugerencias del análisis guiado (era sugerencias_ia_openai.SYSTEM_PROMPT)',
+    'analisis_llm': ('v2.2 — analista principal', 'analitica/v2/recursos/SYSTEM_PROMPT_LLM.md'),
+    'analisis_bertopic': ('v2.2', 'analitica/v2/recursos/SYSTEM_PROMPT_BERTOPIC.md'),
+    'infografia': ('Prefijo de las láminas', 'infografia_ia_openai.SYSTEM_PROMPT_PREFIJO'),
+    'presentacion': ('Presentación HTML', 'presentacion.SYSTEM_PROMPT'),
+    'presentacion_diseno': ('Diagramación (HU §6)', 'presentacion_diseno_ia.SYSTEM_PROMPT'),
+    'sugerencias': ('Sugerencias del análisis guiado', 'sugerencias_ia_openai.SYSTEM_PROMPT'),
 }
 
 
@@ -25,12 +26,15 @@ def sembrar(apps, schema_editor):
 
     SystemPrompt = apps.get_model('analitica', 'SystemPrompt')
     ahora = timezone.now()
-    for tipo, etiqueta in ETIQUETAS.items():
+    for tipo, (etiqueta, origen) in ETIQUETAS.items():
         if SystemPrompt.objects.filter(tipo=tipo).exists():
             continue
         SystemPrompt.objects.create(
             tipo=tipo, version=1, etiqueta=etiqueta,
-            notas='Versión inicial: el texto que usaba el código antes de mover los prompts a la tabla.',
+            notas=(
+                'Versión inicial: el texto que usaba el código antes de mover los prompts a la '
+                f'tabla (HU-92), tomado de `{origen}`.'
+            ),
             contenido=(SEMILLA / f'{tipo}.md').read_text(encoding='utf-8'),
             activo=True, activado_en=ahora,
         )
