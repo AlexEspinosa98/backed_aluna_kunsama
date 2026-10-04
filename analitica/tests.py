@@ -808,7 +808,8 @@ class InfografiaTituloResueltoEnCodigoTests(SimpleTestCase):
 
         # Caso exacto del bug: análisis de JORNADA, sin `momento` en los datos.
         datos = {'jornada': 'Mujeres al Mar - Mesas', 'resumen_ejecutivo': '…', 'hallazgos': []}
-        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        # El prefijo viene de la tabla SystemPrompt (HU-92); acá se prueba solo el título.
+        prompt = _construir_prompt(datos, slide=SLIDES[0], prefijo='Prefijo de prueba')
         self.assertIn('"Mujeres al Mar - Mesas"', prompt)
         self.assertNotIn('el campo', prompt.lower())
         self.assertNotIn('`momento`', prompt)
@@ -818,5 +819,6 @@ class InfografiaTituloResueltoEnCodigoTests(SimpleTestCase):
         from .infografia_ia_openai import SLIDES, _construir_prompt
 
         datos = {'momento': 'Diálogos mesas', 'jornada': 'Mujeres al Mar', 'hallazgos': []}
-        prompt = _construir_prompt(datos, slide=SLIDES[0])
+        # El prefijo viene de la tabla SystemPrompt (HU-92); acá se prueba solo el título.
+        prompt = _construir_prompt(datos, slide=SLIDES[0], prefijo='Prefijo de prueba')
         self.assertIn('"Diálogos mesas"', prompt)

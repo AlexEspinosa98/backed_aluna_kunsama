@@ -7,7 +7,7 @@ campos de siempre (`resultado` / `analisis`).
 Secuencia:
   entrada normalizada → [BERTopic si el pipeline lo pide] → GUARDAR la entrada (inmutable, vía
   `al_guardar_entrada`) → si no hay respuestas: salida sin_datos del backend; si hay: system =
-  archivo del prompt, user = JSON de la entrada → OpenAI estructurado → validar (esquema +
+  el `SystemPrompt` activo del pipeline (HU-92), user = JSON de la entrada → OpenAI estructurado → validar (esquema +
   negocio) → si falla, UN reintento de reparación → validar → resultado publicado, o error con
   todo lo descartado en `diagnostico` para auditoría.
 """
@@ -17,7 +17,7 @@ import os
 from django.db import close_old_connections
 from django.utils import timezone
 
-from .contrato import PIPELINE_BERTOPIC_LLM, VERSION_ESQUEMA, VERSION_PROMPT, cargar_prompt
+from .contrato import PIPELINE_BERTOPIC_LLM, TIPO_PROMPT_POR_PIPELINE, VERSION_ESQUEMA
 from .entrada import construir_entrada, hay_respuestas
 from .llm import MODELO_USADO_LABEL, llamar_openai_estructurado
 from .sin_datos import construir_salida_sin_datos
@@ -35,16 +35,22 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
       {'ok': bool, 'entrada': dict, 'salida': dict|None, 'error': str|None,
        'prompt_usado': str, 'modelo_usado': str, 'diagnostico': dict,
        'version_esquema': str, 'version_prompt': str}
-    `al_guardar_entrada(entrada)` se invoca en cuanto la entrada está armada y ANTES de llamar a
-    la IA, para que quien persiste la guarde inmutable: los JSON Pointers de la salida se validan
-    contra esa versión exacta. `referencia` identifica la corrida en el bloque BERTopic."""
+    `al_guardar_entrada(entrada, version_prompt)` se invoca en cuanto la entrada está armada y
+    ANTES de llamar a la IA, para que quien persiste la guarde inmutable: los JSON Pointers de la
+    salida se validan contra esa versión exacta. `version_prompt` es la referencia del
+    `SystemPrompt` activo (HU-92), que se fija al empezar para que toda la corrida —incluido el
+    reintento de reparación— use la misma versión aunque alguien active otra a mitad de camino. `referencia` identifica la corrida en el bloque BERTopic."""
     diagnostico = {'bertopic': [], 'intentos': []}
     resultado = {
         'ok': False, 'entrada': {}, 'salida': None, 'error': None, 'prompt_usado': '',
         'modelo_usado': '', 'diagnostico': diagnostico,
-        'version_esquema': VERSION_ESQUEMA, 'version_prompt': VERSION_PROMPT,
+        'version_esquema': VERSION_ESQUEMA, 'version_prompt': '',
     }
     try:
+        from analitica.models import SystemPrompt
+
+        prompt = SystemPrompt.activo_de(TIPO_PROMPT_POR_PIPELINE[pipeline])
+        resultado['version_prompt'] = prompt.referencia
         entrada = construir_entrada(
             jornada, modo, list(momentos or []), contexto=contexto, instrucciones=instrucciones,
             personalizacion_momentos=personalizacion_momentos,
@@ -55,7 +61,7 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
             diagnostico['bertopic'] = notas
         resultado['entrada'] = entrada
         if al_guardar_entrada is not None:
-            al_guardar_entrada(entrada)
+            al_guardar_entrada(entrada, prompt.referencia)
 
         if not hay_respuestas(entrada):
             salida = construir_salida_sin_datos(entrada, pipeline)
@@ -74,7 +80,7 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
                 f'El alcance es demasiado grande para una sola llamada ({len(user)} caracteres, '
                 f'máximo {MAX_CARACTERES_ENTRADA}). Pide el análisis por momento con menos momentos.'
             )
-        system = cargar_prompt(pipeline)
+        system = prompt.contenido
         resultado['prompt_usado'] = system
 
         salida, error, meta = llamar_openai_estructurado(system, user)
@@ -121,10 +127,10 @@ def resumen_de_salida(salida):
 def guardador_de_entrada(registro):
     """Callback `al_guardar_entrada` para cualquier registro con `ResultadoV2Mixin` (o
     `AnalisisV2`): persiste la entrada y las versiones ANTES de la llamada a la IA."""
-    def _guardar(entrada):
+    def _guardar(entrada, version_prompt):
         registro.entrada = entrada
         registro.version_esquema = VERSION_ESQUEMA
-        registro.version_prompt = VERSION_PROMPT
+        registro.version_prompt = version_prompt
         registro.save(update_fields=['entrada', 'version_esquema', 'version_prompt'])
     return _guardar
 
@@ -176,10 +182,10 @@ def procesar_analisis_v2(analisis_id):
         analisis.estado = AnalisisV2.ESTADO_PROCESANDO
         analisis.save(update_fields=['estado'])
 
-        def _guardar_entrada(entrada):
+        def _guardar_entrada(entrada, version_prompt):
             analisis.entrada = entrada
             analisis.version_esquema = VERSION_ESQUEMA
-            analisis.version_prompt = VERSION_PROMPT
+            analisis.version_prompt = version_prompt
             analisis.save(update_fields=['entrada', 'version_esquema', 'version_prompt'])
 
         r = ejecutar_analisis_v2(

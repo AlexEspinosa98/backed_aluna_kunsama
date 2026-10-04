@@ -269,7 +269,7 @@ Detalle (`AnalisisV2Serializer`) — todo lo de la lista más `resultado`, `entr
 | `resultado` | El JSON `kunsamu.analisis/v2` validado (ver §5). `{}` mientras `estado` no es `completo`. |
 | `entrada` | El sobre exacto (`ENTRADA_Y_BERTOPIC.md`) que se mandó al modelo — guardado ANTES de llamar y nunca recalculado. Sirve para resolver en el cliente los `localizador` (JSON Pointer) de las citas y de los documentos BERTopic, si se quiere mostrar el texto fuente exacto. |
 | `diagnostico` | `{"bertopic": [...], "intentos": [...]}` — notas del adaptador BERTopic (una por pregunta: `ok`/`insuficiente`/`error`) y metadatos de cada llamada a OpenAI (`modo_salida`, `finish_reason`, `usage`, errores de validación de intentos fallidos). Nunca incluye el nombre del proveedor/modelo real. |
-| `prompt_usado` | El contenido íntegro de `SYSTEM_PROMPT_LLM.md` o `SYSTEM_PROMPT_BERTOPIC.md` tal cual se mandó como `system` — `""` cuando el resultado es `sin_datos` (no hubo llamada). |
+| `prompt_usado` | El contenido íntegro del system prompt activo del pipeline (`analisis_llm` o `analisis_bertopic`, ver `INTEGRACION_FRONTEND_SYSTEM_PROMPTS.md`) tal cual se mandó como `system` — `""` cuando el resultado es `sin_datos` (no hubo llamada). `version_prompt` dice qué versión fue (ej. `analisis_llm#3`). |
 
 Campos comunes a lista y detalle (`_AnalisisV2CamposDerivados` en `serializers.py`):
 

@@ -1,5 +1,14 @@
 # System prompts — estado real del código
 
+> **Desde HU-92 los prompts de la analítica viven en la tabla `analitica.SystemPrompt`**, no en el
+> código: análisis v2 (`analisis_llm`, `analisis_bertopic`), infografía, presentación HTML, diseño
+> de presentación y sugerencias. Lo que corre es la versión **activa** de cada tipo; el texto
+> vigente se consulta en `GET /api/admin/system-prompts/activos/` (ver
+> [`INTEGRACION_FRONTEND_SYSTEM_PROMPTS.md`](INTEGRACION_FRONTEND_SYSTEM_PROMPTS.md)). La versión 1
+> de cada uno es el texto que estaba en el código, guardado en `analitica/system_prompts_semilla/`.
+> Las secciones de abajo que citan esos prompts describen la versión 1; las de los flujos legacy
+> y de extracción/transcripción siguen siendo el código.
+
 Referencia viva de los prompts que de verdad corren hoy en producción, por módulo, con el texto
 **literal** tal como está en el código (no resumido). Se actualiza cuando el código cambia — si
 un texto de acá no coincide con el archivo que cita, el código manda, no este documento.

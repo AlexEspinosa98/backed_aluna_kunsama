@@ -19,21 +19,7 @@ SUGERENCIAS_TIMEOUT_SECONDS = 8
 SUGERENCIAS_MAX_TOKENS = 500
 TIPOS_VALIDOS = ('contexto', 'instruccion')
 
-SYSTEM_PROMPT = (
-    "Ayudas a alguien a preparar el ENCARGO de un análisis de datos de una jornada participativa "
-    "— todavía no hay resultados que leer: solo se te da de qué trata la jornada y sus momentos, "
-    "y cuántas respuestas tiene cada uno, para sugerir cómo ENMARCAR el análisis, nunca qué dicen "
-    "los datos (no los tienes, y no debes inventar que sí). Con el enfoque, el contexto y las "
-    "instrucciones que la persona ya escribió, sugiere entre 0 y 6 ideas cortas (una frase cada "
-    "una) para afinar el contexto o las instrucciones — nunca repitas ni parafrasees algo que la "
-    "persona ya escribió, y nunca sugieras algo genérico que serviría para cualquier jornada. En "
-    "español.\n\n"
-    "Responde ÚNICAMENTE con un objeto JSON válido, sin explicación antes ni después, sin fences "
-    "de markdown, con esta forma exacta:\n"
-    '{"sugerencias": [{"tipo": "contexto" | "instruccion", "texto": "<una frase corta>"}]}\n\n'
-    '0 sugerencias (`"sugerencias": []`) es una respuesta válida y preferible a forzar ideas '
-    "que no aportarían nada."
-)
+# El system prompt vive desde HU-92 en la tabla `SystemPrompt`, tipo `sugerencias`.
 
 
 def _payload_momentos(jornada, momento_ids):
@@ -75,6 +61,14 @@ def generar_sugerencias(jornada, momento_ids, metodo, enfoque, contexto, instruc
     if not api_key:
         return []
 
+    from .models import SystemPrompt
+
+    try:
+        system = SystemPrompt.activo_de(SystemPrompt.TIPO_SUGERENCIAS).contenido
+    except SystemPrompt.DoesNotExist:
+        # Mismo criterio que cualquier otra falla acá: el frontend nunca se bloquea por esto.
+        return []
+
     payload = {
         'jornada': jornada.nombre,
         'jornada_contexto': jornada.descripcion,
@@ -95,7 +89,7 @@ def generar_sugerencias(jornada, momento_ids, metodo, enfoque, contexto, instruc
             respuesta = client.chat.completions.create(
                 model=SUGERENCIAS_MODEL,
                 messages=[
-                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'system', 'content': system},
                     {'role': 'user', 'content': user},
                 ],
                 max_completion_tokens=SUGERENCIAS_MAX_TOKENS,

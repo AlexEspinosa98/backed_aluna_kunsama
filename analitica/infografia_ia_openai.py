@@ -39,27 +39,16 @@ GENERATION_TIMEOUT_SECONDS = 300
 # sobre 3840 y entre 655.360 y 8.294.400 píxeles en total. Por eso NO se usa 1920x1080: 1080 no es
 # múltiplo de 16 y la API responde 400 `Invalid size`. 2048x1152 es 16:9 exacto y cumple todo.
 TAMANO_INFOGRAFIA = os.environ.get('OPENAI_IMAGE_SIZE', '2048x1152')
-PROPORCION_INFOGRAFIA = '16:9'
 # Tope de assets tipo 'asset' que se mandan como referencia (+ 1 system_design aparte) — controla
 # costo/tiempo de la llamada, igual espíritu que MAX_PAGINAS_IMAGEN en jornadas/lectura_documentos.py.
 MAX_ASSETS_REFERENCIA = 4
 # Lado máximo (px) de una imagen de referencia antes de mandarla a la API — evita payloads gigantes.
 MAX_LADO_IMAGEN_REFERENCIA = 2048
 
-# Solo lo imprescindible: el formato de salida, la regla de una-lámina-por-imagen (verificada
-# contra el modelo: sin ella apila las tres secciones en una) y la referencia de marca, que es
-# para lo que existen los assets. Todo lo demás —composición, tipografía, cuántos bloques, cuánto
-# texto— se dejó fuera a propósito: son decisiones de diseño que pertenecen al system design de
-# cada jornada y al campo `instrucciones`, y tenerlas acá las convertía en algo que había que
-# pelear desde la API en vez de simplemente definir.
-SYSTEM_PROMPT_PREFIJO = (
-    f"Diseña UNA SOLA lámina apaisada en {PROPORCION_INFOGRAFIA}, para proyectar. Nunca la "
-    "maquetes en vertical ni en cuadrado."
-    "\n\nEsta imagen contiene ÚNICAMENTE el contenido de la lámina que se describe abajo: no "
-    "apiles varias secciones una debajo de otra ni agregues bandas con otros bloques temáticos."
-    "\n\nSi se adjuntan imágenes de referencia (fotos, logo o guía de marca), respeta su paleta, "
-    "su tipografía y su estilo. Todo el texto en español."
-)
+# El prompt BASE de las láminas (formato, una lámina por imagen, respeto a la marca) vive desde
+# HU-92 en la tabla `SystemPrompt`, tipo `infografia`: se elige qué versión está activa sin tocar
+# código. Lo que sigue en el código es la ESTRUCTURA (qué va en cada lámina, el orden de los
+# bloques) y la regla de datos de abajo, que no se puede cambiar desde ningún lado.
 
 # Va SIEMPRE al final del prompt, después de las instrucciones personalizadas, y por eso está
 # separada del prefijo: es la única regla que no se puede sobreescribir desde la API. Una lámina
@@ -350,12 +339,19 @@ def _titulo_lamina(datos_analitica):
     return datos_analitica.get('momento') or datos_analitica.get('jornada') or ''
 
 
-def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instrucciones=''):
+def _construir_prompt(datos_analitica, texto_system_design='', slide=None, instrucciones='',
+                      prefijo=None):
     """El orden importa: lo que va después pesa más. Las instrucciones personalizadas se colocan
     al final, justo antes de la regla de datos, para que puedan contradecir el estilo, la
     estructura y el contenido del prompt base — que es exactamente para lo que existen. Lo único
-    que queda después, y por lo tanto fuera de su alcance, es `REGLA_DATOS`."""
-    partes = [SYSTEM_PROMPT_PREFIJO]
+    que queda después, y por lo tanto fuera de su alcance, es `REGLA_DATOS`.
+
+    `prefijo`: el contenido del `SystemPrompt` de infografía a usar; si no viene, el activo."""
+    if prefijo is None:
+        from .models import SystemPrompt
+
+        prefijo = SystemPrompt.activo_de(SystemPrompt.TIPO_INFOGRAFIA).contenido
+    partes = [prefijo]
     if slide is not None:
         instruccion = slide['instruccion']
         if slide['clave'] == 'portada':
@@ -435,7 +431,7 @@ def _llamar_openai_imagen(prompt, imagenes_referencia_png):
     return resultado['imagenes'][0], None
 
 
-def _generar_slides(datos, texto_system_design, imagenes_referencia, instrucciones=''):
+def _generar_slides(datos, texto_system_design, imagenes_referencia, instrucciones='', prefijo=None):
     """Una llamada por lámina, en paralelo. Devuelve (lista alineada con SLIDES —None donde falló—,
     lista de errores). En paralelo y no en serie porque tres llamadas encadenadas de ~80s se
     acercan demasiado al timeout; es el mismo patrón de ThreadPoolExecutor que ya usa
@@ -445,7 +441,7 @@ def _generar_slides(datos, texto_system_design, imagenes_referencia, instruccion
 
     def _una(indice):
         slide = SLIDES[indice]
-        prompt = _construir_prompt(datos, texto_system_design, slide, instrucciones)
+        prompt = _construir_prompt(datos, texto_system_design, slide, instrucciones, prefijo=prefijo)
         png, error = _llamar_openai_imagen(prompt, imagenes_referencia)
         return indice, png, error
 
@@ -467,7 +463,7 @@ def generar_infografias(infografia_id):
     from django.db import close_old_connections
 
     close_old_connections()
-    from .models import InfografiaImagen, InfografiaJornada
+    from .models import InfografiaImagen, InfografiaJornada, SystemPrompt
 
     infografia = None
     try:
@@ -492,15 +488,20 @@ def generar_infografias(infografia_id):
         texto_system_design = _texto_system_design(jornada)
         imagenes_referencia = _reunir_imagenes_referencia(jornada)
         instrucciones = infografia.instrucciones
+        # Una sola versión del prompt para las tres láminas, fijada al empezar: si alguien activa
+        # otra mientras corren en paralelo, la serie no queda mezclada.
+        system_prompt = SystemPrompt.activo_de(SystemPrompt.TIPO_INFOGRAFIA)
+        infografia.version_prompt = system_prompt.referencia
         # Se guarda el prompt de la primera lámina: las tres comparten prefijo, datos, guía de
         # marca e instrucciones, y solo cambia el bloque de la lámina — con una alcanza para
         # entender qué se pidió, incluidas las instrucciones personalizadas ya integradas.
         infografia.prompt_usado = _construir_prompt(
-            datos, texto_system_design, SLIDES[0], instrucciones,
+            datos, texto_system_design, SLIDES[0], instrucciones, prefijo=system_prompt.contenido,
         )
 
         imagenes_png, errores = _generar_slides(
             datos, texto_system_design, imagenes_referencia, instrucciones,
+            prefijo=system_prompt.contenido,
         )
 
         generadas = 0
@@ -529,7 +530,8 @@ def generar_infografias(infografia_id):
                 ' | '.join(errores) or 'Error desconocido generando la infografía.'
             )
         infografia.save(update_fields=[
-            'prompt_usado', 'estado', 'error_mensaje', 'modelo_usado', 'completado_en',
+            'prompt_usado', 'version_prompt', 'estado', 'error_mensaje', 'modelo_usado',
+            'completado_en',
         ])
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
         if infografia is not None:
