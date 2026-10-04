@@ -1415,7 +1415,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
         escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
              'columna_id': self.col_1.id, 'texto_libre': 'Nuevo', 'opcion_ids': []},
-        ]), self.admin)
+        ]), self.admin, modo='sobrescribir')
         self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
         self.assertEqual(
             list(Respuesta.objects.filter(
@@ -1434,7 +1434,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
 
         escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Otra cosa', 'opcion_ids': []},
-        ]), self.admin)
+        ]), self.admin, modo='sobrescribir')
         self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
         self.assertEqual(
             Respuesta.objects.get(pregunta=self.matriz, fila_lista__isnull=False).texto_libre, 'Se queda',
@@ -1855,14 +1855,16 @@ class CrearResponsableDesdeDocumentoTests(BaseJornadaTestCase):
         self.assertTrue(primera.correo_institucional.endswith('@sin-registro.local'))
         self.assertNotEqual(primera.correo_institucional, segunda.correo_institucional)
 
-    def test_el_segundo_documento_de_la_misma_persona_la_empareja_en_vez_de_duplicarla(self):
+    def test_el_segundo_documento_de_la_misma_persona_la_reconoce_en_vez_de_duplicarla(self):
         """Es lo que evita que una carga masiva llene la jornada de duplicados: el emparejamiento
-        compara nombres normalizados, así que reconoce al que se creó en la carga anterior."""
+        compara nombres normalizados, así que reconoce al que se creó en la carga anterior. Como
+        esa persona ya tiene respuestas, desde HU-91 queda sugerida y sin escribir (ver
+        ConflictoRespuestasPreviasTests)."""
         primera = self._correr({'nombre': 'Rosa Elena Pardo Lince'})
         segunda = self._correr({'nombre': 'ROSA  ELENA   PARDO LINCE'})
 
-        self.assertEqual(segunda.responsable_estado, emparejamiento.ESTADO_EMPAREJADO)
-        self.assertEqual(segunda.participante_id, primera.participante_id)
+        self.assertEqual(segunda.responsable_estado, emparejamiento.ESTADO_CON_RESPUESTAS)
+        self.assertEqual(segunda.participante_sugerido_id, primera.participante_id)
         self.assertEqual(Participante.objects.filter(jornada=self.jornada).count(),
                          self._participantes_base + 1)
 
@@ -1997,3 +1999,261 @@ class AsignarResponsableCreandoloTests(BaseJornadaTestCase):
             self._asignar({'participante_id': persona.id, 'nombre': 'Otro Nombre'}).status_code,
             400,
         )
+
+
+class ConflictoRespuestasPreviasTests(BaseJornadaTestCase):
+    """HU-91: un documento de alguien que YA respondió el momento no le pisa las respuestas. Queda
+    sugerido y sin escribir, y quien cargó elige: sobrescribir, versión nueva u otra persona.
+
+    El caso real que lo motivó: cinco personas que habían respondido por la web y a quienes una
+    carga de documentos les reemplazó, celda por celda, lo que habían contestado."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_hu91', password='pass12345', is_staff=True,
+        )
+        datos = self.registrar_participante(nombre='Jorge', apellido='Ortega').data
+        self.persona = Participante.objects.get(token=datos['token'])
+        # Responde por la web: esa es la versión original que no se puede perder.
+        resp = self.client.post(
+            f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/',
+            {'respuestas': [
+                {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'De la web'},
+                {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_a.id]},
+            ]},
+            format='json', **self.auth_header(datos['token']),
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.client.force_authenticate(user=self.admin)
+
+    def _procesar(self, responsable=None, texto='Del documento', **campos):
+        extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual, archivo=SimpleUploadedFile('d.docx', b'x'),
+            solicitado_por=self.admin, **campos,
+        )
+        modulo = 'participantes.extraccion_momento_ia_openai'
+        crudo = {
+            'responsable': responsable or {'nombre': 'Jorge Ortega'},
+            'respuestas': [{'pregunta': self.pregunta_abierta.id, 'texto_libre': texto,
+                            'opcion_ids': []}],
+        }
+        with patch(f'{modulo}._leer_documento', return_value=('texto', None)), \
+                patch(f'{modulo}._transcribir_por_lotes', return_value=(crudo, None)):
+            procesar_extraccion_momento(extraccion.id)
+        extraccion.refresh_from_db()
+        return extraccion
+
+    def _asignar(self, extraccion, cuerpo):
+        return self.client.post(
+            f'/api/admin/momento-extracciones/{extraccion.id}/asignar-responsable/',
+            cuerpo, format='json',
+        )
+
+    def _textos(self, version):
+        return list(Respuesta.objects.filter(
+            participante=self.persona, pregunta=self.pregunta_abierta, version=version,
+        ).values_list('texto_libre', flat=True))
+
+    def test_no_escribe_y_deja_a_la_persona_sugerida(self):
+        extraccion = self._procesar()
+
+        self.assertEqual(extraccion.estado, ExtraccionMomento.ESTADO_COMPLETO)
+        self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_CON_RESPUESTAS)
+        self.assertIsNone(extraccion.participante)
+        self.assertEqual(extraccion.participante_sugerido, self.persona)
+        self.assertIsNone(extraccion.aprobado_en)
+        self.assertEqual(self._textos(1), ['De la web'])
+
+        datos = self.client.get(f'/api/admin/momento-extracciones/{extraccion.id}/').data
+        self.assertTrue(datos['requiere_decision'])
+        self.assertEqual(datos['versiones_existentes'], [1])
+        self.assertEqual(datos['participante_sugerido_nombre'], 'Jorge Ortega')
+
+    def test_tambien_si_la_persona_se_indico_a_mano_al_subir(self):
+        """Elegirla al subir no es elegir pisarle lo que ya tenía."""
+        extraccion = self._procesar(participante=self.persona)
+        self.assertIsNone(extraccion.participante)
+        self.assertEqual(extraccion.participante_sugerido, self.persona)
+        self.assertEqual(self._textos(1), ['De la web'])
+
+    def test_sin_modo_es_409_y_no_deja_nada_a_medias(self):
+        extraccion = self._procesar()
+        resp = self._asignar(extraccion, {'participante_id': self.persona.id})
+
+        self.assertEqual(resp.status_code, 409)
+        self.assertEqual(resp.data['versiones_existentes'], [1])
+        extraccion.refresh_from_db()
+        self.assertIsNone(extraccion.participante)
+        self.assertEqual(self._textos(1), ['De la web'])
+
+    def test_nueva_version_convive_con_la_original(self):
+        extraccion = self._procesar()
+        resp = self._asignar(extraccion, {'participante_id': self.persona.id, 'modo': 'nueva_version'})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['version_escrita'], 2)
+        self.assertEqual(self._textos(1), ['De la web'])
+        self.assertEqual(self._textos(2), ['Del documento'])
+        # La única de la web sigue en la original: la opción única no la tocó el documento.
+        self.assertTrue(Respuesta.objects.filter(
+            participante=self.persona, pregunta=self.pregunta_unica, version=1,
+        ).exists())
+
+    def test_sobrescribir_actualiza_la_version_existente(self):
+        extraccion = self._procesar()
+        resp = self._asignar(extraccion, {'participante_id': self.persona.id, 'modo': 'sobrescribir'})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['version_escrita'], 1)
+        self.assertEqual(self._textos(1), ['Del documento'])
+        self.assertFalse(Respuesta.objects.filter(participante=self.persona, version=2).exists())
+
+    def test_con_varias_versiones_sobrescribir_pide_cual(self):
+        primera = self._procesar()
+        self._asignar(primera, {'participante_id': self.persona.id, 'modo': 'nueva_version'})
+        segunda = self._procesar(texto='Corregido')
+
+        self.assertEqual(self.client.get(
+            f'/api/admin/momento-extracciones/{segunda.id}/'
+        ).data['versiones_existentes'], [1, 2])
+        resp = self._asignar(segunda, {'participante_id': self.persona.id, 'modo': 'sobrescribir'})
+        self.assertEqual(resp.status_code, 400)
+
+        resp = self._asignar(
+            segunda, {'participante_id': self.persona.id, 'modo': 'sobrescribir', 'version': 2},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self._textos(1), ['De la web'])
+        self.assertEqual(self._textos(2), ['Corregido'])
+
+    def test_crear_otra_persona_aunque_el_nombre_coincida(self):
+        extraccion = self._procesar()
+        resp = self._asignar(extraccion, {'nombre': 'Jorge Ortega', 'nuevo': True})
+
+        self.assertEqual(resp.status_code, 200)
+        extraccion.refresh_from_db()
+        self.assertNotEqual(extraccion.participante_id, self.persona.id)
+        self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_CREADO)
+        self.assertEqual(extraccion.version_escrita, 1)
+        self.assertEqual(self._textos(1), ['De la web'])
+
+    def test_la_web_solo_ve_y_corrige_la_version_original(self):
+        extraccion = self._procesar()
+        self._asignar(extraccion, {'participante_id': self.persona.id, 'modo': 'nueva_version'})
+        self.client.force_authenticate(user=None)
+        url = f'/api/jornadas/{self.jornada.slug}/momentos/{self.momento_individual.id}/respuestas/'
+        cabecera = self.auth_header(str(self.persona.token))
+
+        visibles = self.client.get(url, **cabecera).data
+        self.assertEqual({r['version'] for r in visibles}, {1})
+
+        self.client.post(url, {'respuestas': [
+            {'pregunta_id': self.pregunta_abierta.id, 'texto_libre': 'Editado en la web'},
+            {'pregunta_id': self.pregunta_unica.id, 'opcion_ids': [self.opcion_b.id]},
+        ]}, format='json', **cabecera)
+        self.assertEqual(self._textos(1), ['Editado en la web'])
+        self.assertEqual(self._textos(2), ['Del documento'])
+
+    def test_la_analitica_trata_cada_version_como_un_sujeto(self):
+        from analitica.v2.entrada import _sujeto_id
+
+        extraccion = self._procesar()
+        self._asignar(extraccion, {'participante_id': self.persona.id, 'modo': 'nueva_version'})
+        sujetos = {
+            _sujeto_id(r) for r in Respuesta.objects.filter(pregunta=self.pregunta_abierta)
+        }
+        self.assertEqual(sujetos, {f'p{self.persona.id}', f'p{self.persona.id}-v2'})
+
+
+class RestaurarRespuestasExtraccionTests(BaseJornadaTestCase):
+    """El comando que separa lo que una carga pisó antes de HU-91. El respaldo es otra base de
+    PostgreSQL; acá se reemplaza su lectura por datos fijos y se prueba todo lo demás."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_restaurar', password='pass12345', is_staff=True,
+        )
+        self.persona = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='pisado@uni.edu.co',
+            nombre='Persona', apellido='Pisada', rol='jefe',
+        )
+        self.extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual, archivo=SimpleUploadedFile('d.docx', b'x'),
+            solicitado_por=self.admin, participante=self.persona,
+            estado=ExtraccionMomento.ESTADO_COMPLETO, aprobado_por=self.admin,
+            aprobado_en=datetime.datetime(2026, 10, 4, 17, 48, tzinfo=datetime.timezone.utc),
+            version_escrita=1,
+            resultado={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Del documento', 'opcion_ids': []},
+            ]},
+        )
+        # El estado que dejó la carga vieja (escrita después de crear la extracción): una mezcla en
+        # la versión 1 — la abierta, del documento; la única, de lo que quedaba de la web.
+        Respuesta.objects.create(
+            pregunta=self.pregunta_abierta, participante=self.persona, texto_libre='Del documento',
+        )
+        unica = Respuesta.objects.create(pregunta=self.pregunta_unica, participante=self.persona)
+        unica.opciones.set([self.opcion_a])
+        self.respaldo = [
+            {'id': 900, 'pregunta_id': self.pregunta_abierta.id, 'fila_id': None, 'columna_id': None,
+             'fila_lista_id': None, 'texto_libre': 'De la web', 'registrado_por_id': self.persona.id,
+             'creado_en': datetime.datetime(2026, 9, 15, 18, 44, tzinfo=datetime.timezone.utc),
+             'actualizado_en': datetime.datetime(2026, 9, 15, 18, 44, tzinfo=datetime.timezone.utc)},
+            {'id': 901, 'pregunta_id': self.pregunta_unica.id, 'fila_id': None, 'columna_id': None,
+             'fila_lista_id': None, 'texto_libre': '', 'registrado_por_id': self.persona.id,
+             'creado_en': datetime.datetime(2026, 9, 15, 18, 44, tzinfo=datetime.timezone.utc),
+             'actualizado_en': datetime.datetime(2026, 9, 15, 18, 44, tzinfo=datetime.timezone.utc)},
+        ]
+
+    def _correr(self, *extra, respaldo=None):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        modulo = 'participantes.management.commands.restaurar_respuestas_extraccion.Command'
+        filas = self.respaldo if respaldo is None else respaldo
+        salida = StringIO()
+        with patch(f'{modulo}._conectar'), \
+                patch(f'{modulo}._fecha_del_respaldo',
+                      return_value=datetime.datetime(2026, 9, 20, 3, 23, tzinfo=datetime.timezone.utc)), \
+                patch(f'{modulo}._leer_respaldo',
+                      return_value=(filas, {901: [self.opcion_b.id]}, {})):
+            call_command('restaurar_respuestas_extraccion', str(self.extraccion.id),
+                         '--respaldo-db', 'x', *extra, stdout=salida)
+        return salida.getvalue()
+
+    def _textos(self, version):
+        return list(Respuesta.objects.filter(
+            participante=self.persona, pregunta=self.pregunta_abierta, version=version,
+        ).values_list('texto_libre', flat=True))
+
+    def test_sin_aplicar_no_cambia_nada(self):
+        salida = self._correr()
+        self.assertIn('simulada', salida)
+        self.assertEqual(self._textos(1), ['Del documento'])
+        self.assertFalse(Respuesta.objects.filter(version=2).exists())
+
+    def test_web_queda_en_v1_y_documento_en_v2(self):
+        self._correr('--aplicar')
+
+        self.assertEqual(self._textos(1), ['De la web'])
+        self.assertEqual(self._textos(2), ['Del documento'])
+        unica = Respuesta.objects.get(participante=self.persona, pregunta=self.pregunta_unica, version=1)
+        self.assertEqual(list(unica.opciones.all()), [self.opcion_b])
+        self.assertEqual(unica.creado_en.date(), datetime.date(2026, 9, 15))
+        self.extraccion.refresh_from_db()
+        self.assertEqual(self.extraccion.version_escrita, 2)
+        self.assertEqual(self.extraccion.aprobado_en.date(), datetime.date(2026, 10, 4))
+
+    def test_correrlo_dos_veces_no_duplica(self):
+        self._correr('--aplicar')
+        salida = self._correr('--aplicar')
+        self.assertIn('ya se restauró', salida)
+        self.assertEqual(Respuesta.objects.filter(participante=self.persona).count(), 3)
+
+    def test_sin_nada_en_el_respaldo_no_toca_nada(self):
+        salida = self._correr('--aplicar', respaldo=[])
+        self.assertIn('no había nada que pisar', salida)
+        self.assertEqual(self._textos(1), ['Del documento'])

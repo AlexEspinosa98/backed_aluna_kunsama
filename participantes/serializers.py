@@ -195,8 +195,8 @@ class RespuestaSalidaSerializer(serializers.ModelSerializer):
     class Meta:
         model = Respuesta
         fields = [
-            'id', 'pregunta', 'participante', 'mesa', 'fila', 'fila_lista', 'columna', 'texto_libre',
-            'opciones', 'actualizado_en',
+            'id', 'pregunta', 'participante', 'mesa', 'version', 'fila', 'fila_lista', 'columna',
+            'texto_libre', 'opciones', 'actualizado_en',
         ]
 
 
@@ -204,11 +204,16 @@ class ExtraccionMomentoSerializer(serializers.ModelSerializer):
     momento_titulo = serializers.CharField(source='momento.titulo', read_only=True)
     participante_nombre = serializers.SerializerMethodField()
     respuestas_sugeridas = serializers.SerializerMethodField()
+    participante_sugerido_nombre = serializers.SerializerMethodField()
+    requiere_decision = serializers.SerializerMethodField()
+    versiones_existentes = serializers.SerializerMethodField()
 
     class Meta:
         model = ExtraccionMomento
         fields = [
             'id', 'momento', 'momento_titulo', 'participante', 'participante_nombre',
+            'participante_sugerido', 'participante_sugerido_nombre', 'requiere_decision',
+            'versiones_existentes', 'version_escrita',
             'nombre_archivo_original', 'estado', 'resultado', 'respuestas_sugeridas',
             'preguntas_omitidas', 'responsable_detectado', 'responsable_estado',
             'error_mensaje', 'modelo_usado', 'aprobado_en', 'aprobado_por', 'solicitado_por',
@@ -223,6 +228,30 @@ class ExtraccionMomentoSerializer(serializers.ModelSerializer):
         if extraccion.participante_id is None:
             return None
         return f'{extraccion.participante.nombre} {extraccion.participante.apellido}'.strip()
+
+    def get_participante_sugerido_nombre(self, extraccion):
+        sugerido = extraccion.participante_sugerido
+        if sugerido is None:
+            return None
+        return f'{sugerido.nombre} {sugerido.apellido}'.strip()
+
+    def get_requiere_decision(self, extraccion):
+        """HU-91: el documento es de alguien que ya respondió este momento y no se escribió nada.
+        El frontend ofrece las tres salidas: sobrescribir, versión nueva u otra persona (todas por
+        `asignar-responsable`)."""
+        return (
+            extraccion.estado == ExtraccionMomento.ESTADO_COMPLETO
+            and extraccion.participante_id is None
+            and extraccion.participante_sugerido_id is not None
+        )
+
+    def get_versiones_existentes(self, extraccion):
+        """Las versiones que ya tiene en el momento la persona sugerida (o, ya escrita, la
+        asignada). Sirve para el diálogo: con más de una, sobrescribir pide elegir cuál."""
+        from .extraccion_momento_ia_openai import versiones_existentes
+
+        persona = extraccion.participante or extraccion.participante_sugerido
+        return versiones_existentes(persona, extraccion.momento_id)
 
     def get_respuestas_sugeridas(self, extraccion):
         """`resultado['respuestas']` tal cual queda guardado (ver `_limpiar_y_validar` en
@@ -279,6 +308,14 @@ class AsignarResponsableMomentoSerializer(serializers.Serializer):
     )
     nombre = serializers.CharField(required=False)
     correo_institucional = serializers.EmailField(required=False)
+    # HU-91 — solo hacen falta si la persona elegida YA tiene respuestas en el momento (si no, se
+    # escribe en la versión 1 y se ignoran). Sin `modo` en ese caso la respuesta es un 409.
+    modo = serializers.ChoiceField(choices=['sobrescribir', 'nueva_version'], required=False)
+    version = serializers.IntegerField(required=False, min_value=1)
+    # Con `nombre`: crear SIEMPRE una persona nueva, sin intentar emparejar con alguien existente.
+    # Es la tercera salida del conflicto — "no es la misma persona" — que el emparejamiento por
+    # nombre de HU-88 no permitiría, porque volvería a dar con la misma.
+    nuevo = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         trae_id = 'participante' in attrs
@@ -287,6 +324,12 @@ class AsignarResponsableMomentoSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 'Manda `participante_id` para elegir a alguien que ya existe, o `nombre` para '
                 'darlo de alta — uno de los dos, no los dos ni ninguno.'
+            )
+        if attrs.get('nuevo') and not trae_nombre:
+            raise serializers.ValidationError({'nuevo': '`nuevo` va con `nombre`: es para dar de alta.'})
+        if 'version' in attrs and attrs.get('modo') != 'sobrescribir':
+            raise serializers.ValidationError(
+                {'version': '`version` solo aplica con `modo` = "sobrescribir".'}
             )
         return attrs
 

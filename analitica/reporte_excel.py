@@ -454,7 +454,14 @@ def _escribir_bloque_pregunta(wsp, row, m, p, datos):
         last_resp_row = max(row - 1, first_resp_row)
         resp_col_letter = 'C'
     else:
-        resp_por_participante = {r.participante_id: r for r in respuestas_de_pregunta if r.participante_id is not None}
+        # Una fila por (participante, versión): con dos versiones (HU-91) la segunda no puede
+        # pisar a la primera en la hoja. Quien no respondió sigue saliendo, con una fila vacía.
+        resp_por_participante = {
+            (r.participante_id, r.version): r for r in respuestas_de_pregunta if r.participante_id is not None
+        }
+        versiones_por_participante = {}
+        for participante_id, version in resp_por_participante:
+            versiones_por_participante.setdefault(participante_id, set()).add(version)
         headers_resp = ['Participante', 'Correo', 'Rol', 'Mesa', 'Respuesta', 'Última actualización']
         for i, h in enumerate(headers_resp, start=1):
             wsp.cell(row=row, column=i, value=h)
@@ -463,14 +470,22 @@ def _escribir_bloque_pregunta(wsp, row, m, p, datos):
         _style_header_cells(wsp, row, 1, len(headers_resp))
         row += 1
         first_resp_row = row
-        for part in datos['participantes']:
-            r = resp_por_participante.get(part.id)
+        filas_resp = [
+            (part, version)
+            for part in datos['participantes']
+            for version in sorted(versiones_por_participante.get(part.id) or {1})
+        ]
+        for part, version in filas_resp:
+            r = resp_por_participante.get((part.id, version))
             if r:
                 valor = r.texto_libre if es_texto_libre else ('; '.join(o.texto for o in r.opciones.all()) or '—')
                 fecha = timezone.localtime(r.actualizado_en).strftime('%Y-%m-%d %H:%M')
             else:
                 valor, fecha = '', ''
-            wsp.cell(row=row, column=1, value=f'{part.nombre} {part.apellido}').font = F_BODY
+            nombre = f'{part.nombre} {part.apellido}'
+            if version != 1:
+                nombre = f'{nombre} (versión {version})'
+            wsp.cell(row=row, column=1, value=nombre).font = F_BODY
             wsp.cell(row=row, column=2, value=part.correo_institucional).font = F_BODY
             wsp.cell(row=row, column=3, value=part.rol.capitalize()).alignment = ALIGN_CENTER
             wsp.cell(row=row, column=4, value=part.mesa if part.mesa is not None else '—').alignment = ALIGN_CENTER

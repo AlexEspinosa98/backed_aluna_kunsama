@@ -23,6 +23,9 @@ import threading
 from django.db import transaction
 from django.utils import timezone
 
+from rest_framework import status
+from rest_framework.exceptions import APIException
+
 from jornadas import emparejamiento, lectura_documentos
 
 # Modelo de TRANSCRIPCIÓN, distinto del de generación — ver el razonamiento completo y
@@ -406,6 +409,50 @@ def emparejar_responsable_momento(momento, responsable):
     )
 
 
+# Qué hacer cuando la persona ya tiene respuestas en el momento (HU-91). Sin uno de estos, nada
+# se escribe sobre respuestas existentes: ni la carga automática ni `asignar-responsable`.
+MODO_SOBRESCRIBIR = 'sobrescribir'
+MODO_NUEVA_VERSION = 'nueva_version'
+MODOS_ESCRITURA = (MODO_SOBRESCRIBIR, MODO_NUEVA_VERSION)
+
+
+class ConflictoRespuestasPrevias(APIException):
+    """409: la persona ya respondió este momento y nadie dijo qué hacer con eso.
+
+    El detalle lleva lo que el frontend necesita para preguntarle a quien carga: a quién, qué
+    versiones tiene ya, y los modos válidos."""
+    status_code = status.HTTP_409_CONFLICT
+    default_code = 'respuestas_previas'
+
+    def __init__(self, participante, versiones):
+        super().__init__()
+        # Asignado directo y no por el constructor: APIException convierte todo el detalle a
+        # texto, y el frontend necesita `participante_id` y las versiones como números.
+        self.detail = {
+            'detail': (
+                f'{participante.nombre} {participante.apellido} ya tiene respuestas en este '
+                'momento. Indica `modo`: "sobrescribir" para reemplazarlas o "nueva_version" para '
+                'que convivan; o asigna el documento a otra persona.'
+            ),
+            'participante_id': participante.id,
+            'versiones_existentes': versiones,
+            'modos': list(MODOS_ESCRITURA),
+        }
+
+
+def versiones_existentes(participante, momento):
+    """Las versiones (ver Respuesta.version) que esta persona ya tiene escritas en el momento,
+    ordenadas. Lista vacía = nunca respondió ese momento."""
+    from .models import Respuesta
+
+    if participante is None:
+        return []
+    return sorted(set(
+        Respuesta.objects.filter(participante=participante, pregunta__momento=momento)
+        .values_list('version', flat=True)
+    ))
+
+
 DOMINIO_SIN_REGISTRO = 'sin-registro.local'
 ROL_SIN_REGISTRO = 'sin rol'
 
@@ -574,6 +621,25 @@ def procesar_extraccion_momento(extraccion_id):
                 extraccion.participante = participante
             campos_responsable = ['responsable_detectado', 'responsable_estado', 'participante']
 
+        # HU-91: si la persona ya respondió este momento (por la web o con otro documento), NO se
+        # le escribe encima. Pasa a `participante_sugerido` y la extracción queda sin responsable,
+        # esperando que quien cargó decida en `asignar-responsable`. Vale también para el
+        # participante indicado a mano al subir: haberlo elegido no es haber elegido pisarle lo
+        # que ya tenía. Solo en cargas de admin — la del propio participante (HU-56) nunca
+        # escribe sola, revisa y envía él mismo.
+        if (
+            extraccion.solicitado_por_id is not None
+            and extraccion.participante_id is not None
+            and versiones_existentes(extraccion.participante, extraccion.momento)
+        ):
+            extraccion.participante_sugerido = extraccion.participante
+            extraccion.participante = None
+            extraccion.responsable_estado = emparejamiento.ESTADO_CON_RESPUESTAS
+            campos_responsable = [
+                'responsable_detectado', 'responsable_estado', 'participante',
+                'participante_sugerido',
+            ]
+
         extraccion.resultado = limpio
         extraccion.preguntas_omitidas = omitidas
         extraccion.estado = ExtraccionMomento.ESTADO_COMPLETO
@@ -589,8 +655,9 @@ def procesar_extraccion_momento(extraccion_id):
         # - `solicitado_por` no vacío: la subió un admin. Cuando la sube el propio participante
         #   (HU-56) el flujo no cambia — recibe `respuestas_sugeridas`, corrige en pantalla y
         #   envía por el endpoint normal, que es revisar ANTES de escribir;
-        # - hay participante: si la IA no pudo emparejar al responsable no hay a nombre de quién
-        #   escribir, así que queda esperando `asignar-responsable`, que escribe ahí mismo.
+        # - hay participante: si la IA no pudo emparejar al responsable, o la persona ya tenía
+        #   respuestas (HU-91), no hay a nombre de quién escribir todavía, así que queda esperando
+        #   `asignar-responsable`, que escribe ahí mismo.
         if extraccion.solicitado_por_id is not None and extraccion.participante_id is not None:
             escribir_extraccion_momento(extraccion, extraccion.solicitado_por)
     except Exception as exc:  # noqa: BLE001
@@ -616,7 +683,7 @@ def procesar_extracciones_en_serie(ids):
         procesar_extraccion_momento(extraccion_id)
 
 
-def _escribir_filas_agregadas(pregunta, items, participante):
+def _escribir_filas_agregadas(pregunta, items, participante, version):
     """Escribe las celdas que la IA transcribió como filas AGREGADAS (`fila_temporal`): las filas
     extra de una matriz con filas_adicionales, y todas las filas de una lista.
 
@@ -628,11 +695,13 @@ def _escribir_filas_agregadas(pregunta, items, participante):
     borrarla."""
     from .models import FilaListaRespuesta, Respuesta
 
-    FilaListaRespuesta.objects.filter(pregunta=pregunta, participante=participante).delete()
+    FilaListaRespuesta.objects.filter(
+        pregunta=pregunta, participante=participante, version=version,
+    ).delete()
 
     filas_por_temporal = {
         ft: FilaListaRespuesta.objects.create(
-            pregunta=pregunta, participante=participante, orden=i,
+            pregunta=pregunta, participante=participante, version=version, orden=i,
         )
         for i, ft in enumerate(sorted({item['fila_temporal'] for item in items}), start=1)
     }
@@ -642,6 +711,7 @@ def _escribir_filas_agregadas(pregunta, items, participante):
         guardadas.append(Respuesta.objects.create(
             pregunta=pregunta,
             participante=participante,
+            version=version,
             fila_lista=filas_por_temporal[item['fila_temporal']],
             columna_id=item.get('columna_id'),
             texto_libre=item.get('texto_libre', ''),
@@ -650,8 +720,46 @@ def _escribir_filas_agregadas(pregunta, items, participante):
     return guardadas
 
 
+def _version_destino(extraccion, modo, version):
+    """En qué versión se escribe (HU-91). Sin respuestas previas, la 1 y no hace falta modo. Con
+    respuestas previas el modo es obligatorio:
+
+    - `nueva_version`: la siguiente a la más alta; las anteriores quedan intactas. Es lo que
+      corresponde a OTRO documento de la misma persona (otra facultad, otra dependencia).
+    - `sobrescribir`: actualiza la indicada en `version`, o la única que haya, con lo que trae el
+      documento — mismo criterio de siempre: las preguntas que el documento no menciona se
+      conservan (ver `_escribir_filas_agregadas`). Es para una versión corregida del mismo
+      documento; para uno distinto, mezclar los dos es justo lo que HU-91 vino a evitar."""
+    from rest_framework.exceptions import ValidationError
+
+    from .models import Respuesta
+
+    versiones = versiones_existentes(extraccion.participante, extraccion.momento)
+    if not versiones:
+        return Respuesta.VERSION_ORIGINAL
+    if modo is None:
+        raise ConflictoRespuestasPrevias(extraccion.participante, versiones)
+    if modo == MODO_NUEVA_VERSION:
+        return versiones[-1] + 1
+    if modo != MODO_SOBRESCRIBIR:
+        raise ValidationError({'modo': f'Modo desconocido: {modo}. Usa uno de {list(MODOS_ESCRITURA)}.'})
+
+    if version is None:
+        if len(versiones) > 1:
+            raise ValidationError({'version': (
+                f'Esta persona tiene varias versiones en el momento ({versiones}); indica cuál '
+                'sobrescribir.'
+            )})
+        version = versiones[0]
+    elif version not in versiones:
+        raise ValidationError({'version': (
+            f'La versión {version} no existe para esta persona en el momento (tiene {versiones}).'
+        )})
+    return version
+
+
 @transaction.atomic
-def escribir_extraccion_momento(extraccion, escrito_por):
+def escribir_extraccion_momento(extraccion, escrito_por, modo=None, version=None):
     """Escribe `extraccion.resultado` como Respuesta reales del participante — mismo lookup/save
     que RespuestasMomentoView.post() (participante individual, registrado_por=el mismo
     participante).
@@ -669,7 +777,10 @@ def escribir_extraccion_momento(extraccion, escrito_por):
     quién". Para una carga de admin es quien subió el archivo.
 
     Atómico por lo mismo que el envío normal: las filas agregadas se borran y se recrean, así que
-    una falla a mitad dejaría la tabla del participante incompleta."""
+    una falla a mitad dejaría la tabla del participante incompleta.
+
+    HU-91: si la persona ya tiene respuestas en el momento, NUNCA las pisa por su cuenta — lanza
+    `ConflictoRespuestasPrevias` (409) salvo que venga `modo` (ver `_version_destino`)."""
     from django.utils import timezone as tz
 
     from rest_framework.exceptions import ValidationError
@@ -688,6 +799,7 @@ def escribir_extraccion_momento(extraccion, escrito_por):
             f'(responsable detectado: {extraccion.responsable_detectado or "ninguno"}).'
         )})
 
+    destino = _version_destino(extraccion, modo, version)
     preguntas = {p.id: p for p in Pregunta.objects.filter(momento=extraccion.momento)}
     guardadas = []
     # Las celdas de fila agregada se juntan por pregunta antes de escribir: una FilaListaRespuesta
@@ -702,7 +814,7 @@ def escribir_extraccion_momento(extraccion, escrito_por):
             agregadas_por_pregunta.setdefault(pregunta, []).append(item)
             continue
         respuesta, _ = Respuesta.objects.update_or_create(
-            pregunta=pregunta, participante=extraccion.participante,
+            pregunta=pregunta, participante=extraccion.participante, version=destino,
             fila_id=item.get('fila_id'), columna_id=item.get('columna_id'),
             defaults={'texto_libre': item.get('texto_libre', ''), 'registrado_por': extraccion.participante},
         )
@@ -710,9 +822,10 @@ def escribir_extraccion_momento(extraccion, escrito_por):
         guardadas.append(respuesta)
 
     for pregunta, items in agregadas_por_pregunta.items():
-        guardadas.extend(_escribir_filas_agregadas(pregunta, items, extraccion.participante))
+        guardadas.extend(_escribir_filas_agregadas(pregunta, items, extraccion.participante, destino))
 
     extraccion.aprobado_en = tz.now()
     extraccion.aprobado_por = escrito_por
-    extraccion.save(update_fields=['aprobado_en', 'aprobado_por'])
+    extraccion.version_escrita = destino
+    extraccion.save(update_fields=['aprobado_en', 'aprobado_por', 'version_escrita'])
     return guardadas

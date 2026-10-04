@@ -27,6 +27,8 @@ def condicion_cumplida(pregunta, participante, opciones_en_este_envio=None):
         filtro['mesa'] = participante.mesa
     else:
         filtro['participante'] = participante
+    # La condición la evalúa el envío por la web, que siempre es la versión original (HU-91).
+    filtro['version'] = Respuesta.VERSION_ORIGINAL
     return Respuesta.objects.filter(**filtro).exists()
 
 

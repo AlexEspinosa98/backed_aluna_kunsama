@@ -79,6 +79,9 @@ class FilaListaRespuesta(models.Model):
         Participante, on_delete=models.CASCADE, null=True, blank=True, related_name='filas_lista_creadas',
     )
     mesa = models.PositiveIntegerField(null=True, blank=True)
+    # Misma versión que las Respuesta que agrupa (ver Respuesta.version): dos versiones del mismo
+    # participante tienen cada una su propio juego de filas agregadas.
+    version = models.PositiveSmallIntegerField(default=1)
     orden = models.PositiveIntegerField()
     creado_en = models.DateTimeField(auto_now_add=True)
 
@@ -119,15 +122,25 @@ class Respuesta(models.Model):
     fila_lista = models.ForeignKey(FilaListaRespuesta, on_delete=models.CASCADE, null=True, blank=True)
     texto_libre = models.TextField(blank=True)
     opciones = models.ManyToManyField(OpcionPregunta, blank=True, related_name='respuestas')
+    # Varias respuestas del MISMO dueño al mismo momento (HU-91). El caso real: una persona
+    # responde por la web y después le cargan un documento de otra dependencia que también firmó;
+    # o firma dos formatos de dos facultades. Antes la segunda carga pisaba la primera celda por
+    # celda (update_or_create por participante) y quedaba una mezcla de las dos que no era
+    # ninguna. Ahora quien carga elige: sobrescribir una versión, o sumar una nueva que convive.
+    # La 1 es la original — la que responde el participante por la web y la que escribe la
+    # primera carga sin conflicto; la analítica trata cada (participante, versión) como un sujeto.
+    version = models.PositiveSmallIntegerField(default=1)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
 
+    VERSION_ORIGINAL = 1
+
     class Meta:
         unique_together = [
-            ('pregunta', 'participante', 'fila', 'columna'),
-            ('pregunta', 'mesa', 'fila', 'columna'),
-            ('pregunta', 'participante', 'fila_lista', 'columna'),
-            ('pregunta', 'mesa', 'fila_lista', 'columna'),
+            ('pregunta', 'participante', 'version', 'fila', 'columna'),
+            ('pregunta', 'mesa', 'version', 'fila', 'columna'),
+            ('pregunta', 'participante', 'version', 'fila_lista', 'columna'),
+            ('pregunta', 'mesa', 'version', 'fila_lista', 'columna'),
         ]
 
     def __str__(self):
@@ -176,6 +189,17 @@ class ExtraccionMomento(models.Model):
         max_length=20, choices=emparejamiento.ESTADO_CHOICES,
         default=emparejamiento.ESTADO_NO_BUSCADO,
     )
+    # HU-91: la persona a la que corresponde el documento YA tiene respuestas en este momento.
+    # En vez de pisarlas, la extracción queda sin `participante` (no se escribe nada) y con la
+    # persona propuesta acá, a la espera de que quien cargó decida en `asignar-responsable`:
+    # sobrescribir, sumar una versión nueva, o asignarlo a otra persona.
+    participante_sugerido = models.ForeignKey(
+        Participante, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='extracciones_sugeridas',
+    )
+    # En qué versión de las respuestas del participante quedó escrita (ver Respuesta.version).
+    # Null mientras no se haya escrito.
+    version_escrita = models.PositiveSmallIntegerField(null=True, blank=True)
     archivo = models.FileField(upload_to='participantes/extracciones/%Y/%m/')
     nombre_archivo_original = models.CharField(max_length=255, blank=True)
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)

@@ -30,6 +30,11 @@ def _texto_o_null(texto):
 
 def _sujeto_id(respuesta):
     if respuesta.participante_id:
+        # Cada versión es un sujeto distinto (HU-91): dos documentos de dos facultades firmados por
+        # la misma persona son dos respuestas, no una celda pisando a la otra. La original conserva
+        # el id de siempre para no cambiar los análisis ya generados.
+        if respuesta.version != 1:
+            return f'p{respuesta.participante_id}-v{respuesta.version}'
         return f'p{respuesta.participante_id}'
     if respuesta.mesa is not None:
         return f'mesa-{respuesta.mesa}'
