@@ -141,9 +141,11 @@ class ExtraccionMomento(models.Model):
     particular vive en el modelo clásico Momento/Pregunta, no en el módulo `instrumentos`. Una
     sola llamada a OpenAI lee el documento y transcribe las respuestas, pero A DIFERENCIA de
     RespuestasMomentoView (que guarda de inmediato), el resultado queda en `resultado` (JSON) SIN
-    tocar Respuesta hasta que un admin lo aprueba explícitamente vía el action `aprobar` — acá no
-    existe forma de editar una Respuesta ya guardada (RespuestaAdminViewSet es de solo lectura),
-    así que la única ventana de revisión real es ANTES de escribirla."""
+    tocar Respuesta durante la transcripción; desde HU-84 la escritura se dispara SOLA en cuanto
+    termina (`escribir_extraccion_momento`), sin aprobación de un admin. Antes sí esperaba, porque
+    `RespuestaAdminViewSet` era de solo lectura y entonces la única ventana de revisión posible era
+    ANTES de escribir; ahora admite PATCH/DELETE y la revisión la hace quien subió el documento,
+    sobre lo ya escrito."""
     ESTADO_PENDIENTE = 'pendiente'
     ESTADO_PROCESANDO = 'procesando'
     ESTADO_COMPLETO = 'completo'
@@ -161,8 +163,9 @@ class ExtraccionMomento(models.Model):
     # Opcional desde HU-55: si no se indica al subir, la IA lee el responsable del propio documento
     # y se intenta emparejar contra los participantes de esa jornada (ver responsable_estado).
     # Acá no hace falta un estado aparte como en instrumentos: este modelo YA difiere la escritura
-    # hasta `aprobar`, así que una extracción sin responsable simplemente no se puede aprobar
-    # todavía (ver aprobar_extraccion_momento) y la transcripción queda intacta en `resultado`.
+    # mientras no haya responsable no hay a nombre de quién escribir, así que la extracción queda
+    # completa y a la espera de `asignar-responsable`, que escribe ahí mismo (ver
+    # escribir_extraccion_momento). La transcripción, intacta en `resultado`.
     participante = models.ForeignKey(
         Participante, on_delete=models.CASCADE, null=True, blank=True, related_name='extracciones',
     )
@@ -178,7 +181,7 @@ class ExtraccionMomento(models.Model):
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     # {"respuestas": [{"pregunta": id, "texto_libre": str, "opcion_ids": [ids], "fila_id": id|null,
     # "fila_temporal": int|null, "columna_id": id|null}, ...]} — mismo formato que
-    # RespuestaEnvioSerializer, sin escribir todavía en Respuesta (ver aprobar()). `fila_temporal`
+    # RespuestaEnvioSerializer. `fila_temporal`
     # agrupa las celdas de una fila que la IA encontró en el documento pero que no estaba en el
     # esquema (filas agregadas: las extra de una matriz con filas_adicionales, y todas las de una
     # lista) — igual que en el envío normal, no es el id de nada.
@@ -186,6 +189,9 @@ class ExtraccionMomento(models.Model):
     preguntas_omitidas = models.JSONField(default=list, blank=True)
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
+    # Desde HU-84 estos dos NO significan "un humano lo aprobó" sino "cuándo se escribieron las
+    # respuestas y a cuenta de quién". Se conservan con el nombre viejo para no migrar la tabla ni
+    # romper el contrato que el frontend ya consume.
     aprobado_en = models.DateTimeField(null=True, blank=True)
     aprobado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,

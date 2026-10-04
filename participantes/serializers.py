@@ -346,3 +346,57 @@ class ExtraccionMomentoCrearSerializer(serializers.ModelSerializer):
         validated_data['participante'] = participante
         validated_data['nombre_archivo_original'] = validated_data['archivo'].name
         return super().create(validated_data)
+
+
+# Tope de archivos por carga masiva. No es un límite técnico sino de costo y de tiempo: cada
+# documento son hoy entre 5 y 9 llamadas a OpenAI (ver lectura_documentos.agrupar_en_lotes), así
+# que 30 archivos pueden ser más de 200 llamadas en una sola tanda.
+MAX_ARCHIVOS_POR_CARGA = 30
+
+
+class ExtraccionMomentoMasivaSerializer(serializers.Serializer):
+    """Carga masiva: un momento y varios documentos ya diligenciados en un solo request (HU-84).
+
+    NO acepta `participante_id` a propósito. La carga masiva existe para la pila de formatos de
+    departamentos distintos, así que a cada archivo le corresponde una persona distinta y
+    forzosamente hay que leerla del propio documento (el emparejamiento de responsable de HU-55).
+    Un `participante_id` aquí solo podría significar "todos estos documentos son de la misma
+    persona", que no es el caso de uso."""
+    momento = serializers.PrimaryKeyRelatedField(queryset=Momento.objects.all())
+    archivos = serializers.ListField(
+        child=serializers.FileField(), min_length=1, max_length=MAX_ARCHIVOS_POR_CARGA,
+    )
+
+
+class RespuestaAdminEdicionSerializer(serializers.ModelSerializer):
+    """Corrección de una Respuesta ya guardada (HU-84).
+
+    Solo `texto_libre` y las opciones. Mover una celda de pregunta, fila o columna no es corregir
+    una transcripción —es escribir otra respuesta en otro lugar— y dejarlo abierto convertiría
+    este endpoint en una forma de pisar la respuesta de otra persona por descuido: para eso se
+    borra la celda y se crea por la vía normal.
+
+    Valida con el MISMO `_validar_entrada` que usa el envío normal, así que una matriz no puede
+    quedar con opciones ni una pregunta de opción única con dos marcadas."""
+    opcion_ids = serializers.PrimaryKeyRelatedField(
+        source='opciones', many=True, required=False, queryset=OpcionPregunta.objects.all(),
+    )
+
+    class Meta:
+        model = Respuesta
+        fields = ['id', 'texto_libre', 'opcion_ids']
+
+    def validate(self, attrs):
+        from .views import _validar_entrada
+
+        respuesta = self.instance
+        texto = attrs.get('texto_libre', respuesta.texto_libre)
+        opciones = attrs.get('opciones', list(respuesta.opciones.all()))
+        _validar_entrada(
+            respuesta.pregunta, texto, opciones,
+            fila=respuesta.fila, columna=respuesta.columna,
+            # Una celda de fila dinámica no tiene `fila` pero sí `fila_lista`; el validador espera
+            # un `fila_temporal` para reconocer ese caso (el número en sí no se usa acá).
+            fila_temporal=1 if respuesta.fila_lista_id else None,
+        )
+        return attrs

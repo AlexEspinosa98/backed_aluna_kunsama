@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 from unittest.mock import patch
 
@@ -10,7 +11,8 @@ from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, 
 from jornadas import emparejamiento
 
 from .extraccion_momento_ia_openai import (
-    _construir_payload_esquema, _limpiar_y_validar, aprobar_extraccion_momento,
+    _construir_payload_esquema, _limpiar_y_validar, escribir_extraccion_momento,
+    procesar_extraccion_momento,
     emparejar_responsable_momento,
 )
 from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
@@ -474,7 +476,7 @@ class AprobarExtraccionMomentoTests(BaseJornadaTestCase):
         )
 
     def test_aprobar_escribe_respuestas_reales_del_participante(self):
-        guardadas = aprobar_extraccion_momento(self.extraccion, self.admin)
+        guardadas = escribir_extraccion_momento(self.extraccion, self.admin)
         self.assertEqual(len(guardadas), 2)
         self.assertEqual(
             Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=self.participante).texto_libre,
@@ -488,12 +490,19 @@ class AprobarExtraccionMomentoTests(BaseJornadaTestCase):
         self.assertIsNotNone(self.extraccion.aprobado_en)
         self.assertEqual(self.extraccion.aprobado_por, self.admin)
 
-    def test_endpoint_no_deja_aprobar_dos_veces(self):
+    def test_el_endpoint_aprobar_quedo_idempotente(self):
+        """Desde HU-84 `aprobar/` ya no aprueba nada —la escritura es automática— y se conserva
+        solo para no romper un frontend que todavía le pegue: dos llamadas seguidas devuelven 200
+        y no duplican respuestas. Antes la segunda daba 403."""
         self.client.force_authenticate(user=self.admin)
-        resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
-        self.assertEqual(resp.status_code, 200)
-        resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
-        self.assertEqual(resp.status_code, 403)
+        for _ in range(2):
+            resp = self.client.post(f'/api/admin/momento-extracciones/{self.extraccion.id}/aprobar/')
+            self.assertEqual(resp.status_code, 200)
+        self.assertEqual(
+            Respuesta.objects.filter(
+                pregunta=self.pregunta_abierta, participante=self.participante).count(),
+            1,
+        )
 
     def test_endpoint_no_deja_aprobar_extraccion_sin_completar(self):
         self.extraccion.estado = ExtraccionMomento.ESTADO_PROCESANDO
@@ -1250,7 +1259,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
     """El extractor por IA transcribiendo FILAS AGREGADAS (HU-53): filas que estaban en el
     documento pero no en el esquema de la pregunta. Nada de esto llama a OpenAI — se prueban
     `_construir_payload_esquema` (lo que la IA ve), `_limpiar_y_validar` (el filtro de lo que la
-    IA respondió) y `aprobar_extraccion_momento` (la escritura real)."""
+    IA respondió) y `escribir_extraccion_momento` (la escritura real)."""
     def setUp(self):
         super().setUp()
         self.matriz = Pregunta.objects.create(
@@ -1375,7 +1384,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 2,
              'columna_id': self.col_1.id, 'texto_libre': 'Sofía', 'opcion_ids': []},
         ])
-        guardadas = aprobar_extraccion_momento(extraccion, self.admin)
+        guardadas = escribir_extraccion_momento(extraccion, self.admin)
         self.assertEqual(len(guardadas), 4)
         self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 2)
         self.assertEqual(
@@ -1394,7 +1403,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
         self.assertNotIn(fila_2, fila_1)
 
     def test_aprobar_reemplaza_las_filas_agregadas_previas_de_esa_pregunta(self):
-        aprobar_extraccion_momento(self._extraccion([
+        escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
              'columna_id': self.col_1.id, 'texto_libre': 'Viejo', 'opcion_ids': []},
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 2,
@@ -1402,7 +1411,7 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
         ]), self.admin)
         self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 2)
 
-        aprobar_extraccion_momento(self._extraccion([
+        escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
              'columna_id': self.col_1.id, 'texto_libre': 'Nuevo', 'opcion_ids': []},
         ]), self.admin)
@@ -1417,12 +1426,12 @@ class ExtraccionFilasAgregadasTests(BaseJornadaTestCase):
     def test_aprobar_no_borra_filas_de_una_pregunta_que_el_documento_no_menciona(self):
         """Aprobar escribe lo que el documento traía. Un documento que no habla de una pregunta
         no es una instrucción de borrar lo que esa pregunta ya tenía."""
-        aprobar_extraccion_momento(self._extraccion([
+        escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.matriz.id, 'fila_id': None, 'fila_temporal': 1,
              'columna_id': self.col_1.id, 'texto_libre': 'Se queda', 'opcion_ids': []},
         ]), self.admin)
 
-        aprobar_extraccion_momento(self._extraccion([
+        escribir_extraccion_momento(self._extraccion([
             {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Otra cosa', 'opcion_ids': []},
         ]), self.admin)
         self.assertEqual(FilaListaRespuesta.objects.filter(pregunta=self.matriz).count(), 1)
@@ -1520,14 +1529,16 @@ class ResponsableDetectadoMomentoTests(BaseJornadaTestCase):
             ]},
         )
 
-    def test_no_se_puede_aprobar_sin_responsable(self):
+    def test_sin_responsable_no_se_escribe_nada(self):
         extraccion = self._extraccion_sin_responsable()
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(f'/api/admin/momento-extracciones/{extraccion.id}/aprobar/')
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(Respuesta.objects.filter(pregunta=self.pregunta_abierta).count(), 0)
 
-    def test_asignar_responsable_y_luego_aprobar(self):
+    def test_asignar_responsable_escribe_en_el_mismo_paso(self):
+        """Desde HU-84 asignar el responsable era lo único que faltaba para poder escribir, así que
+        escribe ahí mismo: ya no hay un `aprobar/` después."""
         extraccion = self._extraccion_sin_responsable()
         self.client.force_authenticate(user=self.admin)
         resp = self.client.post(
@@ -1535,9 +1546,7 @@ class ResponsableDetectadoMomentoTests(BaseJornadaTestCase):
             {'participante_id': self.ana.id}, format='json',
         )
         self.assertEqual(resp.status_code, 200)
-
-        resp = self.client.post(f'/api/admin/momento-extracciones/{extraccion.id}/aprobar/')
-        self.assertEqual(resp.status_code, 200)
+        self.assertIsNotNone(resp.data['aprobado_en'])
         self.assertEqual(
             Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=self.ana).texto_libre,
             'Del papel',
@@ -1565,3 +1574,205 @@ class ResponsableDetectadoMomentoTests(BaseJornadaTestCase):
         resp = self.client.get('/api/admin/momento-extracciones/')
         self.assertEqual(resp.status_code, 200)
         self.assertIsNone(resp.data[0]['participante_nombre'])
+
+
+class EscrituraAutomaticaTests(BaseJornadaTestCase):
+    """HU-84: la transcripción de una carga de admin se escribe sola, sin aprobación. La del
+    propio participante (HU-56) NO cambia: sigue devolviendo sugerencias para que él las envíe."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_hu84', password='pass12345', is_staff=True,
+        )
+        self.persona = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='auto@uni.edu.co',
+            nombre='Auto', apellido='Escritura', rol='jefe',
+        )
+
+    @contextlib.contextmanager
+    def _sin_openai(self, extraccion):
+        """Corre `procesar_extraccion_momento` sin tocar el proveedor.
+
+        No hace falta neutralizar `close_old_connections()` acá: lo hace el runner para toda la
+        corrida (ver config/test_runner.py)."""
+        modulo = 'participantes.extraccion_momento_ia_openai'
+        with contextlib.ExitStack() as pila:
+            pila.enter_context(patch(f'{modulo}._leer_documento', return_value=('texto', None)))
+            pila.enter_context(patch(f'{modulo}._transcribir_por_lotes',
+                                     return_value=(extraccion.resultado, None)))
+            yield
+
+    def _extraccion(self, **extra):
+        return ExtraccionMomento.objects.create(
+            momento=self.momento_individual, participante=self.persona,
+            archivo=SimpleUploadedFile('x.docx', b'x'),
+            resultado={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Escrito solo', 'opcion_ids': []},
+            ]},
+            **extra,
+        )
+
+    def test_una_carga_de_admin_se_escribe_sin_aprobacion(self):
+        extraccion = self._extraccion(solicitado_por=self.admin)
+        with self._sin_openai(extraccion):
+            procesar_extraccion_momento(extraccion.id)
+
+        extraccion.refresh_from_db()
+        self.assertEqual(extraccion.estado, ExtraccionMomento.ESTADO_COMPLETO)
+        self.assertIsNotNone(extraccion.aprobado_en, 'debió escribirse sin que nadie apruebe')
+        self.assertEqual(extraccion.aprobado_por, self.admin)
+        self.assertEqual(
+            Respuesta.objects.get(
+                pregunta=self.pregunta_abierta, participante=self.persona).texto_libre,
+            'Escrito solo',
+        )
+
+    def test_la_carga_del_propio_participante_sigue_sin_escribirse(self):
+        """`solicitado_por` vacío = la subió el participante (HU-56). Ahí la revisión pasa ANTES de
+        escribir: recibe `respuestas_sugeridas`, corrige en pantalla y envía por el endpoint
+        normal. Escribirle las respuestas sin que las mande sería saltarse su revisión."""
+        extraccion = self._extraccion()
+        with self._sin_openai(extraccion):
+            procesar_extraccion_momento(extraccion.id)
+
+        extraccion.refresh_from_db()
+        self.assertEqual(extraccion.estado, ExtraccionMomento.ESTADO_COMPLETO)
+        self.assertIsNone(extraccion.aprobado_en)
+        self.assertFalse(Respuesta.objects.filter(pregunta=self.pregunta_abierta).exists())
+
+
+class CargaMasivaTests(BaseJornadaTestCase):
+    """HU-84: una pila de documentos en un solo request."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_masiva', password='pass12345', is_staff=True,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _archivo(self, nombre):
+        return SimpleUploadedFile(nombre, b'contenido del formato')
+
+    def test_crea_una_extraccion_por_archivo(self):
+        with patch('participantes.admin_views.threading.Thread') as hilo:
+            resp = self.client.post(
+                '/api/admin/momento-extracciones/masiva/',
+                {'momento': self.momento_individual.id,
+                 'archivos': [self._archivo('a.docx'), self._archivo('b.pdf')]},
+                format='multipart',
+            )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(resp.data['creadas']), 2)
+        self.assertEqual(resp.data['rechazadas'], [])
+        self.assertEqual(ExtraccionMomento.objects.count(), 2)
+        # Un solo hilo para toda la tanda: en serie, no uno por archivo.
+        self.assertEqual(hilo.call_count, 1)
+
+    def test_no_pide_participante_la_ia_lee_el_responsable(self):
+        with patch('participantes.admin_views.threading.Thread'):
+            self.client.post(
+                '/api/admin/momento-extracciones/masiva/',
+                {'momento': self.momento_individual.id, 'archivos': [self._archivo('a.docx')]},
+                format='multipart',
+            )
+        self.assertIsNone(ExtraccionMomento.objects.get().participante)
+
+    def test_un_archivo_invalido_no_tumba_la_tanda(self):
+        with patch('participantes.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/momento-extracciones/masiva/',
+                {'momento': self.momento_individual.id,
+                 'archivos': [self._archivo('bueno.docx'), self._archivo('malo.xlsx')]},
+                format='multipart',
+            )
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(len(resp.data['creadas']), 1)
+        self.assertEqual(len(resp.data['rechazadas']), 1)
+        self.assertEqual(resp.data['rechazadas'][0]['archivo'], 'malo.xlsx')
+
+    def test_si_ninguno_sirve_es_400_y_no_crea_nada(self):
+        with patch('participantes.admin_views.threading.Thread'):
+            resp = self.client.post(
+                '/api/admin/momento-extracciones/masiva/',
+                {'momento': self.momento_individual.id, 'archivos': [self._archivo('malo.xlsx')]},
+                format='multipart',
+            )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(ExtraccionMomento.objects.count(), 0)
+
+    def test_procesa_en_serie_todas_las_de_la_tanda(self):
+        from participantes.extraccion_momento_ia_openai import procesar_extracciones_en_serie
+        with patch(
+            'participantes.extraccion_momento_ia_openai.procesar_extraccion_momento'
+        ) as procesar:
+            procesar_extracciones_en_serie([7, 8, 9])
+        self.assertEqual([c.args[0] for c in procesar.call_args_list], [7, 8, 9])
+
+
+class CorregirRespuestaTests(BaseJornadaTestCase):
+    """HU-84: corregir una Respuesta ya escrita. Es la pieza que hace viable quitar la aprobación —
+    sin ella, un error de la IA quedaba fijo para siempre."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_corregir', password='pass12345', is_staff=True,
+        )
+        self.jornada.propietarios.add(self.admin)
+        self.persona = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='corr@uni.edu.co',
+            nombre='Cor', apellido='Regir', rol='jefe',
+        )
+        self.respuesta = Respuesta.objects.create(
+            pregunta=self.pregunta_abierta, participante=self.persona,
+            texto_libre='lo que la IA leyó mal', registrado_por=self.persona,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def test_patch_corrige_el_texto(self):
+        resp = self.client.patch(
+            f'/api/admin/respuestas/{self.respuesta.id}/',
+            {'texto_libre': 'lo que de verdad decía'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.respuesta.refresh_from_db()
+        self.assertEqual(self.respuesta.texto_libre, 'lo que de verdad decía')
+
+    def test_delete_borra_una_celda_que_la_ia_invento(self):
+        resp = self.client.delete(f'/api/admin/respuestas/{self.respuesta.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(Respuesta.objects.filter(pk=self.respuesta.id).exists())
+
+    def test_no_se_puede_mover_la_celda_a_otra_pregunta(self):
+        """`pregunta` no es editable: mover una celda no es corregir una transcripción."""
+        resp = self.client.patch(
+            f'/api/admin/respuestas/{self.respuesta.id}/',
+            {'pregunta': self.pregunta_unica.id}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.respuesta.refresh_from_db()
+        self.assertEqual(self.respuesta.pregunta_id, self.pregunta_abierta.id)
+
+    def test_no_hay_create(self):
+        resp = self.client.post('/api/admin/respuestas/', {}, format='json')
+        self.assertIn(resp.status_code, (403, 405))
+
+    def test_borrar_la_ultima_celda_de_una_fila_dinamica_borra_la_fila(self):
+        lista = Pregunta.objects.create(
+            momento=self.momento_individual, tipo=Pregunta.TIPO_LISTA,
+            texto='Profesores', orden=20, obligatoria=False, filas_adicionales=True,
+        )
+        columna = ColumnaMatrizPregunta.objects.create(pregunta=lista, texto='Nombre', orden=1)
+        fila = FilaListaRespuesta.objects.create(pregunta=lista, participante=self.persona, orden=1)
+        celda = Respuesta.objects.create(
+            pregunta=lista, participante=self.persona, fila_lista=fila, columna=columna,
+            texto_libre='Ana', registrado_por=self.persona,
+        )
+        resp = self.client.delete(f'/api/admin/respuestas/{celda.id}/')
+        self.assertEqual(resp.status_code, 204)
+        self.assertFalse(
+            FilaListaRespuesta.objects.filter(pk=fila.id).exists(),
+            'una fila dinámica sin celdas es una fila fantasma que nadie puede quitar',
+        )

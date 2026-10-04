@@ -11,9 +11,11 @@ matriz, y todas las filas de una lista), la IA puede transcribir filas que no es
 agrupándolas con un `fila_temporal` que ella misma inventa — el mismo mecanismo que usa el envío
 normal desde la web (ver participantes.views).
 
-El resultado queda guardado en `ExtraccionMomento.resultado` (JSON) SIN tocar `Respuesta` — la
-escritura real pasa por `aprobar_extraccion_momento`, disparada a mano por un admin desde la
-vista (ver participantes/admin_views.py)."""
+El resultado queda guardado en `ExtraccionMomento.resultado` (JSON) y, desde HU-84, se escribe
+SOLO como `Respuesta` en cuanto termina la transcripción (`escribir_extraccion_momento`): ya no
+espera la aprobación de un admin. La excepción es la carga que hace el propio participante
+(HU-56, `solicitado_por` vacío), que sigue devolviendo `respuestas_sugeridas` para que él revise
+y envíe por el endpoint normal — ahí la revisión ya pasaba antes de escribir."""
 import json
 import os
 import threading
@@ -320,7 +322,7 @@ def _limpiar_y_validar(resultado_crudo, momento):
     """Descarta cualquier entrada que no pase la misma validación por tipo que ya usa el envío
     normal (participantes.views._validar_entrada) — a diferencia de ese endpoint, NO aborta todo
     si una entrada falla, solo la omite (queda en preguntas_omitidas). No escribe Respuesta acá —
-    solo deja `resultado` listo para que aprobar_extraccion_momento lo escriba después."""
+    solo deja `resultado` listo para que escribir_extraccion_momento lo escriba después."""
     from jornadas.models import Pregunta
 
     from participantes.views import _validar_entrada
@@ -480,6 +482,15 @@ def procesar_extraccion_momento(extraccion_id):
             'resultado', 'preguntas_omitidas', 'estado', 'error_mensaje', 'modelo_usado',
             'completado_en', *campos_responsable,
         ])
+
+        # HU-84: la transcripción se escribe sola. Dos condiciones:
+        # - `solicitado_por` no vacío: la subió un admin. Cuando la sube el propio participante
+        #   (HU-56) el flujo no cambia — recibe `respuestas_sugeridas`, corrige en pantalla y
+        #   envía por el endpoint normal, que es revisar ANTES de escribir;
+        # - hay participante: si la IA no pudo emparejar al responsable no hay a nombre de quién
+        #   escribir, así que queda esperando `asignar-responsable`, que escribe ahí mismo.
+        if extraccion.solicitado_por_id is not None and extraccion.participante_id is not None:
+            escribir_extraccion_momento(extraccion, extraccion.solicitado_por)
     except Exception as exc:  # noqa: BLE001
         if extraccion is not None:
             extraccion.estado = ExtraccionMomento.ESTADO_ERROR
@@ -489,6 +500,20 @@ def procesar_extraccion_momento(extraccion_id):
         close_old_connections()
 
 
+def procesar_extracciones_en_serie(ids):
+    """Procesa varias extracciones UNA DESPUÉS DE OTRA (carga masiva, HU-84).
+
+    En serie y no un hilo por archivo: desde HU-81 cada documento son entre 5 y 9 llamadas a
+    OpenAI, así que una tanda de treinta en paralelo serían más de doscientas llamadas simultáneas
+    contra el proveedor — límite de tasa seguro, y el pipeline no reintenta ante un 429 (solo ante
+    un truncado, ver lectura_documentos.transcribir_en_partes).
+
+    Una que falle no detiene a las demás: cada extracción guarda su propio estado y su propio
+    `error_mensaje`, que es justamente lo que permite reintentar solo la que falló."""
+    for extraccion_id in ids:
+        procesar_extraccion_momento(extraccion_id)
+
+
 def _escribir_filas_agregadas(pregunta, items, participante):
     """Escribe las celdas que la IA transcribió como filas AGREGADAS (`fila_temporal`): las filas
     extra de una matriz con filas_adicionales, y todas las filas de una lista.
@@ -496,7 +521,7 @@ def _escribir_filas_agregadas(pregunta, items, participante):
     Reemplaza las filas dinámicas que ese participante ya tuviera **en esta pregunta**, igual que
     el envío normal (participantes.views._guardar_filas_dinamicas) — el documento aprobado es la
     versión buena de esa tabla, no un anexo a lo anterior. A diferencia del envío normal, acá NO
-    se borran las filas de preguntas que la IA no mencionó: aprobar una extracción escribe lo que
+    se borran las filas de preguntas que la IA no mencionó: escribir una extracción guarda lo que
     el documento traía, y un documento que no habla de una pregunta no es una instrucción de
     borrarla."""
     from .models import FilaListaRespuesta, Respuesta
@@ -524,11 +549,22 @@ def _escribir_filas_agregadas(pregunta, items, participante):
 
 
 @transaction.atomic
-def aprobar_extraccion_momento(extraccion, aprobado_por):
+def escribir_extraccion_momento(extraccion, escrito_por):
     """Escribe `extraccion.resultado` como Respuesta reales del participante — mismo lookup/save
     que RespuestasMomentoView.post() (participante individual, registrado_por=el mismo
-    participante). Solo llamable sobre una extracción en estado completo y no aprobada aún (ver
-    la vista para esas guardas).
+    participante).
+
+    Desde HU-84 la dispara `procesar_extraccion_momento` SOLA, en cuanto termina la transcripción:
+    ya no espera que un admin la apruebe. El cambio de criterio es del dueño del repo y es
+    sensato — quien sube el documento es quien sabe si lo que dice está bien, y un admin que carga
+    treinta formatos de treinta departamentos no puede revisar treinta pantallas antes de que se
+    guarde nada. Lo que lo hace viable es que ahora SÍ se puede corregir lo escrito
+    (`RespuestaAdminViewSet` admite PATCH y DELETE): antes esta espera era la única ventana de
+    revisión que existía, y por eso existía.
+
+    `aprobado_en`/`aprobado_por` se conservan con ese nombre —no hay migración— pero ya no
+    significan "un humano lo aprobó" sino "cuándo se escribieron las respuestas y a cuenta de
+    quién". Para una carga de admin es quien subió el archivo.
 
     Atómico por lo mismo que el envío normal: las filas agregadas se borran y se recrean, así que
     una falla a mitad dejaría la tabla del participante incompleta."""
@@ -545,7 +581,8 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
         # dos personas con ese nombre). La transcripción sigue intacta en `resultado`; lo único
         # que falta es a nombre de quién se escribe, y eso lo decide una persona.
         raise ValidationError({'participante': (
-            'Esta extracción todavía no tiene responsable asignado. Asigna uno antes de aprobarla '
+            'Esta extracción todavía no tiene responsable asignado, así que no hay a nombre de '
+            'quién escribir las respuestas. Asigna uno con `asignar-responsable` '
             f'(responsable detectado: {extraccion.responsable_detectado or "ninguno"}).'
         )})
 
@@ -574,6 +611,6 @@ def aprobar_extraccion_momento(extraccion, aprobado_por):
         guardadas.extend(_escribir_filas_agregadas(pregunta, items, extraccion.participante))
 
     extraccion.aprobado_en = tz.now()
-    extraccion.aprobado_por = aprobado_por
+    extraccion.aprobado_por = escrito_por
     extraccion.save(update_fields=['aprobado_en', 'aprobado_por'])
     return guardadas
