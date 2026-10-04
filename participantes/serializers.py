@@ -262,10 +262,33 @@ class CargarArchivoMomentoSerializer(serializers.Serializer):
 
 
 class AsignarResponsableMomentoSerializer(serializers.Serializer):
-    """Asigna a mano el participante de una extracción que la IA no pudo emparejar (HU-55)."""
+    """Asigna a mano el participante de una extracción que la IA no pudo emparejar (HU-55).
+
+    Dos formas, y hay que mandar EXACTAMENTE una (HU-88):
+
+    - `participante_id`: elegir a alguien que ya está en la jornada;
+    - `nombre` (y opcionalmente `correo_institucional`): darlo de alta en el acto.
+
+    El segundo modo existe porque el diálogo de asignación obligaba a elegir de una lista, y la
+    persona que firmó un formato en papel muchas veces no está en ninguna lista — había que salir
+    a registrarla por otra pantalla y volver. El serializer de SUBIDA ya permitía crear en el mismo
+    request, así que el de asignación era la única pieza que no.
+    """
     participante_id = serializers.PrimaryKeyRelatedField(
-        source='participante', queryset=Participante.objects.all(),
+        source='participante', queryset=Participante.objects.all(), required=False,
     )
+    nombre = serializers.CharField(required=False)
+    correo_institucional = serializers.EmailField(required=False)
+
+    def validate(self, attrs):
+        trae_id = 'participante' in attrs
+        trae_nombre = bool((attrs.get('nombre') or '').strip())
+        if trae_id == trae_nombre:
+            raise serializers.ValidationError(
+                'Manda `participante_id` para elegir a alguien que ya existe, o `nombre` para '
+                'darlo de alta — uno de los dos, no los dos ni ninguno.'
+            )
+        return attrs
 
 
 class ExtraccionMomentoCrearSerializer(serializers.ModelSerializer):
