@@ -60,6 +60,10 @@ TEMPLATES = [
     },
 ]
 
+# Runner propio que retira OPENAI_API_KEY del entorno antes de correr los tests: ningún
+# test puede gastar tokens de verdad por olvidarse de mockear (ver config/test_runner.py).
+TEST_RUNNER = 'config.test_runner.RunnerSinProveedores'
+
 WSGI_APPLICATION = 'config.wsgi.application'
 
 
