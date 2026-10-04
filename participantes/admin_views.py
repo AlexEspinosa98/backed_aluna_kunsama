@@ -1,5 +1,6 @@
 import threading
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -144,6 +145,17 @@ class ExtraccionMomentoViewSet(
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    @extend_schema(
+        request=ExtraccionMomentoMasivaSerializer,
+        responses={201: ExtraccionMomentoSerializer(many=True)},
+        description=(
+            'Carga masiva: un `momento` y hasta 30 `archivos` (.pdf/.docx) en multipart, con el '
+            'campo `archivos` repetido una vez por archivo. Devuelve '
+            '`{"creadas": [...extracciones...], "rechazadas": [{"archivo", "error"}]}` — los '
+            'archivos inválidos no tumban la tanda. Ver '
+            'docs/INTEGRACION_FRONTEND_CARGA_MASIVA.md.'
+        ),
+    )
     @action(detail=False, methods=['post'], url_path='masiva')
     def masiva(self, request):
         """Carga masiva (HU-84): un momento y hasta MAX_ARCHIVOS_POR_CARGA documentos.
