@@ -109,6 +109,78 @@ def extraer_texto_docx(archivo):
     return '\n'.join(partes)
 
 
+# Una tabla que llega más abajo de esto en su página se quedó sin espacio; si la siguiente página
+# arranca una tabla por encima del otro umbral y con la misma geometría de columnas, es su
+# continuación. Los dos valores se calibraron contra las 21 tablas de un PDF real: distinguen las
+# continuaciones verdaderas de los pares de tablas distintas que simplemente se suceden (una tabla
+# que TERMINA a media página no continúa en la siguiente — ahí empieza otra cosa).
+UMBRAL_FONDO_PAGINA = 0.70
+UMBRAL_TOPE_PAGINA = 0.20
+# Tolerancia en puntos PDF para considerar que dos tablas tienen las mismas columnas.
+TOLERANCIA_COLUMNAS = 6
+
+
+def _geometria_columnas(tabla):
+    """Los bordes izquierdos de las columnas, que es la huella que delata una continuación: una
+    tabla partida por un salto de página conserva exactamente el mismo ancho de columnas."""
+    return sorted({round(celda[0]) for celda in tabla.cells if celda})
+
+
+def _mismas_columnas(a, b):
+    ga, gb = _geometria_columnas(a), _geometria_columnas(b)
+    if len(ga) != len(gb) or not ga:
+        return False
+    return all(abs(x - y) <= TOLERANCIA_COLUMNAS for x, y in zip(ga, gb))
+
+
+def _es_continuacion(anterior, siguiente):
+    """Si `siguiente` es la continuación de `anterior` partida por un salto de página."""
+    if siguiente['pagina'] != anterior['pagina'] + 1:
+        return False
+    if anterior['tabla'].bbox[3] < anterior['alto'] * UMBRAL_FONDO_PAGINA:
+        return False
+    if siguiente['tabla'].bbox[1] > siguiente['alto'] * UMBRAL_TOPE_PAGINA:
+        return False
+    return _mismas_columnas(anterior['tabla'], siguiente['tabla'])
+
+
+def _igual_sin_espacios(fila_a, fila_b):
+    norma = lambda fila: [' '.join((c or '').split()) for c in fila]  # noqa: E731
+    return norma(fila_a) == norma(fila_b)
+
+
+def _unir_filas(acumuladas, nuevas):
+    """Pega las filas de una continuación a las que ya se llevan, resolviendo los tres casos que
+    aparecen en un PDF real:
+
+    1. la continuación REPITE el encabezado (Word lo hace cuando la tabla tiene "repetir fila de
+       título"): se descarta, o quedaría como una fila de datos con los nombres de las columnas;
+    2. la continuación arranca con la primera celda vacía porque una fila quedó CORTADA por el
+       salto de página (el profesor en una página y su formación en la siguiente): sus celdas se
+       pegan a la última fila acumulada en vez de abrir una fila nueva, que es lo que hacía que el
+       modelo inventara un profesor fantasma;
+    3. ninguna de las dos: son filas nuevas y se agregan tal cual."""
+    if not nuevas:
+        return acumuladas
+    if not acumuladas:
+        return list(nuevas)
+
+    primera = nuevas[0]
+    if _igual_sin_espacios(primera, acumuladas[0]):
+        return acumuladas + list(nuevas[1:])
+
+    if not (primera[0] or '').strip():
+        ultima = list(acumuladas[-1])
+        for i, celda in enumerate(primera):
+            if i >= len(ultima) or not (celda or '').strip():
+                continue
+            previa = (ultima[i] or '').strip()
+            ultima[i] = f'{previa} {celda.strip()}'.strip() if previa else celda.strip()
+        return acumuladas[:-1] + [ultima] + list(nuevas[1:])
+
+    return acumuladas + list(nuevas)
+
+
 def _contenida(interna, externa, tolerancia=2):
     xi0, ti0, xi1, ti1 = interna
     xe0, te0, xe1, te1 = externa
@@ -188,45 +260,73 @@ def _texto_pdf_estructurado(pdf):
     `extract_text_lines()` para el texto de fuera; todo se ordena por posición vertical para
     respetar el orden de lectura. Los saltos de línea DENTRO de una celda se colapsan a un espacio:
     en un PDF son artefactos de maquetación (la celda era angosta), no parte de la respuesta."""
-    partes = []
-    rotulo_pendiente = ''
-    numero_tabla = 0
     corridas = _lineas_repetidas_en_cada_pagina(pdf)
 
-    for pagina in pdf.pages:
-        tablas = _sin_tablas_anidadas(pagina.find_tables())
-        # Los recuadros para excluir texto son los de TODAS las tablas detectadas, no solo las que
-        # se conservan: el contenido de una tabla anidada sigue siendo contenido de tabla y no
-        # debe volver a salir como texto suelto.
-        bboxes = [t.bbox for t in pagina.find_tables()]
-
-        bloques = [(t.bbox[1], 'tabla', t) for t in tablas]
+    # 1) Todos los bloques del documento en orden de lectura (página, y luego posición vertical).
+    bloques = []
+    for numero_pagina, pagina in enumerate(pdf.pages, start=1):
+        alto = pagina.height
+        detectadas = pagina.find_tables()
+        # Los recuadros para excluir texto son los de TODAS las detectadas, no solo las que se
+        # conservan: el contenido de una tabla anidada sigue siendo contenido de tabla y no debe
+        # volver a salir como texto suelto.
+        bboxes = [t.bbox for t in detectadas]
+        for tabla in _sin_tablas_anidadas(detectadas):
+            bloques.append({'pagina': numero_pagina, 'top': tabla.bbox[1], 'tipo': 'tabla',
+                            'tabla': tabla, 'alto': alto})
         try:
             lineas = pagina.extract_text_lines()
         except Exception:  # noqa: BLE001 — pdfplumber viejo o página rara: se cae a texto plano
-            lineas = []
             texto_plano = (pagina.extract_text() or '').strip()
             if texto_plano:
-                partes.append(texto_plano)
+                bloques.append({'pagina': numero_pagina, 'top': 0, 'tipo': 'texto',
+                                'texto': texto_plano})
+            continue
         for linea in lineas:
             if _dentro_de_alguna_tabla(linea, bboxes):
                 continue
             if ' '.join((linea['text'] or '').split()) in corridas:
                 continue
-            bloques.append((linea['top'], 'texto', linea['text']))
+            bloques.append({'pagina': numero_pagina, 'top': linea['top'], 'tipo': 'texto',
+                            'texto': linea['text']})
 
-        for _tope, tipo, dato in sorted(bloques, key=lambda b: b[0]):
-            if tipo == 'tabla':
-                numero_tabla += 1
-                filas = list(_filas_con_contenido(dato.extract()))
-                if filas:
-                    partes.extend(_bloque_tabla(numero_tabla, rotulo_pendiente, filas))
-                continue
-            texto = (dato or '').strip()
-            if not texto:
-                continue
-            partes.append(texto)
-            rotulo_pendiente = _rotulo(texto)
+    bloques.sort(key=lambda b: (b['pagina'], b['top']))
+
+    # 2) Las tablas partidas por saltos de página se agrupan ANTES de emitirse, para que la
+    #    continuación quede bajo el encabezado de su tabla y no como una tabla huérfana sin
+    #    encabezado — que era lo que obligaba al modelo a adivinar la columna de cada celda.
+    grupos = []
+    for bloque in bloques:
+        if bloque['tipo'] != 'tabla':
+            continue
+        if grupos and _es_continuacion(grupos[-1][-1], bloque):
+            grupos[-1].append(bloque)
+        else:
+            grupos.append([bloque])
+    cabeza_de_grupo = {id(grupo[0]): grupo for grupo in grupos}
+    continuaciones = {id(b) for grupo in grupos for b in grupo[1:]}
+
+    # 3) Emisión en orden, con cada grupo saliendo como UNA sola tabla en la posición de la
+    #    primera de sus partes.
+    partes = []
+    rotulo_pendiente = ''
+    numero_tabla = 0
+    for bloque in bloques:
+        if bloque['tipo'] == 'texto':
+            texto = (bloque['texto'] or '').strip()
+            if texto:
+                partes.append(texto)
+                rotulo_pendiente = _rotulo(texto)
+            continue
+        if id(bloque) in continuaciones:
+            continue
+        numero_tabla += 1
+        crudas = []
+        for parte in cabeza_de_grupo[id(bloque)]:
+            crudas = _unir_filas(crudas, parte['tabla'].extract())
+        filas = list(_filas_con_contenido(crudas))
+        if filas:
+            partes.extend(_bloque_tabla(numero_tabla, rotulo_pendiente, filas))
 
     return '\n'.join(partes)
 

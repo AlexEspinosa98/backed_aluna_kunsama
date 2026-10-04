@@ -270,3 +270,104 @@ class TablasAnidadasYCorridasTests(SimpleTestCase):
         a = self._Tabla((50, 100, 500, 200))
         b = self._Tabla((50, 100, 500, 200))
         self.assertEqual(len(lectura_documentos._sin_tablas_anidadas([a, b])), 1)
+
+
+class UnirFilasTests(SimpleTestCase):
+    """Los tres casos de una tabla partida por un salto de página, tal como aparecen en un PDF
+    real del instrumento de diagnóstico."""
+
+    def test_descarta_el_encabezado_repetido(self):
+        """Word repite la fila de título cuando la tabla tiene esa opción; si no se descarta, queda
+        como una fila de datos cuyos valores son los nombres de las columnas."""
+        acumuladas = [['Dimensión', 'Hallazgo'], ['Saber Pro', 'Coordinado']]
+        nuevas = [['Dimensión', 'Hallazgo'], ['Nivelación', 'Sin instancia']]
+        self.assertEqual(
+            lectura_documentos._unir_filas(acumuladas, nuevas),
+            [['Dimensión', 'Hallazgo'], ['Saber Pro', 'Coordinado'], ['Nivelación', 'Sin instancia']],
+        )
+
+    def test_pega_la_fila_cortada_a_la_anterior(self):
+        """Una fila cuyo contenido siguió en la página siguiente llega con la primera celda vacía.
+        Abrirle una fila nueva es lo que hacía que el modelo transcribiera un profesor fantasma."""
+        acumuladas = [['Profesor(a)', 'Formación'], ['Borish Cuadrado', 'Biólogo; MSc en']]
+        nuevas = [['', 'Ciencias Ambientales'], ['Cindi Güete', 'Bióloga']]
+        self.assertEqual(
+            lectura_documentos._unir_filas(acumuladas, nuevas),
+            [['Profesor(a)', 'Formación'],
+             ['Borish Cuadrado', 'Biólogo; MSc en Ciencias Ambientales'],
+             ['Cindi Güete', 'Bióloga']],
+        )
+
+    def test_filas_nuevas_se_agregan_tal_cual(self):
+        acumuladas = [['Proceso', 'Quién'], ['Microdiseños', 'Jefe']]
+        nuevas = [['Evaluación', 'Comité']]
+        self.assertEqual(
+            lectura_documentos._unir_filas(acumuladas, nuevas),
+            [['Proceso', 'Quién'], ['Microdiseños', 'Jefe'], ['Evaluación', 'Comité']],
+        )
+
+    def test_no_pisa_lo_ya_escrito_al_pegar_una_fila_cortada(self):
+        acumuladas = [['A', 'B'], ['uno', 'dos']]
+        nuevas = [['', 'tres']]
+        self.assertEqual(
+            lectura_documentos._unir_filas(acumuladas, nuevas),
+            [['A', 'B'], ['uno', 'dos tres']],
+        )
+
+
+class EsContinuacionTests(SimpleTestCase):
+    """El criterio para decidir que una tabla continúa a la anterior. Los umbrales se calibraron
+    contra las 21 tablas de un PDF real: tienen que unir las continuaciones verdaderas y NO unir
+    dos tablas distintas que simplemente se suceden."""
+
+    class _Tabla:
+        def __init__(self, bbox, cols=(47, 150, 300, 450)):
+            self.bbox = bbox
+            self.cells = [(x, bbox[1], x + 50, bbox[3]) for x in cols]
+
+    def _bloque(self, pagina, top, bottom, cols=(47, 150, 300, 450), alto=792):
+        return {'pagina': pagina, 'top': top, 'alto': alto,
+                'tabla': self._Tabla((47, top, 565, bottom), cols)}
+
+    def test_une_la_que_llega_al_fondo_con_la_que_arranca_arriba(self):
+        anterior = self._bloque(1, 353, 742)     # 94% de la página
+        siguiente = self._bloque(2, 40, 740)     # 5% de la página
+        self.assertTrue(lectura_documentos._es_continuacion(anterior, siguiente))
+
+    def test_no_une_si_la_anterior_termina_a_media_pagina(self):
+        """Una tabla que TERMINA a media página no se quedó sin espacio: lo que viene después es
+        otra tabla. Es el caso de Componente 1 → Componente 2 en el formato real."""
+        anterior = self._bloque(10, 40, 492)     # 62%, le sobraba página
+        siguiente = self._bloque(11, 55, 738)
+        self.assertFalse(lectura_documentos._es_continuacion(anterior, siguiente))
+
+    def test_no_une_tablas_de_la_misma_pagina(self):
+        anterior = self._bloque(7, 415, 737)
+        siguiente = self._bloque(7, 40, 372)
+        self.assertFalse(lectura_documentos._es_continuacion(anterior, siguiente))
+
+    def test_no_une_si_las_columnas_no_coinciden(self):
+        anterior = self._bloque(1, 353, 742, cols=(47, 150, 300, 450))
+        siguiente = self._bloque(2, 40, 740, cols=(47, 200, 380))
+        self.assertFalse(lectura_documentos._es_continuacion(anterior, siguiente))
+
+    def test_no_une_paginas_no_consecutivas(self):
+        self.assertFalse(lectura_documentos._es_continuacion(
+            self._bloque(1, 353, 742), self._bloque(3, 40, 740)))
+
+
+class PdfTablaQueCruzaPaginaTests(SimpleTestCase):
+    """Integración: un PDF de verdad con una tabla que no cabe en una página."""
+
+    def test_sale_como_una_sola_tabla_con_su_encabezado(self):
+        filas = [['Profesor(a)', 'Formación']]
+        filas += [[f'Docente {i}', f'Magíster número {i}'] for i in range(1, 61)]
+        texto, imagenes = lectura_documentos.extraer_texto_o_imagenes_pdf(
+            _pdf_en_memoria(['Encabezado del instrumento, con texto suficiente para el umbral.', filas])
+        )
+        self.assertIsNone(imagenes)
+        self.assertEqual(texto.count('[TABLA '), 1, 'la tabla partida debe salir unificada')
+        # Las filas de las dos páginas, bajo el mismo encabezado.
+        self.assertIn('Profesor(a) | Formación', texto)
+        self.assertIn('Docente 1 | Magíster número 1', texto)
+        self.assertIn('Docente 60 | Magíster número 60', texto)
