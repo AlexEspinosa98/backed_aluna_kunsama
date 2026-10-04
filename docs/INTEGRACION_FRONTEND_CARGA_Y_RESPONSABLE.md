@@ -123,7 +123,8 @@ guardado se puede corregir.
    `aprobado_en` lleno, las respuestas ya están guardadas.
 2. **Pantalla de carga masiva** con progreso por archivo y los rechazados a la vista.
 3. **Pantalla de corrección** de respuestas guardadas.
-4. **Dos advertencias antes de subir** (ver "Sobrescribe lo anterior").
+4. **El diálogo de decisión** cuando el documento es de alguien que ya respondió (ver "Si la
+   persona ya respondió"): actualizar, sumar otra respuesta o asignar a otra persona.
 5. **El diálogo de asignar responsable deja de ser una lista cerrada**: si la persona no está, se
    escribe el nombre y se crea.
 
@@ -230,6 +231,7 @@ En la mayoría de los casos no hace falta intervenir:
 | `ambiguo` | Coinciden **varias** personas registradas | **Sí** |
 | `sin_coincidencia` | El documento traía correo pero **ningún nombre legible** | **Sí** |
 | `sin_dato` | El documento no traía responsable | **Sí** |
+| `con_respuestas` | Coincidió con alguien que **ya respondió** este momento — no se escribió nada | **Sí** (ver abajo) |
 
 `responsable_detectado` es **lo que la IA leyó**, tal cual, sin normalizar:
 
@@ -245,10 +247,11 @@ papel, con `rol` en `"sin rol"` y —si el documento no traía correo— un corr
 `@sin-registro.local` con el que **no pueden entrar a la plataforma**. Si después se registran de
 verdad, son las que hay que reconciliar.
 
-El segundo documento de esa misma persona **no la duplica**: llega como `emparejado` apuntando al
-participante ya creado, incluso si el nombre viene con otras mayúsculas o tildes.
+El segundo documento de esa misma persona **no la duplica**: la reconoce aunque el nombre venga con
+otras mayúsculas o tildes. Como esa persona ya tiene respuestas, llega como `con_respuestas` (ver
+[Si la persona ya respondió](#si-la-persona-ya-respondió)).
 
-**Sobre los tres que piden intervención:** `estado` queda `completo` pero `aprobado_en` viene en
+**Sobre `ambiguo`, `sin_coincidencia` y `sin_dato`:** `estado` queda `completo` pero `aprobado_en` viene en
 `null` y `participante` en `null`. La transcripción está lista; lo único que falta es a nombre de
 quién guardarla.
 
@@ -271,6 +274,14 @@ POST /api/admin/momento-extracciones/{id}/asignar-responsable/
 
 Hay que mandar **exactamente una** de las dos formas; las dos juntas, o ninguna, es `400`.
 
+Campos opcionales (HU-91), solo cuentan si la persona elegida ya tiene respuestas en el momento:
+
+| Campo | Valores | Para qué |
+|---|---|---|
+| `modo` | `"sobrescribir"` · `"nueva_version"` | Qué hacer con lo que ya tenía. Sin él, `409`. |
+| `version` | entero | Con `sobrescribir`, cuál actualizar si tiene más de una. |
+| `nuevo` | `true` | Con `nombre`: crear una persona nueva **aunque** el nombre coincida con alguien. |
+
 - **No vuelve a llamar a la IA**: usa la transcripción ya guardada. Es instantáneo.
 - **Este mismo llamado escribe las respuestas.** La respuesta vuelve con `aprobado_en` lleno; no
   hay que aprobar después.
@@ -278,29 +289,55 @@ Hay que mandar **exactamente una** de las dos formas; las dos juntas, o ninguna,
   de crear una homónima — un dedazo no deja dos fichas de la misma persona.
 - `responsable_estado` **sí** se actualiza: queda en `creado` o `emparejado` según qué pasó.
 
-## ⚠️ Sobrescribe lo anterior
+## Si la persona ya respondió
 
-Si el participante ya tenía respuestas en ese momento —porque las mandó por la web, o porque ya se
-le cargó otro documento— la carga las reemplaza:
+**Desde HU-91 una carga nunca pisa respuestas existentes por su cuenta.** Si el documento es de
+alguien que ya respondió ese momento —por la web, o con otro documento—, la extracción termina así:
 
-- **celdas y preguntas sueltas**: se pisa el contenido de cada una que el documento mencione. Las
-  que el documento no menciona quedan intactas.
-- **tablas de filas agregadas** (mapa de capacidades profesorales, asuntos para decisión
-  institucional, compromisos inmediatos): se borran **todas** las filas de esa pregunta y se
-  recrean con las del documento. Si había diez profesores cargados por la web y el documento trae
-  tres, **quedan tres**.
+```json
+{
+  "estado": "completo",
+  "participante": null,
+  "aprobado_en": null,
+  "responsable_estado": "con_respuestas",
+  "participante_sugerido": 88,
+  "participante_sugerido_nombre": "Jorge Mario Ortega Iglesias",
+  "requiere_decision": true,
+  "versiones_existentes": [1]
+}
+```
 
-Es el mismo criterio que el envío normal desde la web: el documento es *la* versión buena de esa
-tabla, no un anexo. Pero el usuario tiene que saberlo antes de arrastrar treinta archivos, y desde
-que la escritura es automática ya no hay un paso donde alguien pueda notarlo.
+No se escribió nada. Con `requiere_decision: true` hay que preguntarle a quien cargó, con estas tres
+salidas, todas por `asignar-responsable`:
 
-**Dos advertencias que pedimos poner:**
+| Opción en pantalla | Body |
+|---|---|
+| **Actualizar sus respuestas** (es una versión corregida del mismo documento) | `{"participante_id": 88, "modo": "sobrescribir"}` |
+| **Guardar como otra respuesta suya** (otro documento: otra facultad, otra dependencia) | `{"participante_id": 88, "modo": "nueva_version"}` |
+| **Es otra persona** | `{"participante_id": <otro>}` o `{"nombre": "…", "nuevo": true}` |
 
-1. En la pantalla de carga, individual y masiva: que los documentos reemplazan lo que esas personas
-   hubieran respondido en ese momento.
-2. Si en una misma tanda hay dos documentos del mismo responsable, el segundo pisa al primero y el
-   backend no avisa. Si se puede detectar en cliente —dos archivos que terminan con el mismo
-   `participante`— vale advertirlo.
+- **`sobrescribir`** actualiza lo que el documento trae: cada pregunta que menciona se reemplaza (en
+  las tablas de filas agregadas, todas las filas de esa pregunta); las que no menciona quedan como
+  estaban. Si la persona tiene varias versiones (`versiones_existentes: [1, 2]`), hay que mandar
+  también `"version"`; si no, `400`.
+- **`nueva_version`** escribe en la versión siguiente (`version_escrita` en la respuesta: 2, 3…). Las
+  anteriores quedan intactas y **conviven**: la analítica las cuenta como dos respuestas.
+- **Otra persona**: si la elegida también tiene respuestas, vuelve a pedir `modo`.
+
+Si mandan `participante_id` de alguien con respuestas **sin** `modo`, la respuesta es `409` y no se
+guarda nada (ni la asignación ni una persona creada en ese mismo llamado):
+
+```json
+{ "detail": "Jorge Mario Ortega Iglesias ya tiene respuestas en este momento. …",
+  "participante_id": 88, "versiones_existentes": [1],
+  "modos": ["sobrescribir", "nueva_version"] }
+```
+
+Pasa lo mismo si eligieron a la persona al subir el archivo (`participante_id` en el upload): haberla
+elegido no es haber elegido pisarle lo que tenía.
+
+**La versión 1 es la de la web.** El participante, desde su pantalla, sigue viendo y corrigiendo
+solo la suya (la 1); las que se le sumen cargando documentos no le aparecen ni las puede tocar.
 
 ## Corregir una respuesta guardada
 
@@ -338,7 +375,9 @@ colgando.
 GET /api/admin/respuestas/?momento=61
 ```
 
-Cada item trae `id`, `pregunta`, `participante`, `fila`, `fila_lista`, `columna` y `texto_libre`.
+Cada item trae `id`, `pregunta`, `participante`, `version`, `fila`, `fila_lista`, `columna` y
+`texto_libre`. Con `&version=2` se filtra una versión (HU-91); sin el filtro vienen todas, así que
+para pintar las respuestas de una persona hay que agrupar por `(participante, version)`.
 Para armar la pantalla de revisión, cruzarlo con `GET /api/admin/momentos/{id}/` —que da las
 preguntas con sus filas y columnas— es lo mismo que ya hacen para pintar un momento.
 
@@ -413,11 +452,13 @@ POST /api/admin/instrumento-extracciones/{id}/asignar-responsable/
 - [ ] Dejar de exigir la persona antes de subir.
 - [ ] Pantalla de carga masiva, con los `rechazadas` a la vista.
 - [ ] Polling por tanda con el índice filtrado por momento.
-- [ ] Manejar los **6** valores de `responsable_estado`, no solo `emparejado`.
+- [ ] Manejar los **7** valores de `responsable_estado`, no solo `emparejado`.
 - [ ] Mostrar `responsable_detectado` siempre que haya que elegir a mano.
 - [ ] No auto-seleccionar en `ambiguo`.
 - [ ] Permitir escribir un nombre nuevo en el diálogo de asignar.
-- [ ] Advertir que una carga sobrescribe lo anterior.
+- [ ] Con `requiere_decision: true`, ofrecer las tres salidas (`sobrescribir`, `nueva_version`,
+      otra persona) y manejar el `409` de `asignar-responsable`.
+- [ ] En la revisión de respuestas, agrupar por `(participante, version)`.
 - [ ] Pantalla de corrección (`PATCH` / `DELETE` por respuesta).
 
 **Vía C — admin, instrumentos**

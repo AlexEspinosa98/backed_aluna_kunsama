@@ -1,5 +1,6 @@
 import threading
 
+from django.db import transaction
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -99,6 +100,9 @@ class RespuestaAdminViewSet(
             queryset = queryset.filter(pregunta__momento_id=momento_id)
         if pregunta_id:
             queryset = queryset.filter(pregunta_id=pregunta_id)
+        version = self.request.query_params.get('version')
+        if version:
+            queryset = queryset.filter(version=version)
         return queryset
 
 
@@ -221,10 +225,19 @@ class ExtraccionMomentoViewSet(
         return Response(ExtraccionMomentoSerializer(extraccion).data)
 
     @action(detail=True, methods=['post'], url_path='asignar-responsable')
+    @transaction.atomic
     def asignar_responsable(self, request, pk=None):
         """Asigna a mano el participante que la IA no pudo emparejar (HU-55) — la transcripción
         ya está en `resultado`, lo único que falta es a nombre de quién se va a escribir. No toca
-        `responsable_estado`: ese campo deja constancia de POR QUÉ hubo que asignar a mano."""
+        `responsable_estado`: ese campo deja constancia de POR QUÉ hubo que asignar a mano.
+
+        HU-91: también resuelve el caso `requiere_decision` (la persona ya respondió el momento).
+        Las tres salidas son este mismo endpoint:
+        - `participante_id` + `modo: "sobrescribir"` (y `version` si tiene varias);
+        - `participante_id` + `modo: "nueva_version"`: las dos respuestas conviven;
+        - otra persona: `participante_id` de alguien más, o `nombre` + `nuevo: true` para crearla.
+        Si la persona elegida ya tiene respuestas y no viene `modo`, 409 con sus versiones — y por
+        la transacción no queda nada a medias (ni la asignación ni una persona recién creada)."""
         extraccion = self.get_object()
         if extraccion.aprobado_en is not None:
             raise PermissionDenied('Esta extracción ya fue aprobada, no se puede reasignar.')
@@ -247,7 +260,9 @@ class ExtraccionMomentoViewSet(
             # cuál de las dos cosas pasó.
             detectado = {'nombre': datos['nombre'],
                          'correo': datos.get('correo_institucional') or None}
-            participante, estado = emparejar_responsable_momento(extraccion.momento, detectado)
+            participante, estado = None, emparejamiento.ESTADO_CREADO
+            if not datos.get('nuevo'):
+                participante, estado = emparejar_responsable_momento(extraccion.momento, detectado)
             if participante is None:
                 participante = crear_participante_desde_responsable(extraccion.momento, detectado)
                 estado = emparejamiento.ESTADO_CREADO
@@ -259,6 +274,8 @@ class ExtraccionMomentoViewSet(
         # Asignar el responsable es lo único que faltaba para poder escribir: se escribe acá mismo
         # en vez de dejar una extracción completa esperando un paso que ya no existe (HU-84).
         if extraccion.estado == ExtraccionMomento.ESTADO_COMPLETO:
-            escribir_extraccion_momento(extraccion, request.user)
+            escribir_extraccion_momento(
+                extraccion, request.user, modo=datos.get('modo'), version=datos.get('version'),
+            )
             extraccion.refresh_from_db()
         return Response(ExtraccionMomentoSerializer(extraccion).data)

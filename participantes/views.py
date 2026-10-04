@@ -399,6 +399,9 @@ class RespuestasMomentoView(APIView):
             respuestas = Respuesta.objects.filter(pregunta__momento=momento, mesa=participante.mesa)
         else:
             respuestas = Respuesta.objects.filter(pregunta__momento=momento, participante=participante)
+        # Lo que el participante puede retomar y corregir es su versión, la original — no las que
+        # un admin le haya sumado cargando documentos (HU-91).
+        respuestas = respuestas.filter(version=Respuesta.VERSION_ORIGINAL)
 
         respuestas = respuestas.select_related('pregunta').prefetch_related('opciones')
         return Response(RespuestaSalidaSerializer(respuestas, many=True).data, status=status.HTTP_200_OK)
@@ -474,6 +477,9 @@ class RespuestasMomentoView(APIView):
             raise ValidationError({'faltantes': f'Preguntas obligatorias sin responder: {faltantes}'})
 
         dueño = {'mesa': mesa} if momento.tipo == Momento.TIPO_MESA else {'participante': participante}
+        # El envío por la web es siempre la versión original. Las demás (HU-91) solo nacen de
+        # cargar un documento a nombre de alguien que ya respondió, y nunca se tocan desde acá.
+        dueño['version'] = Respuesta.VERSION_ORIGINAL
 
         respuestas_guardadas = []
         for items in entradas_por_pregunta.values():

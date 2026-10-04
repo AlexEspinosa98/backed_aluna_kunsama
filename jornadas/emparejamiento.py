@@ -38,6 +38,10 @@ ESTADO_EMPAREJADO = 'emparejado'
 # Vive acá, con los demás estados, para que al revisar una carga se pueda distinguir de un tirón
 # a quién se emparejó con alguien que ya existía y a quién se creó leyendo un papel.
 ESTADO_CREADO = 'creado'
+# Coincide con alguien que YA tiene respuestas en ese momento (HU-91). No se escribe nada: quien
+# cargó decide si sobrescribe, suma una versión nueva o se lo asigna a otra persona. Lo fija el
+# llamador (que es quien puede mirar las respuestas), no `emparejar`, que es una función pura.
+ESTADO_CON_RESPUESTAS = 'con_respuestas'
 # Coincide más de una y no hay forma de desempatar sin inventar un criterio.
 ESTADO_AMBIGUO = 'ambiguo'
 # Nadie coincide.
@@ -50,6 +54,7 @@ ESTADO_CHOICES = [
     (ESTADO_AMBIGUO, 'Ambiguo — varias personas coinciden'),
     (ESTADO_SIN_COINCIDENCIA, 'Sin coincidencia'),
     (ESTADO_CREADO, 'Creado a partir del documento'),
+    (ESTADO_CON_RESPUESTAS, 'Ya tiene respuestas en el momento — hay que decidir'),
 ]
 
 
