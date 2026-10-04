@@ -467,8 +467,8 @@ def analizar_momento_ia(analisis_id):
 
         # Rediseño (contrato kunsamu.analisis/v2, docs/mejora_promps/): este endpoint produce el
         # contrato v2 con el pipeline `llm` en modo `por_momento` sobre ESTE momento. El prompt es
-        # el archivo íntegro de la entrega (analitica/v2/recursos/), sin plantilla, sin bloque de
-        # enfoque ni regla anexada; contexto/instrucciones viajan como datos en `personalizacion`.
+        # el `SystemPrompt` activo de tipo `analisis_llm` (HU-92), íntegro, sin plantilla, sin
+        # bloque de enfoque ni regla anexada; contexto/instrucciones viajan como datos en `personalizacion`.
         # `enfoque` se sigue guardando por compatibilidad pero ya no influye en nada.
         from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 

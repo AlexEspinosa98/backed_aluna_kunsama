@@ -80,6 +80,140 @@ class ResultadoV2Mixin(models.Model):
         abstract = True
 
 
+class SystemPromptInmutable(Exception):
+    """Se intentó modificar o borrar una versión de system prompt que ya estuvo activa."""
+
+
+class SystemPrompt(models.Model):
+    """Los system prompts de los flujos de IA de la analítica, versionados (HU-92).
+
+    Antes vivían en el código (dos `.md` del contrato v2 y constantes en cada módulo), así que
+    cambiar uno era un despliegue y no quedaba rastro de con cuál se generó cada análisis. Ahora
+    cada flujo pide `SystemPrompt.activo(tipo)` y usa el contenido de la versión activa de su tipo.
+
+    Reglas:
+    - **Una versión activa por tipo** (constraint parcial en la base). Activar una desactiva la
+      anterior del mismo tipo, nunca las de otro.
+    - **Inmutable desde que se activa por primera vez** (`activado_en`): ni su contenido ni sus
+      datos se pueden cambiar, ni se puede borrar — un análisis viejo dice "lo generó la versión 3"
+      y eso tiene que seguir significando lo mismo. Para cambiar un prompt se crea una versión
+      nueva. Un borrador que nunca se activó sí se puede editar y borrar.
+    - Desactivar no existe como acción: se activa otra versión (incluida una anterior, para volver
+      atrás). Un tipo nunca se queda sin prompt.
+
+    `referencia` (ej. `analisis_llm#3`) es lo que se guarda en `version_prompt` de cada corrida."""
+    TIPO_ANALISIS_LLM = 'analisis_llm'
+    TIPO_ANALISIS_BERTOPIC = 'analisis_bertopic'
+    TIPO_INFOGRAFIA = 'infografia'
+    TIPO_PRESENTACION = 'presentacion'
+    TIPO_PRESENTACION_DISENO = 'presentacion_diseno'
+    TIPO_SUGERENCIAS = 'sugerencias'
+    TIPO_CHOICES = [
+        (TIPO_ANALISIS_LLM, 'Análisis — pipeline LLM'),
+        (TIPO_ANALISIS_BERTOPIC, 'Análisis — pipeline BERTopic + LLM'),
+        (TIPO_INFOGRAFIA, 'Infografía (prompt base de las láminas)'),
+        (TIPO_PRESENTACION, 'Presentación HTML de un reporte'),
+        (TIPO_PRESENTACION_DISENO, 'Diseño de presentación (diagramación)'),
+        (TIPO_SUGERENCIAS, 'Sugerencias para el análisis guiado'),
+    ]
+
+    tipo = models.CharField(max_length=30, choices=TIPO_CHOICES)
+    # Consecutiva por tipo, la asigna el backend al crear (1, 2, 3…).
+    version = models.PositiveIntegerField(editable=False)
+    etiqueta = models.CharField(
+        max_length=60, blank=True,
+        help_text='Nombre corto opcional para reconocerla (ej. "v2.2 analista principal").',
+    )
+    notas = models.TextField(blank=True, help_text='Qué cambia respecto de la anterior y por qué.')
+    contenido = models.TextField()
+    activo = models.BooleanField(default=False, editable=False)
+    activado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    activado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='system_prompts_activados', editable=False,
+    )
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='system_prompts_creados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['tipo', '-version']
+        constraints = [
+            models.UniqueConstraint(fields=['tipo', 'version'], name='system_prompt_version_unica'),
+            models.UniqueConstraint(
+                fields=['tipo'], condition=models.Q(activo=True), name='system_prompt_un_activo_por_tipo',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.referencia}{" (activo)" if self.activo else ""}'
+
+    @property
+    def referencia(self):
+        return f'{self.tipo}#{self.version}'
+
+    @property
+    def inmutable(self):
+        return self.activado_en is not None
+
+    @classmethod
+    def activo_de(cls, tipo):
+        """La versión activa de `tipo`. Lanza `SystemPrompt.DoesNotExist` con un mensaje claro si
+        no hay ninguna — no se cae a un texto del código: si la tabla no tiene el prompt, el flujo
+        tiene que fallar a la vista, no generar con algo que nadie eligió."""
+        try:
+            return cls.objects.get(tipo=tipo, activo=True)
+        except cls.DoesNotExist:
+            raise cls.DoesNotExist(
+                f'No hay un system prompt activo de tipo "{tipo}". Activa una versión en '
+                '/api/admin/system-prompts/.'
+            )
+
+    def save(self, *args, **kwargs):
+        if self.pk is None:
+            if self.version is None:
+                ultima = SystemPrompt.objects.filter(tipo=self.tipo).aggregate(
+                    m=models.Max('version'),
+                )['m']
+                self.version = (ultima or 0) + 1
+        else:
+            anterior = SystemPrompt.objects.filter(pk=self.pk).values(
+                'tipo', 'contenido', 'etiqueta', 'notas', 'activado_en',
+            ).first()
+            if anterior and anterior['activado_en'] is not None and any(
+                anterior[campo] != getattr(self, campo) for campo in ('tipo', 'contenido', 'etiqueta', 'notas')
+            ):
+                raise SystemPromptInmutable(
+                    f'{self.referencia} ya estuvo activa y no se puede modificar: crea una versión nueva.'
+                )
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.inmutable:
+            raise SystemPromptInmutable(
+                f'{self.referencia} ya estuvo activa y no se puede borrar: puede haber análisis '
+                'generados con ella.'
+            )
+        return super().delete(*args, **kwargs)
+
+    def activar(self, usuario=None):
+        """La deja como la activa de su tipo (y a la anterior, no). Atómico y con bloqueo de las
+        filas del tipo, para que dos activaciones simultáneas no dejen dos activas ni ninguna."""
+        from django.db import transaction
+
+        with transaction.atomic():
+            list(SystemPrompt.objects.select_for_update().filter(tipo=self.tipo))
+            SystemPrompt.objects.filter(tipo=self.tipo, activo=True).exclude(pk=self.pk).update(activo=False)
+            campos = {'activo': True}
+            if self.activado_en is None:
+                campos.update(activado_en=timezone.now(), activado_por=usuario)
+            SystemPrompt.objects.filter(pk=self.pk).update(**campos)
+        self.refresh_from_db()
+        return self
+
+
 class PlantillaAnalisis(models.Model):
     # 'local': instrucciones adicionales para el pipeline multiagente local (analysis.py) —
     # aplican a cada pregunta, momento y jornada, ver _instrucciones_plantilla.
@@ -194,6 +328,9 @@ class Reporte(AnalisisGuiadoMixin, AnalisisGuiadoPorMomentoMixin, ResultadoV2Mix
         (PRESENTACION_ESTADO_ERROR, 'Error'),
     ]
     presentacion_html = models.TextField(blank=True)
+    # La versión de system prompt con la que se generó la presentación (HU-92). Aparte de
+    # `version_prompt`, que es la del análisis.
+    presentacion_version_prompt = models.CharField(max_length=40, blank=True)
     presentacion_estado = models.CharField(
         max_length=12, choices=PRESENTACION_ESTADO_CHOICES, default=PRESENTACION_ESTADO_PENDIENTE,
     )
@@ -398,6 +535,8 @@ class InfografiaJornada(models.Model):
         'propósito: se prueban distintas y se compara el resultado contra `prompt_usado`.'
     ))
     prompt_usado = models.TextField(blank=True)
+    # La versión de system prompt con la que se generó (`SystemPrompt.referencia`, HU-92).
+    version_prompt = models.CharField(max_length=40, blank=True)
     error_mensaje = models.TextField(blank=True)
     modelo_usado = models.CharField(max_length=60, blank=True)
     solicitado_por = models.ForeignKey(
@@ -534,6 +673,8 @@ class PresentacionDiseno(models.Model):
         related_name='presentacion_diseno',
     )
     version = models.CharField(max_length=40, default='kunsamu.presentacion/v1')
+    # La versión de system prompt con la que se diseñó (`SystemPrompt.referencia`, HU-92).
+    version_prompt = models.CharField(max_length=40, blank=True)
     # Único campo del proyecto que SÍ guarda el nombre real del modelo de OpenAI que respondió
     # (la HU lo pide explícitamente en §2.2) — el resto del código lo trata como secreto de
     # proveedor y nunca lo expone en un campo genérico.

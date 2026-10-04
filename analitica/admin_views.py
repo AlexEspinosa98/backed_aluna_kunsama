@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import APIException
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -19,7 +20,7 @@ from .analysis import _estadisticas_pregunta, procesar_reporte
 from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis,
-    PresentacionDiseno, Reporte,
+    PresentacionDiseno, Reporte, SystemPrompt, SystemPromptInmutable,
 )
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
@@ -30,7 +31,7 @@ from .serializers import (
     AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
     AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
     InfografiaJornadaSerializer, PlantillaAnalisisSerializer, PresentacionDisenoSerializer,
-    ReporteCrearSerializer, ReporteSerializer,
+    ReporteCrearSerializer, ReporteSerializer, SystemPromptListaSerializer, SystemPromptSerializer,
 )
 from .sugerencias_ia_openai import generar_sugerencias
 from .v2.contrato import VERSION as VERSION_V2
@@ -1319,7 +1320,7 @@ class PresentacionDisenoViewSet(
         }
 
         try:
-            diseno, correcciones, modelo_usado, assets_enviados = generar_diseno(
+            diseno, correcciones, modelo_usado, assets_enviados, version_prompt = generar_diseno(
                 jornada, contexto_analisis, diapositivas,
             )
         except ErrorGeneracionDiseno as exc:
@@ -1331,9 +1332,83 @@ class PresentacionDisenoViewSet(
         instancia, _creada = PresentacionDiseno.objects.update_or_create(
             **{campo: analisis},
             defaults={
-                'modelo': modelo_usado, 'diapositivas': diapositivas, 'diseno': diseno,
+                'modelo': modelo_usado, 'version_prompt': version_prompt,
+                'diapositivas': diapositivas, 'diseno': diseno,
                 'correcciones': correcciones, 'assets': assets_enviados,
             },
         )
         salida = PresentacionDisenoSerializer(instancia)
         return Response(salida.data, status=status.HTTP_201_CREATED)
+
+
+class SystemPromptViewSet(viewsets.ModelViewSet):
+    """Versiones de los system prompts de la analítica (HU-92). Globales, como las plantillas:
+    cualquier admin las lee, solo un admin completo crea, edita, borra o activa.
+
+    - `GET ?tipo=analisis_llm` lista las versiones de un tipo (sin `contenido`); `GET {id}/` trae
+      el texto completo.
+    - `GET activos/`: la versión activa de cada tipo, con contenido.
+    - `POST`: crea la versión siguiente del tipo (opcionalmente `activar: true`).
+    - `PATCH`/`DELETE`: solo sobre un borrador que nunca se activó — una versión que ya estuvo
+      activa es inmutable (409).
+    - `POST {id}/activar/`: la deja como la activa de su tipo; sirve también para volver a una
+      anterior."""
+    permission_classes = [IsAdminUser]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action in ('create', 'partial_update', 'update', 'destroy', 'activar'):
+            return [EsAdminCompleto()]
+        return super().get_permissions()
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return SystemPromptListaSerializer
+        return SystemPromptSerializer
+
+    def get_queryset(self):
+        queryset = SystemPrompt.objects.select_related('activado_por', 'creado_por')
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+        activo = self.request.query_params.get('activo')
+        if activo is not None:
+            queryset = queryset.filter(activo=activo.lower() in ('true', '1'))
+        return queryset
+
+    def perform_create(self, serializer):
+        activar = serializer.validated_data.pop('activar', False)
+        prompt = serializer.save(creado_por=self.request.user)
+        if activar:
+            prompt.activar(self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.validated_data.pop('activar', None)
+        if serializer.instance.inmutable:
+            raise Conflicto(
+                f'{serializer.instance.referencia} ya estuvo activa y no se puede modificar: crea '
+                'una versión nueva.'
+            )
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        try:
+            instance.delete()
+        except SystemPromptInmutable as exc:
+            raise Conflicto(str(exc))
+
+    @action(detail=True, methods=['post'])
+    def activar(self, request, pk=None):
+        prompt = self.get_object().activar(request.user)
+        return Response(SystemPromptSerializer(prompt).data)
+
+    @action(detail=False, methods=['get'])
+    def activos(self, request):
+        return Response(SystemPromptSerializer(
+            SystemPrompt.objects.filter(activo=True).order_by('tipo'), many=True,
+        ).data)
+
+
+class Conflicto(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_code = 'conflicto'

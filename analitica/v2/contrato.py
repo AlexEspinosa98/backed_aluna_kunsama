@@ -1,9 +1,12 @@
 """Constantes y recursos congelados del contrato `kunsamu.analisis/v2`.
 
-Los archivos de `recursos/` son copias de la entrega `docs/mejora_promps/` (20-sep-2026). Se
-cargan desde acá y no desde `docs/` para que un reordenamiento de la documentación nunca cambie
-lo que corre en producción. Quien modifique un recurso debe subir a mano la constante de versión
-correspondiente: cada `AnalisisV2` guarda con qué versión de prompt y de esquema se generó.
+El esquema de `recursos/` es copia de la entrega `docs/mejora_promps/` (20-sep-2026); se carga
+desde acá y no desde `docs/` para que un reordenamiento de la documentación nunca cambie lo que
+corre en producción. Quien lo modifique debe subir a mano `VERSION_ESQUEMA`.
+
+Los system prompts ya NO viven acá: desde HU-92 están en la tabla `analitica.SystemPrompt`, uno
+activo por tipo (`TIPO_PROMPT_POR_PIPELINE`), y cada corrida guarda en `version_prompt` la
+referencia de la versión que usó.
 """
 import json
 from functools import lru_cache
@@ -11,14 +14,6 @@ from pathlib import Path
 
 VERSION = 'kunsamu.analisis/v2'
 VERSION_ESQUEMA = 'v2.0'
-# v2.1 (2026-09-20): SYSTEM_PROMPT_LLM.md reemplazado por la versión "analista principal" que
-# mandó el frontend (rol experto, cálculos que la evidencia permita, títulos como conclusión).
-# v2.2 (2026-09-20): tercera versión del FE para la ruta `llm` — el LLM es responsable de ejecutar
-# el análisis y dejarlo listo para renderizar; las instrucciones del usuario se evalúan con criterio
-# y hay que explicar lo que no se atendió; `nube_palabras` con frecuencias calculadas por él; y la
-# aclaración de que en las barras `categoria` es cada barra y `serie` cada opción (justo lo que
-# `validacion.normalizar_salida` venía corrigiendo a posteriori).
-VERSION_PROMPT = 'v2.2'
 
 MODO_INTEGRAL = 'integral'
 MODO_POR_MOMENTO = 'por_momento'
@@ -38,9 +33,11 @@ PIPELINE_CHOICES = [
 ESTADOS_ANALITICOS = ('completo', 'parcial', 'sin_datos', 'datos_insuficientes')
 
 RECURSOS = Path(__file__).resolve().parent / 'recursos'
-_ARCHIVO_PROMPT = {
-    PIPELINE_LLM: 'SYSTEM_PROMPT_LLM.md',
-    PIPELINE_BERTOPIC_LLM: 'SYSTEM_PROMPT_BERTOPIC.md',
+# Qué tipo de `SystemPrompt` usa cada pipeline (los valores son `SystemPrompt.TIPO_*`; van como
+# texto porque models.py importa este módulo y no al revés).
+TIPO_PROMPT_POR_PIPELINE = {
+    PIPELINE_LLM: 'analisis_llm',
+    PIPELINE_BERTOPIC_LLM: 'analisis_bertopic',
 }
 
 
@@ -50,9 +47,3 @@ def cargar_esquema():
     necesite una variante (ver `llm.esquema_para_openai`) hace su propia copia."""
     with open(RECURSOS / 'analisis.schema.json', encoding='utf-8') as archivo:
         return json.load(archivo)
-
-
-@lru_cache(maxsize=None)
-def cargar_prompt(pipeline):
-    """El system prompt completo del pipeline, tal cual está en el archivo — sin anexos."""
-    return (RECURSOS / _ARCHIVO_PROMPT[pipeline]).read_text(encoding='utf-8')

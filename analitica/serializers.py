@@ -4,7 +4,7 @@ from jornadas.models import Jornada, Momento
 
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaImagen, InfografiaJornada,
-    PlantillaAnalisis, PresentacionDiseno, Reporte,
+    PlantillaAnalisis, PresentacionDiseno, Reporte, SystemPrompt,
 )
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
 from .v2.contrato import VERSION
@@ -396,3 +396,54 @@ class AnalisisV2CrearSerializer(serializers.ModelSerializer):
         if momentos:
             analisis.momentos.set(momentos)
         return analisis
+
+
+class SystemPromptSerializer(serializers.ModelSerializer):
+    """Una versión de system prompt (HU-92). En el listado va sin `contenido` (ver
+    `SystemPromptListaSerializer`); acá, completo.
+
+    Al crear se mandan `tipo` y `contenido` (y opcionalmente `etiqueta`/`notas`); la versión la
+    numera el backend. Con `activar: true` queda activa en el mismo paso. Al editar solo se
+    aceptan `contenido`, `etiqueta` y `notas`, y solo mientras nunca se haya activado."""
+    tipo_nombre = serializers.CharField(source='get_tipo_display', read_only=True)
+    referencia = serializers.CharField(read_only=True)
+    inmutable = serializers.BooleanField(read_only=True)
+    activar = serializers.BooleanField(write_only=True, required=False, default=False)
+
+    class Meta:
+        model = SystemPrompt
+        fields = [
+            'id', 'tipo', 'tipo_nombre', 'version', 'referencia', 'etiqueta', 'notas', 'contenido',
+            'activo', 'inmutable', 'activado_en', 'activado_por', 'creado_por', 'creado_en',
+            'activar',
+        ]
+        read_only_fields = [
+            'version', 'activo', 'activado_en', 'activado_por', 'creado_por', 'creado_en',
+        ]
+        # DRF lee la constraint "un activo por tipo" como si `tipo` fuera único en toda la tabla
+        # (ignora su `condition`) y rechazaría cualquier versión nueva. Esa regla la garantizan la
+        # base y `SystemPrompt.activar`, y la versión la numera el modelo.
+        extra_kwargs = {'tipo': {'validators': []}}
+        validators = []
+
+    def validate_contenido(self, valor):
+        if not (valor or '').strip():
+            raise serializers.ValidationError('El contenido no puede estar vacío.')
+        return valor
+
+    def validate(self, attrs):
+        if self.instance is not None and 'tipo' in attrs and attrs['tipo'] != self.instance.tipo:
+            raise serializers.ValidationError(
+                {'tipo': 'El tipo de una versión no se cambia: crea una versión del otro tipo.'}
+            )
+        return attrs
+
+
+class SystemPromptListaSerializer(SystemPromptSerializer):
+    largo = serializers.SerializerMethodField()
+
+    class Meta(SystemPromptSerializer.Meta):
+        fields = [c for c in SystemPromptSerializer.Meta.fields if c not in ('contenido', 'activar')] + ['largo']
+
+    def get_largo(self, prompt) -> int:
+        return len(prompt.contenido)

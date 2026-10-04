@@ -5,11 +5,12 @@ from .admin_views import (
     AnalisisJornadaIAViewSet, AnalisisMomentoIAViewSet, AnalisisSugerenciasView,
     AnalisisUnificadoView, AnalisisV2ViewSet, EstadisticasPreguntasView, InfografiaJornadaViewSet,
     MesasView, PlantillaAnalisisViewSet, PresentacionDisenoViewSet, ProgresoParticipantesView,
-    ReporteExcelPorMomentoView, ReporteExcelPorPreguntaView, ReporteViewSet,
+    ReporteExcelPorMomentoView, ReporteExcelPorPreguntaView, ReporteViewSet, SystemPromptViewSet,
 )
 
 router = DefaultRouter()
 router.register('plantillas-analisis', PlantillaAnalisisViewSet, basename='admin-plantilla-analisis')
+router.register('system-prompts', SystemPromptViewSet, basename='admin-system-prompt')
 router.register('reportes', ReporteViewSet, basename='admin-reporte')
 router.register('analisis-momento-ia', AnalisisMomentoIAViewSet, basename='admin-analisis-momento-ia')
 router.register('analisis-jornada-ia', AnalisisJornadaIAViewSet, basename='admin-analisis-jornada-ia')
