@@ -1,5 +1,12 @@
 # Integración frontend — Carga de documentos por el usuario y responsable detectado por IA
 
+> **Actualización HU-84 (2026-10-04):** la carga que hace un **administrador** cambió — ya no hay
+> que aprobar nada, se puede subir una tanda de archivos, y las respuestas guardadas se pueden
+> corregir. Ver `INTEGRACION_FRONTEND_CARGA_MASIVA.md`. Lo que describe este documento —la carga
+> que hace el **propio participante** (HU-56) y el responsable detectado por IA (HU-55)— sigue
+> vigente sin cambios: ahí la revisión ya pasaba antes de escribir, porque el participante
+> corrige las `respuestas_sugeridas` en pantalla y las envía él.
+
 Guía para el equipo de frontend sobre dos cambios que van juntos en la misma pantalla:
 
 - **HU-56**: el participante puede subir **él mismo** el documento diligenciado de un momento de
