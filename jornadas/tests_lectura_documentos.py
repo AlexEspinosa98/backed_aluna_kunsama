@@ -185,3 +185,88 @@ class TranscribirEnPartesTests(SimpleTestCase):
         self.assertIsNone(resultados)
         self.assertEqual(error, 'OPENAI_API_KEY no está configurada')
         self.assertEqual(llamadas, [(1, 2, 3, 4)], 'no debe reintentar un fallo que no es truncado')
+
+
+def _pdf_en_memoria(bloques):
+    """Un PDF armado al vuelo con reportlab (ya es dependencia del proyecto). `bloques` es una
+    lista de str (párrafo) o de list-de-filas (tabla con grilla, que es lo que pdfplumber necesita
+    para detectarla)."""
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=LETTER)
+    estilo = getSampleStyleSheet()['Normal']
+    flujo = []
+    for bloque in bloques:
+        if isinstance(bloque, str):
+            flujo.append(Paragraph(bloque, estilo))
+        else:
+            tabla = Table(bloque)
+            tabla.setStyle(TableStyle([('GRID', (0, 0), (-1, -1), 0.5, (0, 0, 0))]))
+            flujo.append(tabla)
+    doc.build(flujo)
+    buffer.seek(0)
+    return buffer
+
+
+class ExtraerTextoPdfTests(SimpleTestCase):
+    """El lector de PDF reconstruyendo tablas. Antes usaba `extract_text()` a secas, que las
+    aplana: la etiqueta de la fila y el valor de la columna quedaban pegados en un mismo renglón,
+    sin encabezado ni separador. Medido sobre dos documentos reales, el acuerdo entre dos modelos
+    distintos era 100% en .docx y 85% en PDF — la brecha la causaba este lector."""
+
+    def test_reconstruye_la_tabla_con_separadores(self):
+        filas = [['Variable', 'Programa A'], ['Créditos', '4'], ['Nombre', 'Cálculo I']]
+        texto, imagenes = lectura_documentos.extraer_texto_o_imagenes_pdf(
+            _pdf_en_memoria(['Un párrafo de contexto suficientemente largo para no caer a visión.',
+                             filas])
+        )
+        self.assertIsNone(imagenes, 'con capa de texto no debe caer al modo visión')
+        self.assertIn('Créditos | 4', texto)
+        self.assertIn('Nombre | Cálculo I', texto)
+
+    def test_cada_tabla_queda_rotulada_con_el_texto_que_la_precede(self):
+        filas = [['Variable', 'Programa A'], ['Nombre', '']]
+        texto, _ = lectura_documentos.extraer_texto_o_imagenes_pdf(_pdf_en_memoria([
+            'Texto introductorio del formato, con largo suficiente para el umbral de visión.',
+            'Componente 1', filas, 'Componente 2', filas,
+        ]))
+        self.assertIn('[TABLA 1 — justo debajo de "Componente 1"]', texto)
+        self.assertIn('[TABLA 2 — justo debajo de "Componente 2"]', texto)
+        self.assertIn('[fin TABLA 1]', texto)
+
+    def test_el_texto_de_la_tabla_no_se_repite_como_texto_suelto(self):
+        """Las líneas que caen dentro del recuadro de una tabla salen SOLO como filas de la tabla:
+        si además salieran como texto suelto, el modelo vería el mismo dato dos veces."""
+        filas = [['Dimensión', 'Hallazgo'], ['Saber Pro', 'Coordinado con Vicerrectoría']]
+        texto, _ = lectura_documentos.extraer_texto_o_imagenes_pdf(_pdf_en_memoria([
+            'Encabezado del instrumento con texto suficiente para pasar el umbral de visión.',
+            filas,
+        ]))
+        self.assertEqual(texto.count('Coordinado con Vicerrectoría'), 1)
+
+
+class TablasAnidadasYCorridasTests(SimpleTestCase):
+    """Los dos filtros que hicieron falta al probar contra un PDF real de producción."""
+
+    class _Tabla:
+        def __init__(self, bbox):
+            self.bbox = bbox
+
+    def test_descarta_la_tabla_anidada_y_conserva_la_externa(self):
+        externa = self._Tabla((50, 100, 500, 400))
+        interna = self._Tabla((200, 150, 400, 300))
+        quedan = lectura_documentos._sin_tablas_anidadas([externa, interna])
+        self.assertEqual(quedan, [externa])
+
+    def test_dos_tablas_que_no_se_solapan_se_conservan_las_dos(self):
+        a = self._Tabla((50, 100, 500, 200))
+        b = self._Tabla((50, 250, 500, 400))
+        self.assertEqual(len(lectura_documentos._sin_tablas_anidadas([a, b])), 2)
+
+    def test_dos_tablas_con_el_mismo_recuadro_dejan_una(self):
+        a = self._Tabla((50, 100, 500, 200))
+        b = self._Tabla((50, 100, 500, 200))
+        self.assertEqual(len(lectura_documentos._sin_tablas_anidadas([a, b])), 1)
