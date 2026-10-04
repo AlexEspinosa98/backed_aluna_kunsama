@@ -404,6 +404,98 @@ def emparejar_responsable_momento(momento, responsable):
     )
 
 
+DOMINIO_SIN_REGISTRO = 'sin-registro.local'
+ROL_SIN_REGISTRO = 'sin rol'
+
+
+def _partir_nombre(completo):
+    """Parte el nombre leído del documento en `(nombre, apellido)`.
+
+    `Participante` guarda nombre y apellido por separado y el documento trae un solo texto, así que
+    hay que decidir dónde cortar. Con cuatro palabras o más se corta a la mitad (el caso corriente
+    acá: dos nombres y dos apellidos); con menos, la primera palabra es el nombre y el resto el
+    apellido.
+
+    Ninguna heurística acierta siempre —"Juan Carlos Pérez" puede ser dos nombres y un apellido o
+    uno y dos— y no hace falta que acierte: el texto completo queda repartido entre los dos campos,
+    que es lo que importa para que el emparejamiento lo reconozca en el próximo documento (compara
+    nombre + apellido normalizados, ver jornadas/emparejamiento.py)."""
+    partes = (completo or '').split()
+    if not partes:
+        return '', ''
+    if len(partes) >= 4:
+        mitad = len(partes) // 2
+        return ' '.join(partes[:mitad]), ' '.join(partes[mitad:])
+    return partes[0], ' '.join(partes[1:])
+
+
+def _correo_libre(jornada_id, nombre_completo):
+    """Un correo de relleno, único en la jornada y evidentemente falso.
+
+    `correo_institucional` es obligatorio y único por jornada, así que no se puede dejar vacío:
+    con dos responsables sin correo en la misma jornada, el segundo rompería la constraint. El
+    dominio `sin-registro.local` no existe a propósito — marca a la persona como "esto salió de un
+    papel, no de un registro" y hace que no pueda entrar a la plataforma con ese correo, que es lo
+    correcto: nunca se registró."""
+    from django.utils.text import slugify
+
+    from .models import Participante
+
+    base = slugify(nombre_completo) or 'responsable'
+    candidato = f'{base}@{DOMINIO_SIN_REGISTRO}'
+    contador = 1
+    while Participante.objects.filter(
+        jornada_id=jornada_id, correo_institucional=candidato,
+    ).exists():
+        contador += 1
+        candidato = f'{base}-{contador}@{DOMINIO_SIN_REGISTRO}'
+    return candidato
+
+
+def crear_participante_desde_responsable(momento, responsable):
+    """Da de alta al responsable que leyó la IA cuando no coincide con nadie de la jornada (HU-86).
+
+    Antes esto quedaba esperando que un admin registrara a la persona a mano y recién después
+    asignara el documento — dos pasos antes de poder guardar una transcripción que ya estaba
+    hecha, y multiplicado por cada departamento de una carga masiva. Quien llenó el formato en
+    papel muy probablemente nunca se registró en la plataforma: pedir el registro primero es
+    pedirle al admin que transcriba a mano justamente el dato que la IA ya leyó.
+
+    Se crea con `rol` = "sin rol" y, si el documento no traía correo, con uno de relleno: son los
+    dos únicos campos obligatorios que un formato en papel no siempre da. Devuelve `None` si no
+    hay ni un nombre utilizable — sin nombre no hay a quién crear.
+
+    El `cargo` que la IA haya leído ("Jefa del Departamento de Biología") NO se usa como `rol`,
+    aunque esté ahí y sea tentador: `rol` es el rol institucional dentro de la jornada, un
+    vocabulario corto y propio del sistema por el que se agrupa y se filtra, y meterle texto libre
+    de un formato lo volvería inservible para eso. El cargo leído no se pierde: queda en
+    `ExtraccionMomento.responsable_detectado` junto al resto de lo que trajo el documento."""
+    from .models import Participante
+
+    nombre_completo = (responsable or {}).get('nombre') or ''
+    if not nombre_completo.strip():
+        return None
+
+    nombre, apellido = _partir_nombre(nombre_completo)
+    # El correo del documento, si lo trajo. No puede chocar con nadie: `emparejar` prueba el correo
+    # exacto ANTES que el nombre, así que si otra persona de la jornada ya lo tuviera habríamos
+    # salido por `emparejado` o `ambiguo` y no estaríamos creando. Se comprueba igual, porque
+    # depender de esa coincidencia desde otro módulo es frágil.
+    correo = (responsable.get('correo') or '').strip()
+    if not correo or Participante.objects.filter(
+        jornada_id=momento.jornada_id, correo_institucional=correo,
+    ).exists():
+        correo = _correo_libre(momento.jornada_id, nombre_completo)
+
+    return Participante.objects.create(
+        jornada_id=momento.jornada_id,
+        correo_institucional=correo,
+        nombre=nombre,
+        apellido=apellido,
+        rol=ROL_SIN_REGISTRO,
+    )
+
+
 def procesar_extraccion_momento(extraccion_id):
     """Genera el `resultado` de una ExtraccionMomento ya creada (estado 'pendiente'). Corre en un
     hilo de background — mismo patrón que instrumentos.extraccion_ia_openai. NO escribe
@@ -466,6 +558,14 @@ def procesar_extraccion_momento(extraccion_id):
         if extraccion.participante_id is None:
             detectado = _limpiar_responsable(resultado.get('responsable'))
             participante, estado = emparejar_responsable_momento(extraccion.momento, detectado)
+            if participante is None and estado == emparejamiento.ESTADO_SIN_COINCIDENCIA:
+                # No existe en la jornada: se da de alta con lo que trae el documento (HU-86). Solo
+                # en `sin_coincidencia` — un `ambiguo` NO se crea, porque ahí el documento
+                # probablemente sí es de una de las personas que ya existen y sumar una tercera
+                # homónima sería el peor resultado posible.
+                participante = crear_participante_desde_responsable(extraccion.momento, detectado)
+                if participante is not None:
+                    estado = emparejamiento.ESTADO_CREADO
             extraccion.responsable_detectado = detectado
             extraccion.responsable_estado = estado
             if participante is not None:

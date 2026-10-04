@@ -1776,3 +1776,109 @@ class CorregirRespuestaTests(BaseJornadaTestCase):
             FilaListaRespuesta.objects.filter(pk=fila.id).exists(),
             'una fila dinámica sin celdas es una fila fantasma que nadie puede quitar',
         )
+
+
+class CrearResponsableDesdeDocumentoTests(BaseJornadaTestCase):
+    """HU-86: si el responsable que leyó la IA no coincide con nadie de la jornada, se da de alta
+    con el nombre del documento en vez de exigir que alguien lo registre primero a mano."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_hu86', password='pass12345', is_staff=True,
+        )
+        self._participantes_base = Participante.objects.filter(jornada=self.jornada).count()
+
+    @contextlib.contextmanager
+    def _sin_openai(self, responsable, respuestas):
+        modulo = 'participantes.extraccion_momento_ia_openai'
+        with contextlib.ExitStack() as pila:
+            pila.enter_context(patch(f'{modulo}._leer_documento', return_value=('texto', None)))
+            pila.enter_context(patch(
+                f'{modulo}._transcribir_por_lotes',
+                return_value=({'responsable': responsable, 'respuestas': respuestas}, None),
+            ))
+            yield
+
+    def _correr(self, responsable):
+        extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual,
+            archivo=SimpleUploadedFile('d.docx', b'x'),
+            solicitado_por=self.admin,
+        )
+        respuestas = [{'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Del papel',
+                       'opcion_ids': []}]
+        with self._sin_openai(responsable, respuestas):
+            procesar_extraccion_momento(extraccion.id)
+        extraccion.refresh_from_db()
+        return extraccion
+
+    def test_crea_al_responsable_y_escribe_en_una_sola_pasada(self):
+        extraccion = self._correr({'nombre': 'Rosa Elena Pardo Lince'})
+
+        self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_CREADO)
+        persona = extraccion.participante
+        self.assertIsNotNone(persona, 'debió crearse sin que nadie la registre antes')
+        self.assertEqual(persona.jornada, self.jornada)
+        self.assertEqual(f'{persona.nombre} {persona.apellido}', 'Rosa Elena Pardo Lince')
+        self.assertEqual(persona.rol, 'sin rol')
+        # Y la transcripción quedó escrita a su nombre, sin pasos intermedios.
+        self.assertIsNotNone(extraccion.aprobado_en)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=persona).texto_libre,
+            'Del papel',
+        )
+
+    def test_el_cargo_del_documento_no_se_usa_como_rol(self):
+        """`rol` es el vocabulario del sistema por el que se agrupa y se filtra; meterle el texto
+        libre de un formato lo volvería inservible. El cargo queda en `responsable_detectado`."""
+        extraccion = self._correr(
+            {'nombre': 'Hernán Díaz', 'cargo': 'Jefe del Departamento de Biología'}
+        )
+        self.assertEqual(extraccion.participante.rol, 'sin rol')
+        self.assertEqual(
+            extraccion.responsable_detectado['cargo'], 'Jefe del Departamento de Biología',
+        )
+
+    def test_usa_el_correo_del_documento_si_lo_trae(self):
+        extraccion = self._correr({'nombre': 'Lucía Mora', 'correo': 'lucia.mora@unimagdalena.edu.co'})
+        self.assertEqual(
+            extraccion.participante.correo_institucional, 'lucia.mora@unimagdalena.edu.co',
+        )
+
+    def test_sin_correo_pone_uno_de_relleno_y_no_choca_entre_personas(self):
+        """`correo_institucional` es obligatorio y único por jornada: dos responsables sin correo
+        romperían la constraint si se dejara vacío."""
+        primera = self._correr({'nombre': 'Ana Gómez'}).participante
+        segunda = self._correr({'nombre': 'Beto Ruiz'}).participante
+        self.assertTrue(primera.correo_institucional.endswith('@sin-registro.local'))
+        self.assertNotEqual(primera.correo_institucional, segunda.correo_institucional)
+
+    def test_el_segundo_documento_de_la_misma_persona_la_empareja_en_vez_de_duplicarla(self):
+        """Es lo que evita que una carga masiva llene la jornada de duplicados: el emparejamiento
+        compara nombres normalizados, así que reconoce al que se creó en la carga anterior."""
+        primera = self._correr({'nombre': 'Rosa Elena Pardo Lince'})
+        segunda = self._correr({'nombre': 'ROSA  ELENA   PARDO LINCE'})
+
+        self.assertEqual(segunda.responsable_estado, emparejamiento.ESTADO_EMPAREJADO)
+        self.assertEqual(segunda.participante_id, primera.participante_id)
+        self.assertEqual(Participante.objects.filter(jornada=self.jornada).count(),
+                         self._participantes_base + 1)
+
+    def test_un_responsable_ambiguo_no_se_crea(self):
+        """Dos homónimas ya registradas: el documento probablemente es de una de ellas y sumar una
+        tercera sería el peor resultado. Eso sí sigue esperando decisión humana."""
+        for correo in ('h1@uni.edu.co', 'h2@uni.edu.co'):
+            Participante.objects.create(
+                jornada=self.jornada, correo_institucional=correo,
+                nombre='Clara', apellido='Peña', rol='jefe',
+            )
+        extraccion = self._correr({'nombre': 'Clara Peña'})
+        self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_AMBIGUO)
+        self.assertIsNone(extraccion.participante)
+        self.assertIsNone(extraccion.aprobado_en)
+
+    def test_sin_responsable_en_el_documento_no_se_crea_nada(self):
+        extraccion = self._correr({})
+        self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_SIN_DATO)
+        self.assertIsNone(extraccion.participante)

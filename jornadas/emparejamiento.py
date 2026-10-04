@@ -17,6 +17,12 @@ Dos decisiones de diseño que vale la pena no perder:
    alguien que nunca la dio. Por eso hay un estado `ambiguo` propio — dos homónimos no se
    resuelven "por el primero", se devuelven sin emparejar para que lo decida una persona.
 
+   Ojo con la distinción, que es fina pero importante: desde HU-86 un `sin_coincidencia` en la
+   carga de momentos SÍ da de alta a la persona con el nombre del documento (`creado`). Eso no
+   contradice la regla: crear a alguien que no existía no le atribuye el documento a nadie
+   equivocado. `ambiguo` sigue sin resolverse solo, porque ahí el documento probablemente SÍ es de
+   una de las dos personas que ya existen y crear una tercera homónima sería lo peor de todo.
+
 Funciones puras: no importan modelos ni tocan la base, reciben los candidatos ya resueltos por
 el llamador (que es quien sabe si el conjunto correcto son los preregistrados de un instrumento
 o los participantes de una jornada)."""
@@ -28,6 +34,10 @@ ESTADO_NO_BUSCADO = 'no_buscado'
 ESTADO_SIN_DATO = 'sin_dato'
 # Exactamente una persona coincide.
 ESTADO_EMPAREJADO = 'emparejado'
+# No coincidió con nadie y se dio de alta a partir del nombre que traía el documento (HU-86).
+# Vive acá, con los demás estados, para que al revisar una carga se pueda distinguir de un tirón
+# a quién se emparejó con alguien que ya existía y a quién se creó leyendo un papel.
+ESTADO_CREADO = 'creado'
 # Coincide más de una y no hay forma de desempatar sin inventar un criterio.
 ESTADO_AMBIGUO = 'ambiguo'
 # Nadie coincide.
@@ -39,6 +49,7 @@ ESTADO_CHOICES = [
     (ESTADO_EMPAREJADO, 'Emparejado con una persona'),
     (ESTADO_AMBIGUO, 'Ambiguo — varias personas coinciden'),
     (ESTADO_SIN_COINCIDENCIA, 'Sin coincidencia'),
+    (ESTADO_CREADO, 'Creado a partir del documento'),
 ]
 
 
