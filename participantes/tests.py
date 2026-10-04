@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import SimpleTestCase
 from rest_framework.test import APITestCase
 
 from jornadas.models import ColumnaMatrizPregunta, FilaMatrizPregunta, Jornada, Momento, OpcionPregunta, Pregunta
@@ -1882,3 +1883,32 @@ class CrearResponsableDesdeDocumentoTests(BaseJornadaTestCase):
         extraccion = self._correr({})
         self.assertEqual(extraccion.responsable_estado, emparejamiento.ESTADO_SIN_DATO)
         self.assertIsNone(extraccion.participante)
+
+
+class ModeloPorTareaTests(SimpleTestCase):
+    """HU-87: transcribir y generar no usan el mismo modelo, y eso es una decisión que conviene
+    dejar fijada — si alguien vuelve a apuntar la extracción a `OPENAI_MODEL` "para unificar",
+    este test lo frena y el comentario del módulo explica por qué no."""
+
+    def test_los_dos_extractores_comparten_el_modelo_de_transcripcion(self):
+        from instrumentos import extraccion_ia_openai
+        from participantes import extraccion_momento_ia_openai
+
+        self.assertEqual(
+            extraccion_momento_ia_openai.DEFAULT_MODEL,
+            extraccion_ia_openai.DEFAULT_MODEL,
+            'las dos vías de carga transcriben lo mismo: no tiene sentido que usen modelos '
+            'distintos entre sí',
+        )
+
+    def test_la_transcripcion_no_usa_el_modelo_de_generacion(self):
+        from analitica import analisis_ia_openai, presentacion
+        from participantes import extraccion_momento_ia_openai
+
+        for modulo in (analisis_ia_openai, presentacion):
+            self.assertNotEqual(
+                extraccion_momento_ia_openai.DEFAULT_MODEL,
+                modulo.DEFAULT_MODEL,
+                f'{modulo.__name__} genera contenido nuevo: no debe compartir modelo con la '
+                'transcripción, que solo copia lo que ya está escrito',
+            )

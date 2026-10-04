@@ -28,7 +28,23 @@ from django.utils import timezone
 
 from jornadas import emparejamiento, lectura_documentos
 
-DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+# Modelo de TRANSCRIPCIÓN, deliberadamente distinto del de generación (`OPENAI_MODEL`, que usan
+# los análisis, las presentaciones y los informes). Transcribir un formato diligenciado es copiar
+# lo que ya está escrito; generar un análisis es producir contenido nuevo, y ahí sí importa la
+# capacidad del modelo.
+#
+# La división salió de medirlo sobre documentos reales de producción (2026-10-04), transcribiendo
+# los mismos dos con `gpt-5.6-terra` y con `gpt-6-luna` y comparando celda por celda: en el .docx
+# el acuerdo fue del **100%** (264 de 264 celdas, ninguna que solo encontrara uno de los dos) y en
+# el PDF del 98% en celdas de fila fija con las 26 filas dinámicas idénticas. Mismo resultado por
+# **1/19 del costo** (USD 0,024 vs 0,46 por documento). Luna es además más lento, lo que acá no
+# molesta: la extracción corre en background con polling.
+#
+# Lo que NO se movió a luna, y por qué: su 41,3% en MRCR (recuperar un dato puntual dentro de un
+# contexto largo) lo hace mal candidato para los análisis, que mandan el corpus entero sin
+# trocear. La extracción no tiene ese problema porque desde HU-80/81 el documento llega con las
+# tablas rotuladas y cada llamada atiende como máximo unas decenas de celdas de su propio lote.
+DEFAULT_MODEL = os.environ.get('OPENAI_MODEL_TRANSCRIPCION', 'gpt-6-luna')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
 # Configurable por entorno porque el tope útil depende del modelo: en uno de razonamiento los

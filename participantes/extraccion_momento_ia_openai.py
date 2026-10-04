@@ -25,7 +25,9 @@ from django.utils import timezone
 
 from jornadas import emparejamiento, lectura_documentos
 
-DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+# Modelo de TRANSCRIPCIÓN, distinto del de generación — ver el razonamiento completo y
+# las mediciones que lo sustentan en instrumentos/extraccion_ia_openai.py.
+DEFAULT_MODEL = os.environ.get('OPENAI_MODEL_TRANSCRIPCION', 'gpt-6-luna')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
 MAX_OUTPUT_TOKENS = int(os.environ.get('OPENAI_MAX_OUTPUT_TOKENS', '16000'))
