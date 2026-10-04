@@ -23,6 +23,9 @@ class SiembraTests(TestCase):
             self.assertEqual(prompt.version, 1)
             self.assertTrue(prompt.inmutable)
             self.assertEqual(prompt.contenido, (SEMILLA / f'{tipo}.md').read_text(encoding='utf-8'))
+            # SQLite no hace cumplir max_length y PostgreSQL sí: la siembra se valida contra el
+            # modelo para que no vuelva a pasar lo del primer despliegue (etiqueta de 64 > 60).
+            prompt.full_clean()
 
 
 class ModeloTests(TestCase):
