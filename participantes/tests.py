@@ -1912,3 +1912,88 @@ class ModeloPorTareaTests(SimpleTestCase):
                 f'{modulo.__name__} genera contenido nuevo: no debe compartir modelo con la '
                 'transcripción, que solo copia lo que ya está escrito',
             )
+
+
+class AsignarResponsableCreandoloTests(BaseJornadaTestCase):
+    """HU-88: el diálogo de asignación obligaba a elegir de una lista, y quien firmó un formato en
+    papel muchas veces no está en ninguna lista."""
+
+    def setUp(self):
+        super().setUp()
+        self.admin = get_user_model().objects.create_user(
+            username='admin_hu88', password='pass12345', is_staff=True,
+        )
+        self.client.force_authenticate(user=self.admin)
+        self.extraccion = ExtraccionMomento.objects.create(
+            momento=self.momento_individual,
+            archivo=SimpleUploadedFile('d.docx', b'x'),
+            solicitado_por=self.admin,
+            estado=ExtraccionMomento.ESTADO_COMPLETO,
+            responsable_detectado={'nombre': 'Quien Sea'},
+            responsable_estado=emparejamiento.ESTADO_AMBIGUO,
+            resultado={'respuestas': [
+                {'pregunta': self.pregunta_abierta.id, 'texto_libre': 'Del papel', 'opcion_ids': []},
+            ]},
+        )
+
+    def _asignar(self, cuerpo):
+        return self.client.post(
+            f'/api/admin/momento-extracciones/{self.extraccion.id}/asignar-responsable/',
+            cuerpo, format='json',
+        )
+
+    def test_crea_la_persona_y_escribe_en_el_mismo_paso(self):
+        resp = self._asignar({'nombre': 'Nuevo Responsable Del Papel'})
+        self.assertEqual(resp.status_code, 200)
+        self.extraccion.refresh_from_db()
+
+        persona = self.extraccion.participante
+        self.assertIsNotNone(persona)
+        self.assertEqual(f'{persona.nombre} {persona.apellido}', 'Nuevo Responsable Del Papel')
+        self.assertEqual(persona.rol, 'sin rol')
+        self.assertEqual(self.extraccion.responsable_estado, emparejamiento.ESTADO_CREADO)
+        self.assertIsNotNone(self.extraccion.aprobado_en)
+        self.assertEqual(
+            Respuesta.objects.get(pregunta=self.pregunta_abierta, participante=persona).texto_libre,
+            'Del papel',
+        )
+
+    def test_toma_el_correo_si_lo_mandan(self):
+        self._asignar({'nombre': 'Con Correo', 'correo_institucional': 'con.correo@uni.edu.co'})
+        self.extraccion.refresh_from_db()
+        self.assertEqual(
+            self.extraccion.participante.correo_institucional, 'con.correo@uni.edu.co',
+        )
+
+    def test_un_nombre_que_ya_existe_no_duplica_la_persona(self):
+        """Un dedazo en el diálogo no debería dejar dos fichas de la misma persona."""
+        ya_existe = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='ya@uni.edu.co',
+            nombre='Marta', apellido='Solís', rol='jefe',
+        )
+        resp = self._asignar({'nombre': 'marta  solis'})
+        self.assertEqual(resp.status_code, 200)
+        self.extraccion.refresh_from_db()
+        self.assertEqual(self.extraccion.participante_id, ya_existe.id)
+        self.assertEqual(self.extraccion.responsable_estado, emparejamiento.ESTADO_EMPAREJADO)
+
+    def test_sigue_funcionando_elegir_de_la_lista(self):
+        persona = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='lista@uni.edu.co',
+            nombre='De', apellido='Lista', rol='jefe',
+        )
+        resp = self._asignar({'participante_id': persona.id})
+        self.assertEqual(resp.status_code, 200)
+        self.extraccion.refresh_from_db()
+        self.assertEqual(self.extraccion.participante_id, persona.id)
+
+    def test_mandar_los_dos_o_ninguno_es_400(self):
+        persona = Participante.objects.create(
+            jornada=self.jornada, correo_institucional='amb@uni.edu.co',
+            nombre='Amb', apellido='Iguo', rol='jefe',
+        )
+        self.assertEqual(self._asignar({}).status_code, 400)
+        self.assertEqual(
+            self._asignar({'participante_id': persona.id, 'nombre': 'Otro Nombre'}).status_code,
+            400,
+        )

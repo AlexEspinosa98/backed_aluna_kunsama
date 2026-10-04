@@ -10,7 +10,10 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from jornadas.scoping import filtrar_por_propietario, verificar_acceso_jornada
 
+from jornadas import emparejamiento
+
 from .extraccion_momento_ia_openai import (
+    crear_participante_desde_responsable, emparejar_responsable_momento,
     escribir_extraccion_momento, procesar_extracciones_en_serie, procesar_extraccion_momento,
 )
 from .models import ExtraccionMomento, FilaListaRespuesta, Participante, Respuesta
@@ -228,11 +231,28 @@ class ExtraccionMomentoViewSet(
 
         entrada = AsignarResponsableMomentoSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
-        participante = entrada.validated_data['participante']
-        if participante.jornada_id != extraccion.momento.jornada_id:
-            raise ValidationError(
-                {'participante_id': 'Ese participante no pertenece a la jornada de este momento.'}
-            )
+        datos = entrada.validated_data
+
+        if 'participante' in datos:
+            participante = datos['participante']
+            if participante.jornada_id != extraccion.momento.jornada_id:
+                raise ValidationError(
+                    {'participante_id': 'Ese participante no pertenece a la jornada de este momento.'}
+                )
+        else:
+            # Alta en el acto (HU-88). Se intenta emparejar primero con el mismo criterio de la IA:
+            # si el nombre que escribieron ya corresponde a alguien de la jornada, se usa esa
+            # persona en vez de crear una homónima. Un dedazo en el diálogo no debería dejar dos
+            # fichas de la misma persona, y el `responsable_estado` resultante deja constancia de
+            # cuál de las dos cosas pasó.
+            detectado = {'nombre': datos['nombre'],
+                         'correo': datos.get('correo_institucional') or None}
+            participante, estado = emparejar_responsable_momento(extraccion.momento, detectado)
+            if participante is None:
+                participante = crear_participante_desde_responsable(extraccion.momento, detectado)
+                estado = emparejamiento.ESTADO_CREADO
+            extraccion.responsable_estado = estado
+            extraccion.save(update_fields=['responsable_estado'])
 
         extraccion.participante = participante
         extraccion.save(update_fields=['participante'])

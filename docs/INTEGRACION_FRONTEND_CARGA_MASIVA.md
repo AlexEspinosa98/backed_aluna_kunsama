@@ -52,6 +52,28 @@ se registran de verdad, es la persona que hay que reconciliar.
 El segundo documento de esa misma persona **no la duplica**: llega como `emparejado` apuntando al
 participante ya creado, incluso si el nombre viene escrito con otras mayúsculas o tildes.
 
+### ⚠️ Una carga SOBRESCRIBE lo que esa persona hubiera respondido antes
+
+Hay que advertirlo antes de subir. Si el participante ya tenía respuestas en ese momento —porque
+las mandó por la web, o porque ya se le cargó otro documento— la carga las reemplaza:
+
+- **celdas y preguntas sueltas**: se pisa el contenido de cada una que el documento mencione. Las
+  que el documento no menciona quedan intactas.
+- **tablas de filas agregadas** (capacidades profesorales, asuntos, compromisos): se borran
+  **todas** las filas de esa pregunta y se recrean con las del documento. Si había diez profesores
+  cargados por la web y el documento trae tres, **quedan tres**.
+
+Es el mismo criterio que el envío normal desde la web: el documento es *la* versión buena de esa
+tabla, no un anexo. Pero conviene que el usuario lo sepa antes de arrastrar treinta archivos.
+
+**Dos avisos concretos que pedimos poner:**
+
+1. En la pantalla de carga (individual y masiva): que los documentos reemplazan lo que esas
+   personas hubieran respondido en ese momento.
+2. Si en una misma tanda hay dos documentos del mismo responsable, el segundo pisa al primero y no
+   hay aviso del backend. Si pueden detectarlo del lado del cliente (dos archivos que terminan con
+   el mismo `participante` en la respuesta), vale advertirlo.
+
 ### Los dos casos que todavía necesitan un paso humano
 
 Si la IA no pudo identificar de quién es el documento, no hay a nombre de quién guardar las
@@ -66,13 +88,24 @@ así que no hay nombre con el que crear a nadie). En los dos, `estado` queda `co
   "responsable_estado": "sin_coincidencia" }
 ```
 
-Se resuelve igual que antes, con `asignar-responsable` — pero **ese mismo llamado ya escribe las
-respuestas**, no hace falta aprobar después:
+Se resuelve con `asignar-responsable` — y **ese mismo llamado ya escribe las respuestas**, no hace
+falta aprobar después. Acepta **exactamente una** de dos formas:
 
 ```
 POST /api/admin/momento-extracciones/{id}/asignar-responsable/
-{ "participante_id": 17 }
+
+{ "participante_id": 17 }                     // elegir de los que ya existen
+{ "nombre": "Rosa Elena Pardo Lince" }        // darlo de alta en el acto (HU-88)
+{ "nombre": "Rosa Elena Pardo Lince",         // ídem, con correo si lo tienen
+  "correo_institucional": "rosa.pardo@unimagdalena.edu.co" }
 ```
+
+Mandar las dos cosas, o ninguna, es `400`.
+
+**El diálogo de asignación ya no tiene que obligar a elegir de una lista**: si la persona no está,
+se puede escribir el nombre y se crea. Y si el nombre que escriben ya corresponde a alguien de la
+jornada, se asigna a esa persona en vez de crear una homónima — un dedazo no deja dos fichas de la
+misma persona. El `responsable_estado` de la respuesta dice qué pasó: `creado` o `emparejado`.
 
 La respuesta vuelve con `aprobado_en` lleno. Valores posibles de `responsable_estado`:
 `emparejado` (coincidió con alguien ya registrado), `creado` (no coincidió y se dio de alta con el
