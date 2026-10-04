@@ -108,3 +108,80 @@ class AgruparEnLotesTests(SimpleTestCase):
 
     def test_sin_items_no_hay_lotes(self):
         self.assertEqual(lectura_documentos.agrupar_en_lotes([], lambda _i: 1, 10), [])
+
+
+class TranscribirEnPartesTests(SimpleTestCase):
+    """La red ante un truncado: el lote se parte en dos y se reintenta, en vez de morir y obligar a
+    volver a subir el documento. Salió de un fallo real en producción (2026-10-03): un .docx de
+    47.500 caracteres con respuestas largas truncó el bloque 4 de 5."""
+
+    def test_sin_truncado_es_una_sola_llamada(self):
+        llamadas = []
+
+        def llamar(lote):
+            llamadas.append(tuple(lote))
+            return {'respuestas': list(lote)}, None, False
+
+        resultados, error = lectura_documentos.transcribir_en_partes(
+            [1, 2, 3, 4], llamar, describir=str,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(llamadas, [(1, 2, 3, 4)])
+        self.assertEqual(resultados, [{'respuestas': [1, 2, 3, 4]}])
+
+    def test_un_truncado_parte_el_lote_en_dos_y_reintenta(self):
+        llamadas = []
+
+        def llamar(lote):
+            llamadas.append(tuple(lote))
+            if len(lote) == 4:
+                return None, 'se truncó', True
+            return {'respuestas': list(lote)}, None, False
+
+        resultados, error = lectura_documentos.transcribir_en_partes(
+            [1, 2, 3, 4], llamar, describir=str,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(llamadas, [(1, 2, 3, 4), (1, 2), (3, 4)])
+        # Las dos mitades vuelven en orden, así el `responsable` del encabezado se fusiona
+        # quedándose con el de la primera.
+        self.assertEqual(resultados, [{'respuestas': [1, 2]}, {'respuestas': [3, 4]}])
+
+    def test_parte_cuantas_veces_haga_falta(self):
+        def llamar(lote):
+            if len(lote) > 1:
+                return None, 'se truncó', True
+            return {'respuestas': list(lote)}, None, False
+
+        resultados, error = lectura_documentos.transcribir_en_partes(
+            [1, 2, 3, 4, 5], llamar, describir=str,
+        )
+        self.assertIsNone(error)
+        self.assertEqual([r['respuestas'][0] for r in resultados], [1, 2, 3, 4, 5])
+
+    def test_una_pregunta_sola_que_no_cabe_falla_nombrandola(self):
+        """Ya no hay nada que partir: el error tiene que decir cuál es la pregunta, porque el
+        arreglo pasa por acortarla o por subir el tope de tokens, no por reintentar."""
+        def llamar(_lote):
+            return None, 'se truncó', True
+
+        resultados, error = lectura_documentos.transcribir_en_partes(
+            ['matriz gigante'], llamar, describir=lambda p: f'la pregunta «{p}»',
+        )
+        self.assertIsNone(resultados)
+        self.assertIn('No se puede partir más', error)
+        self.assertIn('matriz gigante', error)
+
+    def test_un_error_que_no_es_truncado_no_se_reintenta(self):
+        llamadas = []
+
+        def llamar(lote):
+            llamadas.append(tuple(lote))
+            return None, 'OPENAI_API_KEY no está configurada', False
+
+        resultados, error = lectura_documentos.transcribir_en_partes(
+            [1, 2, 3, 4], llamar, describir=str,
+        )
+        self.assertIsNone(resultados)
+        self.assertEqual(error, 'OPENAI_API_KEY no está configurada')
+        self.assertEqual(llamadas, [(1, 2, 3, 4)], 'no debe reintentar un fallo que no es truncado')

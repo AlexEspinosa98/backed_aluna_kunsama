@@ -26,11 +26,13 @@ from jornadas import emparejamiento, lectura_documentos
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 GENERATION_TIMEOUT_SECONDS = 300
-MAX_OUTPUT_TOKENS = 8000
+MAX_OUTPUT_TOKENS = int(os.environ.get('OPENAI_MAX_OUTPUT_TOKENS', '16000'))
 MODELO_USADO_LABEL = 'Generado con IA'
-# Cuántas celdas (entradas de salida esperadas) se le piden como máximo en UNA llamada — ver
-# instrumentos.extraccion_ia_openai.PRESUPUESTO_CELDAS_POR_LLAMADA para el cálculo.
-PRESUPUESTO_CELDAS_POR_LLAMADA = 80
+# Cuántas celdas (entradas de salida esperadas) se le piden como máximo en UNA llamada. No garantiza
+# que la respuesta no se trunque —ante un truncado el lote se parte solo, ver
+# `lectura_documentos.transcribir_en_partes`— sino que evita el reintento en el caso normal. Mismo
+# valor y mismo razonamiento que instrumentos.extraccion_ia_openai.
+PRESUPUESTO_CELDAS_POR_LLAMADA = int(os.environ.get('KUNSAMU_CELDAS_POR_LLAMADA', '40'))
 # Cuántas filas agregadas se presupuestan para una pregunta que las acepta. No hay forma de saber
 # cuántas trae el documento antes de leerlo; 5 es lo que se ha visto en las jornadas reales y el
 # presupuesto de todos modos es un techo, no una cuota a llenar.
@@ -151,8 +153,8 @@ def _preguntas_activas(momento):
 
 
 def _construir_payload_esquema(momento):
-    """El esquema completo, sin partir. El pipeline real usa `_lotes_de_esquema`; esto queda como
-    la vista de "todo lo que la IA puede ver" para tests y depuración."""
+    """El esquema completo, sin partir. El pipeline arma los lotes en `_transcribir_por_lotes`;
+    esto queda como la vista de "todo lo que la IA puede ver" para tests y depuración."""
     return {
         'momento': momento.titulo,
         'preguntas': [_payload_pregunta(p) for p in _preguntas_activas(momento)],
@@ -176,7 +178,9 @@ def _celdas_esperadas(pregunta):
 
 
 def _lotes_de_esquema(momento):
-    """El esquema partido en payloads que caben, cada uno, en una respuesta del modelo."""
+    """El esquema partido en payloads, para inspeccionar desde fuera cómo quedaría repartido. El
+    pipeline no lo usa: necesita los objetos del lote, no su payload, para poder re-partirlo si la
+    respuesta se trunca (ver `_transcribir_por_lotes`)."""
     lotes = lectura_documentos.agrupar_en_lotes(
         _preguntas_activas(momento), _celdas_esperadas, PRESUPUESTO_CELDAS_POR_LLAMADA,
     )
@@ -187,9 +191,11 @@ def _lotes_de_esquema(momento):
 
 
 def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=None):
+    """Devuelve `(dict_o_None, error, truncado)` — nunca lanza excepción. `truncado` es lo que mira
+    `lectura_documentos.transcribir_en_partes` para decidir si parte el lote y reintenta."""
     api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
-        return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).'
+        return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).', False
 
     encabezado = 'ESQUEMA DEL MOMENTO (JSON):\n' + json.dumps(esquema, ensure_ascii=False, indent=2)
 
@@ -235,6 +241,7 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
                     f'La respuesta del modelo se truncó por el tope de {MAX_OUTPUT_TOKENS} tokens '
                     'de salida: el bloque de preguntas pedido en esta llamada es demasiado grande.'
                 )
+                resultado['truncado'] = True
                 return
             resultado['texto'] = eleccion.message.content.strip()
         except Exception as exc:  # noqa: BLE001
@@ -245,16 +252,16 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
     if hilo.is_alive():
-        return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s) esperando a OpenAI.'
+        return None, f'Tiempo de espera agotado ({GENERATION_TIMEOUT_SECONDS}s) esperando a OpenAI.', False
     if resultado.get('error'):
-        return None, resultado['error']
+        return None, resultado['error'], resultado.get('truncado', False)
     texto = resultado.get('texto')
     if not texto:
-        return None, 'OpenAI no devolvió contenido.'
+        return None, 'OpenAI no devolvió contenido.', False
     try:
-        return json.loads(texto), None
+        return json.loads(texto), None, False
     except json.JSONDecodeError as exc:
-        return None, f'OpenAI devolvió JSON inválido: {exc}'
+        return None, f'OpenAI devolvió JSON inválido: {exc}', False
 
 
 def _fusionar_responsable(acumulado, crudo):
@@ -272,23 +279,39 @@ def _fusionar_responsable(acumulado, crudo):
 
 def _transcribir_por_lotes(momento, texto_documento=None, imagenes_base64=None):
     """Pide la transcripción en varias llamadas —una por lote de preguntas— y las junta en un solo
-    resultado con la misma forma que devolvía la llamada única de antes. Si cualquier lote falla,
-    falla toda la extracción: media transcripción sin avisar es indistinguible de un documento a
-    medio llenar."""
-    lotes = _lotes_de_esquema(momento)
-    if not lotes:
+    resultado con la misma forma que devolvía la llamada única de antes.
+
+    Un lote cuya respuesta se trunque se parte solo y se reintenta (ver
+    `lectura_documentos.transcribir_en_partes`). Si falla por cualquier otra razón, falla toda la
+    extracción: media transcripción sin avisar es indistinguible de un documento a medio llenar."""
+    preguntas = _preguntas_activas(momento)
+    if not preguntas:
         return None, 'El momento no tiene preguntas activas que transcribir.'
+
+    lotes = lectura_documentos.agrupar_en_lotes(
+        preguntas, _celdas_esperadas, PRESUPUESTO_CELDAS_POR_LLAMADA,
+    )
+
+    def llamar(sublote):
+        esquema = {
+            'momento': momento.titulo,
+            'preguntas': [_payload_pregunta(p) for p in sublote],
+        }
+        return _llamar_openai_extraccion(
+            esquema, texto_documento=texto_documento, imagenes_base64=imagenes_base64,
+        )
 
     respuestas = []
     responsable = {}
-    for numero, esquema in enumerate(lotes, start=1):
-        parcial, error = _llamar_openai_extraccion(
-            esquema, texto_documento=texto_documento, imagenes_base64=imagenes_base64,
+    for numero, lote in enumerate(lotes, start=1):
+        parciales, error = lectura_documentos.transcribir_en_partes(
+            lote, llamar, describir=lambda pregunta: f'la pregunta «{pregunta.texto[:70]}»',
         )
-        if parcial is None:
+        if parciales is None:
             return None, f'Bloque {numero} de {len(lotes)}: {error}'
-        respuestas.extend(parcial.get('respuestas') or [])
-        responsable = _fusionar_responsable(responsable, parcial.get('responsable'))
+        for parcial in parciales:
+            respuestas.extend(parcial.get('respuestas') or [])
+            responsable = _fusionar_responsable(responsable, parcial.get('responsable'))
 
     return {'responsable': responsable, 'respuestas': respuestas}, None
 
