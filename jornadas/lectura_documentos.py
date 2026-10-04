@@ -164,3 +164,40 @@ def agrupar_en_lotes(items, costo, presupuesto):
     if actual:
         lotes.append(actual)
     return lotes
+
+
+def transcribir_en_partes(lote, llamar, describir):
+    """Llama `llamar(lote)` y, si la respuesta salió TRUNCADA, parte el lote en dos y reintenta
+    cada mitad — recursivamente, hasta que cada parte quepa o quede una sola pregunta.
+
+    `llamar(sublote)` devuelve `(resultado, error, truncado)`. Devuelve
+    `(lista_de_resultados, None)` o `(None, error)`.
+
+    Por qué esto y no solo un presupuesto más chico: el tamaño que cabe en una respuesta no se
+    puede calcular de antemano. Depende de cuánto texto escribió quien diligenció el documento
+    (un formato de 47.500 caracteres con respuestas largas gasta por celda muchísimo más que uno
+    de respuestas de tres palabras) y, con un modelo de razonamiento, también de cuántos tokens
+    gastó razonando, que salen del mismo tope. Cualquier constante que se elija va a ser
+    demasiado grande para algún documento real. Así que el presupuesto queda como la apuesta
+    inicial —la que evita reintentos en el caso normal— y esto es la red: ante un truncado se
+    divide y se reintenta, sin que nadie tenga que volver a subir el archivo.
+
+    `describir(item)` solo se usa para el mensaje de error del caso en que una ÚNICA pregunta no
+    cabe: ahí ya no hay nada que partir y hay que decir cuál es."""
+    resultado, error, truncado = llamar(lote)
+    if resultado is not None:
+        return [resultado], None
+    if not truncado:
+        return None, error
+    if len(lote) <= 1:
+        detalle = f' No se puede partir más: {describir(lote[0])} sola no cabe.' if lote else ''
+        return None, f'{error}{detalle}'
+
+    mitad = len(lote) // 2
+    partes = []
+    for sublote in (lote[:mitad], lote[mitad:]):
+        resultados, error_parte = transcribir_en_partes(sublote, llamar, describir)
+        if resultados is None:
+            return None, error_parte
+        partes.extend(resultados)
+    return partes, None
