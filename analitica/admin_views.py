@@ -422,17 +422,41 @@ class AnalisisJornadaIAViewSet(
             return AnalisisJornadaIACrearSerializer
         return AnalisisJornadaIASerializer
 
+    def perform_destroy(self, instance):
+        """Borrar un análisis que todavía espera a OpenAI cancela esa respuesta allá (HU-98): si
+        no, OpenAI la terminaría igual y se pagaría un análisis que ya nadie va a ver."""
+        if instance.estado == AnalisisJornadaIA.ESTADO_PROCESANDO and instance.respuesta_openai_id:
+            from .v2.background import cancelar_respuesta
+            with contexto_llamada(origen=instance, usuario=self.request.user):
+                cancelar_respuesta(instance.respuesta_openai_id)
+        instance.delete()
+
+    @extend_schema(responses={200: dict})
+    @action(detail=False, methods=['get'])
+    def opciones(self, request):
+        """Qué se puede pedir al lanzar un análisis integral (HU-98) y qué se usa si no se pide."""
+        from .v2 import background
+        from .v2.llm import DEFAULT_MODEL, ESFUERZOS_PERMITIDOS, MODELOS_PERMITIDOS, REASONING_EFFORT
+        return Response({
+            'modelos': MODELOS_PERMITIDOS, 'modelo_por_defecto': DEFAULT_MODEL,
+            'esfuerzos': ESFUERZOS_PERMITIDOS, 'esfuerzo_por_defecto': REASONING_EFFORT,
+            'flex_por_defecto': False, 'segundo_plano': background.ACTIVO,
+        })
+
     def create(self, request, *args, **kwargs):
         entrada = AnalisisJornadaIACrearSerializer(data=request.data)
         entrada.is_valid(raise_exception=True)
         jornada = entrada.validated_data['jornada']
         verificar_acceso_jornada(request.user, jornada)
 
-        # Auto-sanación, mismo espíritu que en AnalisisMomentoIAViewSet.create.
+        # Auto-sanación, mismo espíritu que en AnalisisMomentoIAViewSet.create. Excepto los que
+        # esperan a OpenAI en segundo plano (HU-98): esos no dependen de un hilo nuestro, pueden
+        # tardar más de 10 minutos legítimamente y tienen su propio tope (background.DURACION_MAXIMA).
         AnalisisJornadaIA.objects.filter(
             jornada=jornada,
             estado__in=[AnalisisJornadaIA.ESTADO_PENDIENTE, AnalisisJornadaIA.ESTADO_PROCESANDO],
             actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_IA,
+            respuesta_openai_id='',
         ).update(
             estado=AnalisisJornadaIA.ESTADO_ERROR,
             error_mensaje='El análisis quedó procesando más de 10 minutos sin completarse '

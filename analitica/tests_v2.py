@@ -406,7 +406,7 @@ class ProcesarAnalisisV2Tests(TestCase):
     def setUp(self):
         self.d = crear_jornada_completa()
 
-    def _salida_valida(self, system, user, modelo=None, reparacion=None):
+    def _salida_valida(self, system, user, modelo=None, reparacion=None, **_):
         # Una salida que SIEMPRE valida contra la entrada: la forma sin_datos construida a partir
         # del propio `user` (no importa que la entrada sí tenga respuestas — eso no lo comprueba
         # el validador de negocio).
@@ -481,7 +481,7 @@ class ProcesarAnalisisV2Tests(TestCase):
             def get_representative_docs(self, t):
                 return []
 
-        def salida(system, user, modelo=None, reparacion=None):
+        def salida(system, user, modelo=None, reparacion=None, **_):
             entrada = json.loads(user)
             return construir_salida_sin_datos(entrada, 'bertopic_llm'), None, {}
 
@@ -628,13 +628,15 @@ class EndpointsExistentesProducenV2Tests(TestCase):
 
     @staticmethod
     def _salida(pipeline):
-        def _fake(system, user, modelo=None, reparacion=None):
+        def _fake(system, user, modelo=None, reparacion=None, **_):
             return construir_salida_sin_datos(json.loads(user), pipeline), None, {'finish_reason': 'stop'}
         return _fake
 
     def test_analisis_jornada_ia_usa_prompt_llm_integral(self):
         a = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'], enfoque='cualitativo', contexto='C')
-        with patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('llm')) as llamada:
+        # Modo de siempre (KUNSAMU_V2_BACKGROUND_JORNADA=0); el de segundo plano, en tests_background.
+        with patch('analitica.v2.background.ACTIVO', False), \
+                patch('analitica.v2.procesar.llamar_openai_estructurado', side_effect=self._salida('llm')) as llamada:
             analizar_jornada_ia(a.id)
         a.refresh_from_db()
         self.assertEqual(a.estado, AnalisisJornadaIA.ESTADO_COMPLETO, a.error_mensaje)
@@ -682,7 +684,8 @@ class EndpointsExistentesProducenV2Tests(TestCase):
 
     def test_error_del_proveedor_deja_registro_en_error_con_diagnostico(self):
         a = AnalisisJornadaIA.objects.create(jornada=self.d['jornada'])
-        with patch('analitica.v2.procesar.llamar_openai_estructurado', return_value=(None, 'boom', {})):
+        with patch('analitica.v2.background.ACTIVO', False), \
+                patch('analitica.v2.procesar.llamar_openai_estructurado', return_value=(None, 'boom', {})):
             analizar_jornada_ia(a.id)
         a.refresh_from_db()
         self.assertEqual(a.estado, AnalisisJornadaIA.ESTADO_ERROR)

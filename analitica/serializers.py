@@ -139,19 +139,50 @@ class AnalisisJornadaIASerializer(serializers.ModelSerializer):
         fields = [
             'id', 'jornada', 'metodo', 'estado', 'resultado', 'error_mensaje', 'modelo_usado',
             'prompt_usado', 'diagnostico', 'version_prompt', 'version_esquema', *CAMPOS_ANALISIS_GUIADO,
+            'modelo', 'esfuerzo', 'flex', 'respuesta_openai_id', 'fase_openai', 'consultado_en',
             'solicitado_por', 'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
 
+    # Lo que de verdad se usa (lo pedido, o la configuración si no se pidió nada) — HU-98.
+    modelo = serializers.SerializerMethodField()
+    esfuerzo = serializers.SerializerMethodField()
+
     def get_metodo(self, obj):
         return 'openai'
 
+    def get_modelo(self, obj) -> str:
+        from .v2.llm import DEFAULT_MODEL
+        return obj.modelo_solicitado or DEFAULT_MODEL
+
+    def get_esfuerzo(self, obj) -> str:
+        from .v2.llm import REASONING_EFFORT
+        return obj.esfuerzo_solicitado or REASONING_EFFORT
+
 
 class AnalisisJornadaIACrearSerializer(serializers.ModelSerializer):
+    """HU-98: `modelo`, `esfuerzo` y `flex` son opcionales; sin ellos, la configuración
+    (OPENAI_MODEL_V2, OPENAI_REASONING_EFFORT_V2, tier normal)."""
+    modelo = serializers.CharField(source='modelo_solicitado', required=False, allow_blank=True)
+    esfuerzo = serializers.CharField(source='esfuerzo_solicitado', required=False, allow_blank=True)
+    flex = serializers.BooleanField(required=False, default=False)
+
     class Meta:
         model = AnalisisJornadaIA
-        fields = ['id', 'jornada', 'estado', 'creado_en', *CAMPOS_ANALISIS_GUIADO]
+        fields = ['id', 'jornada', 'estado', 'creado_en', *CAMPOS_ANALISIS_GUIADO, 'modelo', 'esfuerzo', 'flex']
         read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate_modelo(self, valor):
+        from .v2.llm import MODELOS_PERMITIDOS
+        if valor and valor not in MODELOS_PERMITIDOS:
+            raise serializers.ValidationError(f'Modelo no permitido. Opciones: {MODELOS_PERMITIDOS}.')
+        return valor
+
+    def validate_esfuerzo(self, valor):
+        from .v2.llm import ESFUERZOS_PERMITIDOS
+        if valor and valor not in ESFUERZOS_PERMITIDOS:
+            raise serializers.ValidationError(f'Esfuerzo no válido. Opciones: {ESFUERZOS_PERMITIDOS}.')
+        return valor
         # El guard de "sin respuestas" (HU-57 §5) vive en AnalisisJornadaIAViewSet.create(),
         # después de verificar_acceso_jornada — ver el comentario en ReporteCrearSerializer.
 
