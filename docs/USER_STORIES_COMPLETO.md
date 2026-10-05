@@ -2398,3 +2398,11 @@ Como administrador quiero escribir contexto e instrucciones tan largos como haga
 - Lo que sigue acotando el tamaño es el tope de la entrada completa del análisis v2 (`MAX_CARACTERES_ENTRADA`, ≈1,2 millones de caracteres), que falla con un mensaje claro.
 - Los system prompts (HU-92) nunca tuvieron tope.
 - 2 tests nuevos: 20.000 caracteres en cada campo se aceptan en `analisis-v2`, `analisis-momento-ia` y `reportes`.
+
+### HU-94 — La entrada del análisis v2 se envía compacta, para que quepan jornadas más grandes
+Como administrador quiero poder analizar la jornada completa aunque tenga muchos documentos cargados, porque el análisis integral de la jornada 9 fallaba con "El alcance es demasiado grande para una sola llamada (1252875 caracteres, máximo 1200000)".
+- **Dónde estaba el peso**: el 95 % era la fuente de respuestas del momento 41 (1,19 M caracteres, 1.707 respuestas y 4.418 celdas de matriz). Es texto real de las respuestas, no relleno.
+- **Dos compactaciones sin pérdida de información**: el `user` se serializa sin espacios tras `,` y `:` (−4 %), y en cada celda de matriz/lista se omiten `fila_id`, `columna_id` y `fila_lista_id` cuando no aplican en vez de mandarlos en `null` (−7 %). Medido sobre esa entrada real: de 1.252.875 a 1.113.311 caracteres (−11 %), bajo el tope.
+- **No cambia ningún localizador**: las celdas se ubican por posición (`/respuestas/i/valor/celdas/j/valor`) y `valor` va siempre. El validador y el adaptador BERTopic no leen esas claves. En la `entrada` que expone la API, una clave ausente equivale a `null`.
+- **No se subió el tope** (`MAX_CARACTERES_ENTRADA`, 1,2 M ≈ 350 mil tokens a ~3,4 caracteres por token, medido en corridas reales): el análisis más grande que ha corrido fue de ~209 mil tokens y no está verificada la ventana de contexto del modelo en uso. Sigue configurable con `KUNSAMU_V2_MAX_CARACTERES_ENTRADA`.
+- Ajustado el test de la entrada que esperaba las claves en `null`.

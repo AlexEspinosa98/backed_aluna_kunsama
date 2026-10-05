@@ -124,6 +124,22 @@ def _momento_payload(momento, preguntas):
     }
 
 
+def _celda(respuesta):
+    """Una celda de matriz/lista. Las claves de fila/columna que no aplican se OMITEN en vez de
+    ir en `null` (HU-94): en una jornada con miles de celdas eran ~8 % de la entrada, y la entrada
+    tiene tope (`procesar.MAX_CARACTERES_ENTRADA`). No cambia ningún localizador — las celdas se
+    ubican por posición (`/respuestas/i/valor/celdas/j/valor`) — ni lo que el modelo puede saber:
+    una clave ausente dice lo mismo que una en null. `valor` sí va siempre, aunque sea null."""
+    celda = {
+        'fila_id': str(respuesta.fila_id) if respuesta.fila_id else None,
+        'columna_id': str(respuesta.columna_id) if respuesta.columna_id else None,
+        'fila_lista_id': str(respuesta.fila_lista_id) if respuesta.fila_lista_id else None,
+    }
+    celda = {clave: valor for clave, valor in celda.items() if valor is not None}
+    celda['valor'] = _texto_o_null(respuesta.texto_libre)
+    return celda
+
+
 def _respuestas_de_pregunta(pregunta):
     from participantes.models import Respuesta
 
@@ -144,15 +160,7 @@ def _respuestas_de_pregunta(pregunta):
                 'id': f'r-q{pregunta.id}-{clave}',
                 'pregunta_id': pregunta_id,
                 'sujeto_id': sujeto,
-                'valor': {'celdas': [
-                    {
-                        'fila_id': str(r.fila_id) if r.fila_id else None,
-                        'columna_id': str(r.columna_id) if r.columna_id else None,
-                        'fila_lista_id': str(r.fila_lista_id) if r.fila_lista_id else None,
-                        'valor': _texto_o_null(r.texto_libre),
-                    }
-                    for r in celdas
-                ]},
+                'valor': {'celdas': [_celda(r) for r in celdas]},
             }
             for clave, (sujeto, celdas) in grupos.items()
         ]

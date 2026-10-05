@@ -217,9 +217,10 @@ class EntradaNormalizadaTests(TestCase):
         celdas = respuestas[0]['valor']['celdas']
         self.assertEqual([c['valor'] for c in celdas], ['x', 'y'])
         self.assertEqual(celdas[0]['fila_id'], str(self.d['f1'].id))
-        self.assertIsNone(celdas[0]['fila_lista_id'])
+        # HU-94: lo que no aplica se omite en vez de ir en null.
+        self.assertNotIn('fila_lista_id', celdas[0])
         self.assertEqual(respuestas[1]['valor']['celdas'][0]['fila_lista_id'], str(self.d['fl'].id))
-        self.assertIsNone(respuestas[1]['valor']['celdas'][0]['fila_id'])
+        self.assertNotIn('fila_id', respuestas[1]['valor']['celdas'][0])
         self.assertEqual(respuestas[2]['valor'], 'transcripción')
 
 

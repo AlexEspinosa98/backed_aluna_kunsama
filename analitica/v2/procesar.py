@@ -74,7 +74,8 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
             resultado.update({'ok': True, 'salida': salida, 'modelo_usado': MODELO_USADO_SIN_DATOS})
             return resultado
 
-        user = json.dumps(entrada, ensure_ascii=False)
+        # Compacto (sin espacios tras `,` y `:`): misma información, ~4 % menos de entrada (HU-94).
+        user = json.dumps(entrada, ensure_ascii=False, separators=(',', ':'))
         if len(user) > MAX_CARACTERES_ENTRADA:
             raise ValueError(
                 f'El alcance es demasiado grande para una sola llamada ({len(user)} caracteres, '
