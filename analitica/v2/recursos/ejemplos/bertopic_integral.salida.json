@@ -1,5 +1,5 @@
 {
-  "version": "kunsamu.analisis/v2",
+  "version": "kunsamu.analisis/v2.1",
   "pipeline": "bertopic_llm",
   "estado": "completo",
   "alcance": {
@@ -251,7 +251,9 @@
             "numerador": 2,
             "denominador": 6
           }
-        ]
+        ],
+        "colores_series": [],
+        "colores_categorias": []
       }
     },
     {
@@ -277,7 +279,8 @@
             "texto": "tarde",
             "peso": 0.29
           }
-        ]
+        ],
+        "colores_terminos": []
       }
     }
   ]

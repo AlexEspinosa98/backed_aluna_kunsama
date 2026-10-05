@@ -5,7 +5,7 @@ presentarla en diapositivas: pocos hallazgos por informe (normalmente entre 3 y 
 diapositiva, con un titular que es una conclusión, una o dos cifras, a lo sumo una cita y una
 visualización.
 
-**La salida tiene el mismo contrato que el análisis completo** (`kunsamu.analisis/v2`): la pantalla
+**La salida tiene el mismo contrato que el análisis completo** (`kunsamu.analisis/v2.1` desde HU-100; un resumen sale siempre en v2.1, aunque el análisis de origen sea v2): la pantalla
 que hoy pinta un análisis puede pintar un resumen sin cambios. Lo que cambia es el contenido: menos
 y más corto.
 

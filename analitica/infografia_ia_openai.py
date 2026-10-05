@@ -30,7 +30,7 @@ from django.utils import timezone
 from auditoria.openai_cliente import auditar_llamadas, con_contexto, hilo_con_contexto
 from jornadas.models import JornadaAsset
 
-from .v2.contrato import VERSION as VERSION_V2
+from .v2.contrato import es_contrato_v2
 
 DEFAULT_IMAGE_MODEL = os.environ.get('OPENAI_IMAGE_MODEL', 'gpt-image-2')
 GENERATION_TIMEOUT_SECONDS = 300
@@ -180,7 +180,7 @@ def _texto_system_design(jornada):
 
 
 def _es_resultado_v2(resultado):
-    return (resultado or {}).get('version') == VERSION_V2
+    return es_contrato_v2(resultado)
 
 
 def _datos_desde_analisis_v2(jornada, analisis_v2):

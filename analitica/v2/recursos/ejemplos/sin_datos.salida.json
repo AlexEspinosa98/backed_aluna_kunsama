@@ -1,5 +1,5 @@
 {
-  "version": "kunsamu.analisis/v2",
+  "version": "kunsamu.analisis/v2.1",
   "pipeline": "llm",
   "estado": "sin_datos",
   "alcance": {

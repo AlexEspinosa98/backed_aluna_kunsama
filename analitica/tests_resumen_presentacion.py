@@ -11,6 +11,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from .v2.contrato import VERSION
 from .models import AnalisisJornadaIA, ResumenPresentacion, SystemPrompt
 from .resumen_presentacion import generar_resumen_presentacion
 from .tests import crear_admin_completo
@@ -150,7 +151,7 @@ class ApiTests(APITestCase):
             estado=ResumenPresentacion.ESTADO_COMPLETO, resultado=self.analisis.resultado,
         )
         datos = self.client.get(f'{self.URL}{resumen.id}/').data
-        self.assertEqual(datos['resultado']['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(datos['resultado']['version'], VERSION)
         self.assertNotIn('resultado', self.client.get(self.URL).data[0])
 
     def test_origen_invalido_es_400(self):

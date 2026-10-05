@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Kunsamu — Contrato de análisis v2.1",
-  "description": "Salida JSON común a los pipelines llm y bertopic_llm. Todos los campos son obligatorios. Revisión v2.1 (2026-10-04): colores opcionales con significado (null o lista vacía = paleta del visor) y tres tipos visuales más: grafo, sankey y treemap. La guía añade validaciones semánticas que este esquema no expresa.",
+  "title": "Kunsamu — Contrato de análisis v2",
+  "description": "Salida JSON común a los pipelines llm y bertopic_llm. Todos los campos son obligatorios. La guía añade validaciones semánticas que este esquema no expresa.",
   "type": "object",
   "properties": {
     "version": {
       "type": "string",
       "enum": [
-        "kunsamu.analisis/v2.1"
+        "kunsamu.analisis/v2"
       ]
     },
     "pipeline": {
@@ -80,12 +80,6 @@
           },
           {
             "$ref": "#/$defs/visual_tabla"
-          },
-          {
-            "$ref": "#/$defs/visual_sankey"
-          },
-          {
-            "$ref": "#/$defs/visual_treemap"
           }
         ]
       }
@@ -591,29 +585,13 @@
           "items": {
             "$ref": "#/$defs/fila_categorica"
           }
-        },
-        "colores_series": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/color_serie"
-          },
-          "description": "Color por serie (varias series, radar). Lista vacía = paleta del visor."
-        },
-        "colores_categorias": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/color_categoria"
-          },
-          "description": "Color por categoría cuando hay una sola serie (barras simples, dona). Lista vacía = paleta del visor."
         }
       },
       "required": [
         "unidad",
         "orden_categorias",
         "rango",
-        "filas",
-        "colores_series",
-        "colores_categorias"
+        "filas"
       ],
       "additionalProperties": false
     },
@@ -681,13 +659,6 @@
           "items": {
             "$ref": "#/$defs/punto"
           }
-        },
-        "colores_series": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/color_serie"
-          },
-          "description": "Color por serie. Lista vacía = paleta del visor."
         }
       },
       "required": [
@@ -696,8 +667,7 @@
         "unidad_x",
         "etiqueta_y",
         "unidad_y",
-        "filas",
-        "colores_series"
+        "filas"
       ],
       "additionalProperties": false
     },
@@ -735,17 +705,12 @@
         },
         "cierre_ultimo": {
           "type": "boolean"
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo",
-          "description": "Color de las barras; null = paleta del visor."
         }
       },
       "required": [
         "unidad",
         "intervalos",
-        "cierre_ultimo",
-        "color"
+        "cierre_ultimo"
       ],
       "additionalProperties": false
     },
@@ -778,10 +743,6 @@
           "items": {
             "type": "number"
           }
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo",
-          "description": "Color del grupo; null = paleta del visor."
         }
       },
       "required": [
@@ -792,8 +753,7 @@
         "mediana",
         "q3",
         "max",
-        "atipicos",
-        "color"
+        "atipicos"
       ],
       "additionalProperties": false
     },
@@ -874,25 +834,13 @@
           "items": {
             "$ref": "#/$defs/celda_calor"
           }
-        },
-        "escala": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/escala_calor"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "null = escala secuencial institucional del visor."
         }
       },
       "required": [
         "unidad",
         "etiqueta_x",
         "etiqueta_y",
-        "filas",
-        "escala"
+        "filas"
       ],
       "additionalProperties": false
     },
@@ -929,19 +877,11 @@
           "items": {
             "$ref": "#/$defs/termino"
           }
-        },
-        "colores_terminos": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/color_termino"
-          },
-          "description": "Color por término. Lista vacía = paleta del visor."
         }
       },
       "required": [
         "tipo_peso",
-        "terminos",
-        "colores_terminos"
+        "terminos"
       ],
       "additionalProperties": false
     },
@@ -959,25 +899,12 @@
             "number",
             "null"
           ]
-        },
-        "grupo": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Id de un elemento de datos.grupos; null si el nodo no agrupa."
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo",
-          "description": "Color propio del nodo; manda sobre el del grupo. null = color del grupo o paleta."
         }
       },
       "required": [
         "id",
         "etiqueta",
-        "peso",
-        "grupo",
-        "color"
+        "peso"
       ],
       "additionalProperties": false
     },
@@ -1004,13 +931,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "etiqueta": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Rótulo corto de la relación («financia», «depende de»); null si no aplica."
         }
       },
       "required": [
@@ -1018,8 +938,7 @@
         "destino",
         "peso",
         "evidencia",
-        "fuente_ids",
-        "etiqueta"
+        "fuente_ids"
       ],
       "additionalProperties": false
     },
@@ -1031,13 +950,8 @@
           "enum": [
             "coocurrencia",
             "similitud",
-            "interpretativa",
-            "flujo",
-            "jerarquia",
-            "influencia",
-            "pertenencia"
-          ],
-          "description": "coocurrencia, similitud e interpretativa: red semántica de términos. flujo (algo pasa de A a B), jerarquia (A contiene o decide sobre B), influencia (A afecta a B) y pertenencia (A forma parte de B): grafo de entidades."
+            "interpretativa"
+          ]
         },
         "dirigida": {
           "type": "boolean"
@@ -1056,13 +970,6 @@
           "items": {
             "$ref": "#/$defs/arista"
           }
-        },
-        "grupos": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/grupo_nodos"
-          },
-          "description": "Grupos de nodos; lista vacía si no agrupa."
         }
       },
       "required": [
@@ -1070,8 +977,7 @@
         "dirigida",
         "tipo_peso",
         "nodos",
-        "aristas",
-        "grupos"
+        "aristas"
       ],
       "additionalProperties": false
     },
@@ -1517,10 +1423,8 @@
         "tipo": {
           "type": "string",
           "enum": [
-            "red_semantica",
-            "grafo"
-          ],
-          "description": "red_semantica: términos o conceptos del texto. grafo: actores, entidades o procesos y sus relaciones (con grupos y rótulos de arista)."
+            "red_semantica"
+          ]
         },
         "titulo": {
           "type": "string"
@@ -1609,362 +1513,6 @@
         },
         "datos": {
           "$ref": "#/$defs/datos_tabla"
-        }
-      },
-      "required": [
-        "id",
-        "tipo",
-        "titulo",
-        "fuente_ids",
-        "metodo",
-        "unidad_analisis",
-        "base",
-        "nota",
-        "descripcion_accesible",
-        "datos"
-      ],
-      "additionalProperties": false
-    },
-    "color": {
-      "type": "string",
-      "pattern": "^#[0-9a-fA-F]{6}$",
-      "description": "Color hexadecimal de seis dígitos (#1a73e8). Sólo cuando el color tiene significado (semáforo, escala Likert, sí/no, grupos de actores…); en otro caso el visor usa su paleta accesible."
-    },
-    "color_o_nulo": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/color"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Color #rrggbb o null (paleta del visor)."
-    },
-    "color_serie": {
-      "type": "object",
-      "properties": {
-        "serie": {
-          "type": "string"
-        },
-        "color": {
-          "$ref": "#/$defs/color"
-        }
-      },
-      "required": [
-        "serie",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Color fijo de una serie (su nombre tal como aparece en filas[].serie)."
-    },
-    "color_categoria": {
-      "type": "object",
-      "properties": {
-        "categoria": {
-          "type": "string"
-        },
-        "color": {
-          "$ref": "#/$defs/color"
-        }
-      },
-      "required": [
-        "categoria",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Color fijo de una categoría (sólo con una serie: barras simples o dona)."
-    },
-    "color_termino": {
-      "type": "object",
-      "properties": {
-        "texto": {
-          "type": "string"
-        },
-        "color": {
-          "$ref": "#/$defs/color"
-        }
-      },
-      "required": [
-        "texto",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Color fijo de un término de la nube (por ejemplo, el de su tema)."
-    },
-    "escala_calor": {
-      "type": "object",
-      "properties": {
-        "color_min": {
-          "$ref": "#/$defs/color"
-        },
-        "color_medio": {
-          "$ref": "#/$defs/color_o_nulo"
-        },
-        "color_max": {
-          "$ref": "#/$defs/color"
-        }
-      },
-      "required": [
-        "color_min",
-        "color_medio",
-        "color_max"
-      ],
-      "additionalProperties": false,
-      "description": "Escala de color del mapa de calor. Con color_medio es divergente (el medio cae en cero si el rango lo cruza; si no, en el centro); sin él, secuencial."
-    },
-    "grupo_nodos": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "etiqueta": {
-          "type": "string"
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo"
-        }
-      },
-      "required": [
-        "id",
-        "etiqueta",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Grupo de nodos (comunidad, tipo de actor, tema) con su color de leyenda; null = paleta del visor."
-    },
-    "nodo_flujo": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "etiqueta": {
-          "type": "string"
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo"
-        }
-      },
-      "required": [
-        "id",
-        "etiqueta",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Nodo de un diagrama de flujo (origen o destino)."
-    },
-    "flujo": {
-      "type": "object",
-      "properties": {
-        "origen": {
-          "type": "string"
-        },
-        "destino": {
-          "type": "string"
-        },
-        "valor": {
-          "type": "number",
-          "description": "Magnitud del flujo en datos.unidad; nunca negativa."
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo",
-          "description": "null = color del nodo de origen."
-        }
-      },
-      "required": [
-        "origen",
-        "destino",
-        "valor",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Cuánto pasa del origen al destino. Los flujos no pueden formar ciclos."
-    },
-    "datos_flujo": {
-      "type": "object",
-      "properties": {
-        "unidad": {
-          "type": "string"
-        },
-        "nodos": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/nodo_flujo"
-          }
-        },
-        "flujos": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/flujo"
-          }
-        }
-      },
-      "required": [
-        "unidad",
-        "nodos",
-        "flujos"
-      ],
-      "additionalProperties": false,
-      "description": "sankey: distribución de una magnitud entre orígenes y destinos (sin ciclos)."
-    },
-    "visual_sankey": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "tipo": {
-          "type": "string",
-          "enum": [
-            "sankey"
-          ]
-        },
-        "titulo": {
-          "type": "string"
-        },
-        "fuente_ids": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "metodo": {
-          "type": "string"
-        },
-        "unidad_analisis": {
-          "type": "string"
-        },
-        "base": {
-          "type": "string"
-        },
-        "nota": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "descripcion_accesible": {
-          "type": "string"
-        },
-        "datos": {
-          "$ref": "#/$defs/datos_flujo"
-        }
-      },
-      "required": [
-        "id",
-        "tipo",
-        "titulo",
-        "fuente_ids",
-        "metodo",
-        "unidad_analisis",
-        "base",
-        "nota",
-        "descripcion_accesible",
-        "datos"
-      ],
-      "additionalProperties": false
-    },
-    "nodo_arbol": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "etiqueta": {
-          "type": "string"
-        },
-        "padre": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "description": "Id del nodo padre; null en las raíces."
-        },
-        "valor": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "description": "Obligatorio en las hojas (nunca negativo); null en los nodos con hijos (suma de sus hojas)."
-        },
-        "color": {
-          "$ref": "#/$defs/color_o_nulo",
-          "description": "null = color de su rama de primer nivel."
-        }
-      },
-      "required": [
-        "id",
-        "etiqueta",
-        "padre",
-        "valor",
-        "color"
-      ],
-      "additionalProperties": false,
-      "description": "Parte de una jerarquía (tema → subtema) con el peso de cada hoja."
-    },
-    "datos_arbol": {
-      "type": "object",
-      "properties": {
-        "unidad": {
-          "type": "string"
-        },
-        "nodos": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/nodo_arbol"
-          }
-        }
-      },
-      "required": [
-        "unidad",
-        "nodos"
-      ],
-      "additionalProperties": false,
-      "description": "treemap: jerarquía de partes; el área de cada hoja es proporcional a su valor."
-    },
-    "visual_treemap": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "tipo": {
-          "type": "string",
-          "enum": [
-            "treemap"
-          ]
-        },
-        "titulo": {
-          "type": "string"
-        },
-        "fuente_ids": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "metodo": {
-          "type": "string"
-        },
-        "unidad_analisis": {
-          "type": "string"
-        },
-        "base": {
-          "type": "string"
-        },
-        "nota": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "descripcion_accesible": {
-          "type": "string"
-        },
-        "datos": {
-          "$ref": "#/$defs/datos_arbol"
         }
       },
       "required": [
