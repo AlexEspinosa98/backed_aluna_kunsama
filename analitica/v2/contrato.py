@@ -12,8 +12,18 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-VERSION = 'kunsamu.analisis/v2'
-VERSION_ESQUEMA = 'v2.0'
+# HU-100: v2.1 agrega colores con significado y los tipos grafo, sankey y treemap
+# (recursos/CONTRATO_ANALISIS_V2_1.md). Lo que se GENERA es siempre v2.1; lo que se LEE acepta
+# también v2, porque los análisis guardados antes no se reescriben y el frontend lee las dos.
+# El esquema v2.0 queda archivado en recursos/analisis.schema.v2_0.json.
+VERSION = 'kunsamu.analisis/v2.1'
+VERSION_ESQUEMA = 'v2.1'
+VERSIONES_LEGIBLES = ('kunsamu.analisis/v2', 'kunsamu.analisis/v2.1')
+
+
+def es_contrato_v2(resultado):
+    """True si `resultado` es una salida del contrato v2 en cualquiera de sus versiones."""
+    return isinstance(resultado, dict) and resultado.get('version') in VERSIONES_LEGIBLES
 
 MODO_INTEGRAL = 'integral'
 MODO_POR_MOMENTO = 'por_momento'

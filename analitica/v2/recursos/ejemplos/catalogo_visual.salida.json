@@ -1,5 +1,5 @@
 {
-  "version": "kunsamu.analisis/v2",
+  "version": "kunsamu.analisis/v2.1",
   "pipeline": "llm",
   "estado": "completo",
   "alcance": {
@@ -51,7 +51,7 @@
         "m-demo"
       ],
       "titulo": "Catálogo ficticio de visualizaciones",
-      "resumen": "Demostración técnica de los 17 tipos visuales del contrato v2.",
+      "resumen": "Demostración técnica de los 20 tipos visuales del contrato v2.1, con colores declarados donde tienen significado.",
       "hallazgos": [
         {
           "id": "h-demo",
@@ -90,6 +90,9 @@
             "v_mapa_calor",
             "v_nube_palabras",
             "v_red_semantica",
+            "v_grafo",
+            "v_sankey",
+            "v_treemap",
             "v_tabla",
             "v_matriz_cualitativa"
           ]
@@ -109,7 +112,7 @@
       "metodo": "Conteos sintéticos; null significa dato ausente.",
       "unidad_analisis": "respuesta",
       "base": "Datos sintéticos independientes de demostración para este componente.",
-      "nota": null,
+      "nota": "Colores declarados por categoría (una sola serie): verde A, rojo B, gris sin medición.",
       "descripcion_accesible": "Ejemplo ficticio de barras. Diferencia entre cero y valor ausente.",
       "datos": {
         "unidad": "respuestas",
@@ -140,6 +143,21 @@
             "valor": null,
             "numerador": null,
             "denominador": null
+          }
+        ],
+        "colores_series": [],
+        "colores_categorias": [
+          {
+            "categoria": "A",
+            "color": "#2a9d8f"
+          },
+          {
+            "categoria": "B",
+            "color": "#e76f51"
+          },
+          {
+            "categoria": "Sin medición",
+            "color": "#94a3b8"
           }
         ]
       }
@@ -192,7 +210,9 @@
             "numerador": null,
             "denominador": null
           }
-        ]
+        ],
+        "colores_series": [],
+        "colores_categorias": []
       }
     },
     {
@@ -205,7 +225,7 @@
       "metodo": "Conteos sintéticos de categorías excluyentes.",
       "unidad_analisis": "respuesta",
       "base": "Datos sintéticos independientes de demostración para este componente.",
-      "nota": null,
+      "nota": "Colores declarados por serie: Sí en verde, No en rojo.",
       "descripcion_accesible": "Ejemplo ficticio de barras_apiladas. Composición y tamaño de dos grupos.",
       "datos": {
         "unidad": "respuestas",
@@ -243,7 +263,18 @@
             "numerador": null,
             "denominador": null
           }
-        ]
+        ],
+        "colores_series": [
+          {
+            "serie": "Sí",
+            "color": "#2a9d8f"
+          },
+          {
+            "serie": "No",
+            "color": "#e76f51"
+          }
+        ],
+        "colores_categorias": []
       }
     },
     {
@@ -297,7 +328,9 @@
             "numerador": 4,
             "denominador": 8
           }
-        ]
+        ],
+        "colores_series": [],
+        "colores_categorias": []
       }
     },
     {
@@ -336,6 +369,17 @@
             "valor": 20,
             "numerador": 2,
             "denominador": 10
+          }
+        ],
+        "colores_series": [],
+        "colores_categorias": [
+          {
+            "categoria": "Sí",
+            "color": "#2a9d8f"
+          },
+          {
+            "categoria": "No",
+            "color": "#e76f51"
           }
         ]
       }
@@ -385,7 +429,9 @@
             "numerador": null,
             "denominador": null
           }
-        ]
+        ],
+        "colores_series": [],
+        "colores_categorias": []
       }
     },
     {
@@ -424,6 +470,12 @@
             "x": "2026-09-03",
             "y": 4,
             "n": 10
+          }
+        ],
+        "colores_series": [
+          {
+            "serie": "Total",
+            "color": "#7c3aed"
           }
         ]
       }
@@ -465,7 +517,8 @@
             "y": 6,
             "n": 6
           }
-        ]
+        ],
+        "colores_series": []
       }
     },
     {
@@ -505,7 +558,8 @@
             "y": 7,
             "n": 1
           }
-        ]
+        ],
+        "colores_series": []
       }
     },
     {
@@ -551,7 +605,8 @@
             "y": 3.5,
             "n": 8
           }
-        ]
+        ],
+        "colores_series": []
       }
     },
     {
@@ -585,7 +640,8 @@
             "conteo": 2
           }
         ],
-        "cierre_ultimo": true
+        "cierre_ultimo": true,
+        "color": null
       }
     },
     {
@@ -614,7 +670,8 @@
             "max": 9,
             "atipicos": [
               14
-            ]
+            ],
+            "color": "#c08a28"
           }
         ]
       }
@@ -629,7 +686,7 @@
       "metodo": "Porcentajes sintéticos por celda, base 10; null significa dato ausente.",
       "unidad_analisis": "respuesta",
       "base": "Datos sintéticos independientes de demostración para este componente.",
-      "nota": null,
+      "nota": "Escala de color declarada: de gris claro a rojo.",
       "descripcion_accesible": "Ejemplo ficticio de mapa_calor. Matriz con cero y dato ausente.",
       "datos": {
         "unidad": "%",
@@ -664,7 +721,12 @@
             "numerador": null,
             "denominador": null
           }
-        ]
+        ],
+        "escala": {
+          "color_min": "#f1f5f9",
+          "color_medio": null,
+          "color_max": "#b91c1c"
+        }
       }
     },
     {
@@ -694,7 +756,8 @@
             "texto": "claridad",
             "peso": 3
           }
-        ]
+        ],
+        "colores_terminos": []
       }
     },
     {
@@ -717,17 +780,23 @@
           {
             "id": "n_acceso",
             "etiqueta": "Acceso",
-            "peso": null
+            "peso": null,
+            "grupo": null,
+            "color": null
           },
           {
             "id": "n_horarios",
             "etiqueta": "Horarios",
-            "peso": null
+            "peso": null,
+            "grupo": null,
+            "color": null
           },
           {
             "id": "n_participacion",
             "etiqueta": "Participación",
-            "peso": null
+            "peso": null,
+            "grupo": null,
+            "color": null
           }
         ],
         "aristas": [
@@ -738,7 +807,8 @@
             "evidencia": "Relación ficticia de demostración; no procede de respuestas reales.",
             "fuente_ids": [
               "f-catalogo"
-            ]
+            ],
+            "etiqueta": null
           },
           {
             "origen": "n_horarios",
@@ -747,7 +817,314 @@
             "evidencia": "Relación ficticia de demostración; no procede de respuestas reales.",
             "fuente_ids": [
               "f-catalogo"
-            ]
+            ],
+            "etiqueta": null
+          }
+        ],
+        "grupos": []
+      }
+    },
+    {
+      "id": "v_grafo",
+      "tipo": "grafo",
+      "titulo": "Actores de la mesa y quién influye en quién",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Relaciones de influencia codificadas a partir de las intervenciones; sin pesos. Grupos por sector con color declarado.",
+      "unidad_analisis": "actor",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de grafo dirigido con tres grupos de actores (público, privado, academia) y rótulos en las relaciones.",
+      "datos": {
+        "tipo_relacion": "influencia",
+        "dirigida": true,
+        "tipo_peso": "sin_peso",
+        "grupos": [
+          {
+            "id": "g_publico",
+            "etiqueta": "Sector público",
+            "color": "#0072b2"
+          },
+          {
+            "id": "g_privado",
+            "etiqueta": "Sector privado",
+            "color": "#e69f00"
+          },
+          {
+            "id": "g_academia",
+            "etiqueta": "Academia",
+            "color": "#009e73"
+          }
+        ],
+        "nodos": [
+          {
+            "id": "n_alcaldia",
+            "etiqueta": "Alcaldía",
+            "peso": null,
+            "grupo": "g_publico",
+            "color": null
+          },
+          {
+            "id": "n_puerto",
+            "etiqueta": "Autoridad portuaria",
+            "peso": null,
+            "grupo": "g_publico",
+            "color": null
+          },
+          {
+            "id": "n_camara",
+            "etiqueta": "Cámara de comercio",
+            "peso": null,
+            "grupo": "g_privado",
+            "color": null
+          },
+          {
+            "id": "n_zona",
+            "etiqueta": "Zona franca",
+            "peso": null,
+            "grupo": "g_privado",
+            "color": null
+          },
+          {
+            "id": "n_univ",
+            "etiqueta": "Universidad",
+            "peso": null,
+            "grupo": "g_academia",
+            "color": null
+          },
+          {
+            "id": "n_centro",
+            "etiqueta": "Centro de innovación",
+            "peso": null,
+            "grupo": "g_academia",
+            "color": "#7c3aed"
+          }
+        ],
+        "aristas": [
+          {
+            "origen": "n_alcaldia",
+            "destino": "n_centro",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración.",
+            "fuente_ids": [
+              "f-catalogo"
+            ],
+            "etiqueta": "financia"
+          },
+          {
+            "origen": "n_univ",
+            "destino": "n_centro",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración.",
+            "fuente_ids": [
+              "f-catalogo"
+            ],
+            "etiqueta": "opera"
+          },
+          {
+            "origen": "n_camara",
+            "destino": "n_zona",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración.",
+            "fuente_ids": [
+              "f-catalogo"
+            ],
+            "etiqueta": "representa"
+          },
+          {
+            "origen": "n_puerto",
+            "destino": "n_zona",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración.",
+            "fuente_ids": [
+              "f-catalogo"
+            ],
+            "etiqueta": "regula"
+          },
+          {
+            "origen": "n_centro",
+            "destino": "n_camara",
+            "peso": null,
+            "evidencia": "Relación ficticia de demostración.",
+            "fuente_ids": [
+              "f-catalogo"
+            ],
+            "etiqueta": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_sankey",
+      "tipo": "sankey",
+      "titulo": "De qué actor sale cada propuesta y a qué tema llega",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteo de menciones ficticias cruzando el actor que propone con el tema propuesto.",
+      "unidad_analisis": "mención",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de diagrama de flujo: tres actores a la izquierda, tres temas a la derecha; el ancho de cada banda es el número de menciones.",
+      "datos": {
+        "unidad": "menciones",
+        "nodos": [
+          {
+            "id": "a_autoridades",
+            "etiqueta": "Autoridades",
+            "color": "#0072b2"
+          },
+          {
+            "id": "a_gremios",
+            "etiqueta": "Gremios",
+            "color": "#e69f00"
+          },
+          {
+            "id": "a_universidades",
+            "etiqueta": "Universidades",
+            "color": "#009e73"
+          },
+          {
+            "id": "t_formacion",
+            "etiqueta": "Formación",
+            "color": null
+          },
+          {
+            "id": "t_infra",
+            "etiqueta": "Infraestructura",
+            "color": null
+          },
+          {
+            "id": "t_financiacion",
+            "etiqueta": "Financiación",
+            "color": null
+          }
+        ],
+        "flujos": [
+          {
+            "origen": "a_autoridades",
+            "destino": "t_infra",
+            "valor": 14,
+            "color": null
+          },
+          {
+            "origen": "a_autoridades",
+            "destino": "t_financiacion",
+            "valor": 6,
+            "color": null
+          },
+          {
+            "origen": "a_gremios",
+            "destino": "t_financiacion",
+            "valor": 11,
+            "color": null
+          },
+          {
+            "origen": "a_gremios",
+            "destino": "t_infra",
+            "valor": 5,
+            "color": null
+          },
+          {
+            "origen": "a_universidades",
+            "destino": "t_formacion",
+            "valor": 16,
+            "color": null
+          },
+          {
+            "origen": "a_universidades",
+            "destino": "t_financiacion",
+            "valor": 3,
+            "color": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "v_treemap",
+      "tipo": "treemap",
+      "titulo": "Peso de cada tema y subtema en las propuestas",
+      "fuente_ids": [
+        "f-catalogo"
+      ],
+      "metodo": "Conteo de menciones ficticias por tema (rama) y subtema (hoja); las ramas suman sus hojas.",
+      "unidad_analisis": "mención",
+      "base": "Datos sintéticos independientes de demostración para este componente.",
+      "nota": null,
+      "descripcion_accesible": "Ejemplo ficticio de treemap con tres temas y sus subtemas; el área es proporcional a las menciones.",
+      "datos": {
+        "unidad": "menciones",
+        "nodos": [
+          {
+            "id": "tm_infra",
+            "etiqueta": "Infraestructura",
+            "padre": null,
+            "valor": null,
+            "color": "#0072b2"
+          },
+          {
+            "id": "tm_infra_vias",
+            "etiqueta": "Vías de acceso",
+            "padre": "tm_infra",
+            "valor": 12,
+            "color": null
+          },
+          {
+            "id": "tm_infra_puerto",
+            "etiqueta": "Ampliación del puerto",
+            "padre": "tm_infra",
+            "valor": 9,
+            "color": null
+          },
+          {
+            "id": "tm_infra_energia",
+            "etiqueta": "Energía",
+            "padre": "tm_infra",
+            "valor": 4,
+            "color": null
+          },
+          {
+            "id": "tm_form",
+            "etiqueta": "Formación",
+            "padre": null,
+            "valor": null,
+            "color": "#009e73"
+          },
+          {
+            "id": "tm_form_tecnica",
+            "etiqueta": "Técnica portuaria",
+            "padre": "tm_form",
+            "valor": 10,
+            "color": null
+          },
+          {
+            "id": "tm_form_idiomas",
+            "etiqueta": "Idiomas",
+            "padre": "tm_form",
+            "valor": 5,
+            "color": null
+          },
+          {
+            "id": "tm_gob",
+            "etiqueta": "Gobernanza",
+            "padre": null,
+            "valor": null,
+            "color": "#e69f00"
+          },
+          {
+            "id": "tm_gob_mesa",
+            "etiqueta": "Mesa permanente",
+            "padre": "tm_gob",
+            "valor": 7,
+            "color": null
+          },
+          {
+            "id": "tm_gob_normas",
+            "etiqueta": "Normas",
+            "padre": "tm_gob",
+            "valor": 3,
+            "color": null
           }
         ]
       }

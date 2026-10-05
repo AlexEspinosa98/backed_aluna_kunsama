@@ -325,7 +325,9 @@ class _AdaptadorAnalisisJornada:
 
 # Lo que copia el backend del análisis original en un resumen para presentación: el modelo no lo
 # escribe (no puede alterarlo ni gasta tokens copiándolo).
-CLAVES_COPIADAS_DEL_ORIGINAL = ('version', 'pipeline', 'estado', 'alcance', 'fuentes', 'cobertura')
+# `version` no se copia: el resumen sale siempre en la versión vigente del contrato (HU-100), aunque el
+# análisis de origen sea v2 — sus visualizaciones las completa el modelo con los campos de color.
+CLAVES_COPIADAS_DEL_ORIGINAL = ('pipeline', 'estado', 'alcance', 'fuentes', 'cobertura')
 CLAVES_DEL_RESUMEN = ('informes', 'visualizaciones', 'limitaciones')
 
 
@@ -353,7 +355,9 @@ class _AdaptadorResumenPresentacion:
 
         fuente = resumen.fuente
         original = resultado_v2_de(fuente)
-        completa = {**{k: original[k] for k in CLAVES_COPIADAS_DEL_ORIGINAL}, **salida}
+        from .contrato import VERSION
+
+        completa = {'version': VERSION, **{k: original[k] for k in CLAVES_COPIADAS_DEL_ORIGINAL}, **salida}
         errores = evaluar_salida_v2(
             completa, fuente.entrada, original['pipeline'], intento, resumen.diagnostico, ultimo=ultimo,
         )

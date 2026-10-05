@@ -14,6 +14,7 @@ from auditoria.openai_cliente import auditar_llamadas
 
 from .v2 import background
 from .v2.contrato import VERSION_ESQUEMA
+from .v2.migracion_contrato import visualizaciones_a_v2_1
 
 # Del análisis original solo se le manda al modelo lo que necesita para resumir. La cobertura
 # (una fila por pregunta) no aporta nada a un resumen y en una jornada grande pesa mucho: el
@@ -25,10 +26,14 @@ def entrada_del_resumen(resumen):
     from .models import resultado_v2_de
 
     original = resultado_v2_de(resumen.fuente)
+    analisis = {clave: original[clave] for clave in CLAVES_PARA_EL_MODELO}
+    # El resumen sale en v2.1 (HU-100): si el análisis es v2, sus visualizaciones van ya en la forma
+    # v2.1 (campos de color vacíos) para que el modelo las pueda copiar idénticas.
+    analisis['visualizaciones'] = visualizaciones_a_v2_1(analisis['visualizaciones'])
     return {
         'jornada': {'nombre': resumen.jornada.nombre, 'descripcion': resumen.jornada.descripcion or ''},
         'instrucciones_usuario': resumen.instrucciones or '',
-        'analisis': {clave: original[clave] for clave in CLAVES_PARA_EL_MODELO},
+        'analisis': analisis,
     }
 
 

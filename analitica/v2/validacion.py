@@ -1,4 +1,4 @@
-"""Validación de una salida `kunsamu.analisis/v2` en dos capas (README de la entrega, §"Validación
+"""Validación de una salida `kunsamu.analisis/v2.1` (HU-100; antes v2) en dos capas (README de la entrega, §"Validación
 de negocio obligatoria"):
 
 1. `validar_esquema`: forma y tipos contra `recursos/analisis.schema.json` (jsonschema, Draft
@@ -33,6 +33,9 @@ TOLERANCIA_BARRAS_100 = 0.5
 TIPOS_CATEGORICOS = ('barras', 'barras_agrupadas', 'barras_apiladas', 'barras_100', 'dona', 'radar')
 TIPOS_COORDENADAS = ('lineas', 'areas', 'dispersion', 'pendientes')
 TIPOS_TABLA = ('tabla', 'matriz_cualitativa')
+TIPOS_RED = ('red_semantica', 'grafo')
+# v2.1 (HU-100): la red semántica es de términos del texto; el grafo, de entidades y sus relaciones.
+RELACIONES_RED_SEMANTICA = ('coocurrencia', 'similitud', 'interpretativa')
 
 # YYYY-MM-DD o fecha-hora ISO con zona explícita (TIPOS_VISUALES.md §4).
 _FECHA_ISO_RE = re.compile(
@@ -236,6 +239,31 @@ def validar_negocio(salida, entrada, pipeline_esperado=None):
     return errores
 
 
+def _hijos_de(nodos):
+    hijos = {}
+    for nodo in nodos:
+        if nodo['padre'] is not None:
+            hijos.setdefault(nodo['padre'], set()).add(nodo['id'])
+    return hijos
+
+
+def _tiene_ciclo(siguientes):
+    """True si el grafo dirigido `{nodo: {siguientes}}` tiene algún ciclo (DFS con colores)."""
+    blanco, gris, negro = 0, 1, 2
+    color = {}
+
+    def visitar(nodo):
+        color[nodo] = gris
+        for siguiente in siguientes.get(nodo, ()):
+            estado = color.get(siguiente, blanco)
+            if estado == gris or (estado == blanco and visitar(siguiente)):
+                return True
+        color[nodo] = negro
+        return False
+
+    return any(color.get(nodo, blanco) == blanco and visitar(nodo) for nodo in list(siguientes))
+
+
 def _validar_datos_visual(errores, vp, visual, declaradas):
     tipo = visual['tipo']
     datos = visual['datos']
@@ -337,7 +365,18 @@ def _validar_datos_visual(errores, vp, visual, declaradas):
             if not _es_numero(termino['peso']) or termino['peso'] < 0:
                 errores.append(f'{vp}.terminos[{i}]: peso debe ser número no negativo')
 
-    elif tipo == 'red_semantica':
+    elif tipo in TIPOS_RED:
+        if tipo == 'red_semantica' and datos['tipo_relacion'] not in RELACIONES_RED_SEMANTICA:
+            errores.append(
+                f"{vp}: una red_semantica usa {list(RELACIONES_RED_SEMANTICA)}; "
+                f"para {datos['tipo_relacion']!r} entre entidades usa 'grafo'"
+            )
+        grupos = [g['id'] for g in datos.get('grupos', [])]
+        if len(grupos) != len(set(grupos)):
+            errores.append(f'{vp}: ids de grupo repetidos')
+        for i, nodo in enumerate(datos['nodos']):
+            if nodo.get('grupo') is not None and nodo['grupo'] not in grupos:
+                errores.append(f"{vp}.nodos[{i}]: grupo {nodo['grupo']!r} no existe en datos.grupos")
         nodos = [n['id'] for n in datos['nodos']]
         if len(nodos) != len(set(nodos)):
             errores.append(f'{vp}: ids de nodo repetidos')
@@ -357,6 +396,45 @@ def _validar_datos_visual(errores, vp, visual, declaradas):
                 errores.append(f'{ap}: en una red interpretativa el peso debe ser null')
             if not set(arista['fuente_ids']) <= declaradas:
                 errores.append(f'{ap}: fuente_ids con fuentes no declaradas')
+
+    elif tipo == 'sankey':
+        nodos = [n['id'] for n in datos['nodos']]
+        if len(nodos) != len(set(nodos)):
+            errores.append(f'{vp}: ids de nodo repetidos')
+        conjunto_nodos = set(nodos)
+        siguientes = {}
+        for i, flujo in enumerate(datos['flujos']):
+            fp = f'{vp}.flujos[{i}]'
+            if flujo['origen'] not in conjunto_nodos or flujo['destino'] not in conjunto_nodos:
+                errores.append(f'{fp}: origen/destino no son nodos existentes')
+            if flujo['origen'] == flujo['destino']:
+                errores.append(f'{fp}: un flujo no puede ir de un nodo a sí mismo')
+            if not _es_numero(flujo['valor']) or flujo['valor'] < 0:
+                errores.append(f'{fp}: valor debe ser un número no negativo')
+            siguientes.setdefault(flujo['origen'], set()).add(flujo['destino'])
+        if _tiene_ciclo(siguientes):
+            errores.append(f'{vp}: los flujos forman un ciclo (un sankey va de orígenes a destinos sin volver)')
+
+    elif tipo == 'treemap':
+        nodos = datos['nodos']
+        ids = [n['id'] for n in nodos]
+        if len(ids) != len(set(ids)):
+            errores.append(f'{vp}: ids de nodo repetidos')
+        conjunto = set(ids)
+        if not any(n['padre'] is None for n in nodos):
+            errores.append(f'{vp}: no hay ninguna raíz (nodo con padre null)')
+        con_hijos = {n['padre'] for n in nodos if n['padre'] is not None}
+        for i, nodo in enumerate(nodos):
+            np_ = f'{vp}.nodos[{i}]'
+            if nodo['padre'] is not None and nodo['padre'] not in conjunto:
+                errores.append(f"{np_}: padre {nodo['padre']!r} no existe")
+            if nodo['id'] in con_hijos:
+                if nodo['valor'] is not None:
+                    errores.append(f'{np_}: un nodo con hijos lleva valor null (el visor suma sus hojas)')
+            elif not _es_numero(nodo['valor']) or nodo['valor'] < 0:
+                errores.append(f'{np_}: una hoja necesita valor numérico no negativo')
+        if _tiene_ciclo(_hijos_de(nodos)):
+            errores.append(f'{vp}: la jerarquía tiene un ciclo')
 
     elif tipo in TIPOS_TABLA:
         columnas = datos['columnas']

@@ -1,5 +1,5 @@
 {
-  "version": "kunsamu.analisis/v2",
+  "version": "kunsamu.analisis/v2.1",
   "pipeline": "llm",
   "estado": "completo",
   "alcance": {
@@ -200,7 +200,9 @@
             "numerador": 2,
             "denominador": 6
           }
-        ]
+        ],
+        "colores_series": [],
+        "colores_categorias": []
       }
     }
   ]

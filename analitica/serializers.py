@@ -8,7 +8,7 @@ from .models import (
     resultado_v2_de,
 )
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT
-from .v2.contrato import VERSION
+from .v2.contrato import VERSION, es_contrato_v2
 
 # Campos del análisis guiado (HU-57, ver docs/HU_BACKEND_ANALISIS_GUIADO.md §1) comunes a los
 # tres serializers de creación — un solo lugar para no repetir la lista tres veces y que agregar
@@ -331,7 +331,8 @@ class _AnalisisV2CamposDerivados(serializers.ModelSerializer):
     estado_analitico = serializers.SerializerMethodField()
 
     def get_version(self, obj):
-        return VERSION
+        # La de su resultado (v2 o v2.1, HU-100); la vigente si todavía no hay resultado.
+        return (obj.resultado or {}).get('version') or VERSION
 
     def get_metodo(self, obj):
         # Para que la agrupación actual del panel (bertopic / openai) siga funcionando sin cambios.
@@ -511,7 +512,7 @@ class ResumenPresentacionCrearSerializer(serializers.ModelSerializer):
         if analisis.estado != analisis.ESTADO_COMPLETO:
             raise serializers.ValidationError({campo: 'El análisis todavía no está completo.'})
         resultado = resultado_v2_de(analisis) or {}
-        if resultado.get('version') != 'kunsamu.analisis/v2' or not analisis.entrada:
+        if not es_contrato_v2(resultado) or not analisis.entrada:
             raise serializers.ValidationError({campo: (
                 'Este análisis es anterior al contrato kunsamu.analisis/v2 (no tiene salida estructurada '
                 'ni entrada guardada): no se puede resumir. Genera un análisis nuevo.'

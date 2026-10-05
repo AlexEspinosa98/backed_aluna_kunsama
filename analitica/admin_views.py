@@ -38,6 +38,7 @@ from .serializers import (
 )
 from .sugerencias_ia_openai import generar_sugerencias
 from .v2.contrato import VERSION as VERSION_V2
+from .v2.contrato import es_contrato_v2
 from .v2.procesar import procesar_analisis_v2
 
 # Si el worker que procesaba un reporte muere (crash, redeploy, OOM), ese reporte se queda
@@ -66,7 +67,7 @@ UMBRAL_HUERFANO_ANALISIS_V2 = timedelta(minutes=45)
 
 
 def _es_resultado_v2(resultado):
-    return (resultado or {}).get('version') == VERSION_V2
+    return es_contrato_v2(resultado)
 
 
 # La presentación HTML (analitica/presentacion.py) y el PDF (analitica/pdf_presentacion.py) leen el
@@ -695,7 +696,7 @@ def _item_analisis_v2(analisis):
         'creado_en': analisis.creado_en,
         'completado_en': analisis.completado_en,
         # Solo los items v2 traen estas cuatro claves: es lo que le dice al frontend qué renderer usar.
-        'version': VERSION_V2,
+        'version': (analisis.resultado or {}).get('version') or VERSION_V2,
         'modo': analisis.modo,
         'pipeline': analisis.pipeline,
         'estado_analitico': (analisis.resultado or {}).get('estado'),

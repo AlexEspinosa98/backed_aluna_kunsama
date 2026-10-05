@@ -6,6 +6,7 @@ import json
 
 from django.test import SimpleTestCase
 
+from .v2.contrato import VERSION, VERSION_ESQUEMA
 from .v2.contrato import RECURSOS
 from .v2.validacion import PunteroInvalido, resolver_puntero, validar_esquema, validar_negocio, validar_salida
 
@@ -289,7 +290,7 @@ class AnalisisV2ApiTests(APITestCase):
         resp, hilo = self._post({'jornada': self.jornada.id, 'modo': 'integral', 'pipeline': 'llm', 'contexto': 'C'})
         self.assertEqual(resp.status_code, 201, resp.data)
         self.assertEqual(resp.data['estado'], 'pendiente')
-        self.assertEqual(resp.data['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(resp.data['version'], VERSION)
         self.assertEqual(resp.data['metodo'], 'openai')
         self.assertEqual(resp.data['momentos'], [])
         self.assertEqual(resp.data['contexto'], 'C')
@@ -388,7 +389,7 @@ class AnalisisV2ApiTests(APITestCase):
         resp = self.client.get(f'/api/admin/analisis/?jornada={self.jornada.id}')
         item = next(i for i in resp.data if i['tipo'] == 'analisis_v2')
         self.assertEqual(item['id'], a.id)
-        self.assertEqual(item['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(item['version'], VERSION)
         self.assertEqual(item['metodo'], 'bertopic')
         self.assertEqual(item['alcance'], 'momento')
         self.assertEqual(item['momento_titulo'], self.d['m1'].titulo)
@@ -419,9 +420,9 @@ class ProcesarAnalisisV2Tests(TestCase):
             procesar_analisis_v2(a.id)
         a.refresh_from_db()
         self.assertEqual(a.estado, AnalisisV2.ESTADO_COMPLETO, a.error_mensaje)
-        self.assertEqual(a.resultado['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(a.resultado['version'], VERSION)
         self.assertEqual(a.modelo_usado, 'Generado con IA')
-        self.assertEqual(a.version_esquema, 'v2.0')
+        self.assertEqual(a.version_esquema, VERSION_ESQUEMA)
         self.assertTrue(a.prompt_usado.startswith('# System prompt Kunsamu — LLM'))
         self.assertEqual(a.entrada['solicitud']['modo'], 'integral')
         self.assertEqual(len(a.diagnostico['intentos']), 1)
@@ -640,10 +641,10 @@ class EndpointsExistentesProducenV2Tests(TestCase):
             analizar_jornada_ia(a.id)
         a.refresh_from_db()
         self.assertEqual(a.estado, AnalisisJornadaIA.ESTADO_COMPLETO, a.error_mensaje)
-        self.assertEqual(a.resultado['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(a.resultado['version'], VERSION)
         self.assertEqual(a.resultado['alcance']['modo'], 'integral')
         self.assertEqual(a.entrada['personalizacion']['contexto_usuario'], 'C')
-        self.assertEqual(a.version_esquema, 'v2.0')
+        self.assertEqual(a.version_esquema, VERSION_ESQUEMA)
         self.assertTrue(a.prompt_usado.startswith('# System prompt Kunsamu — LLM'))
         self.assertEqual(llamada.call_args.args[0], a.prompt_usado)  # system = archivo íntegro, sin anexos
         self.assertNotIn('ENFOQUE', a.prompt_usado)
@@ -665,7 +666,7 @@ class EndpointsExistentesProducenV2Tests(TestCase):
             procesar_reporte(reporte.id)
         reporte.refresh_from_db()
         self.assertEqual(reporte.estado, Reporte.ESTADO_COMPLETO, reporte.error_mensaje)
-        self.assertEqual(reporte.analisis['version'], 'kunsamu.analisis/v2')
+        self.assertEqual(reporte.analisis['version'], VERSION)
         self.assertEqual(reporte.analisis['pipeline'], 'bertopic_llm')
         self.assertTrue(reporte.prompt_usado.startswith('# System prompt Kunsamu — BERTopic + LLM'))
         self.assertEqual(reporte.entrada['bertopic']['version_adaptador'], '1.0')
