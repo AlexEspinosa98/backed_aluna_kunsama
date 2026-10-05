@@ -4,7 +4,7 @@ from django.utils import timezone
 
 from jornadas.models import Jornada, Momento
 
-from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT
 from .v2.contrato import (
     MODO_CHOICES, MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_BERTOPIC_LLM, PIPELINE_CHOICES,
     PIPELINE_LLM,
@@ -26,13 +26,13 @@ class AnalisisGuiadoMixin(models.Model):
         ),
     )
     contexto = models.TextField(
-        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        blank=True, help_text=(
             'Contexto general que escribió quien pidió el análisis — puede coincidir con '
             'Jornada.descripcion o no. Se guarda tal cual, sin normalizar.'
         ),
     )
     instrucciones = models.TextField(
-        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        blank=True, help_text=(
             'Instrucciones adicionales de quien pidió el análisis (tono, público, cantidad de '
             'gráficos, idioma…) — mandan sobre el estilo y la estructura por defecto.'
         ),
@@ -47,13 +47,13 @@ class AnalisisGuiadoPorMomentoMixin(models.Model):
     o de varios momentos combinados los deja vacíos (nada que lo impida a nivel de modelo; es el
     serializer quien decide cuándo pedirlos, ver `ReporteCrearSerializer`)."""
     contexto_momento = models.TextField(
-        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        blank=True, help_text=(
             'Contexto propio de ESTE momento, además del contexto general de la jornada. Solo '
             'aplica cuando el alcance es un único momento.'
         ),
     )
     instrucciones_momento = models.TextField(
-        blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+        blank=True, help_text=(
             'Instrucciones propias de ESTE momento, además de las generales. Solo aplica '
             'cuando el alcance es un único momento.'
         ),
@@ -607,11 +607,11 @@ class AnalisisV2(models.Model):
     ))
     modo = models.CharField(max_length=12, choices=MODO_CHOICES)
     pipeline = models.CharField(max_length=15, choices=PIPELINE_CHOICES, default=PIPELINE_LLM)
-    contexto = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+    contexto = models.TextField(blank=True, help_text=(
         'Contexto general escrito por quien pide el análisis. Viaja como dato en '
         '`personalizacion.contexto_usuario`, nunca dentro del system prompt.'
     ))
-    instrucciones = models.TextField(blank=True, max_length=MAX_LARGO_TEXTO_LIBRE, help_text=(
+    instrucciones = models.TextField(blank=True, help_text=(
         'Instrucciones de quien pide el análisis (`personalizacion.instrucciones_usuario`). '
         'Ajustan énfasis y tono; el formato del informe es fijo por contrato.'
     ))

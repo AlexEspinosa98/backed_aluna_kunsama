@@ -6,7 +6,7 @@ from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaImagen, InfografiaJornada,
     PlantillaAnalisis, PresentacionDiseno, Reporte, SystemPrompt,
 )
-from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT, MAX_LARGO_TEXTO_LIBRE
+from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT
 from .v2.contrato import VERSION
 
 # Campos del análisis guiado (HU-57, ver docs/HU_BACKEND_ANALISIS_GUIADO.md §1) comunes a los
@@ -263,10 +263,10 @@ class AnalisisSugerenciasSerializer(serializers.Serializer):
     metodo = serializers.ChoiceField(choices=METODO_CHOICES)
     enfoque = serializers.ChoiceField(choices=ENFOQUE_CHOICES, required=False, default=ENFOQUE_DEFAULT)
     contexto = serializers.CharField(
-        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+        required=False, allow_blank=True, default='', trim_whitespace=False,
     )
     instrucciones = serializers.CharField(
-        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+        required=False, allow_blank=True, default='', trim_whitespace=False,
     )
 
     def validate(self, attrs):
@@ -282,10 +282,10 @@ class AnalisisSugerenciasSerializer(serializers.Serializer):
 class PersonalizacionMomentoSerializer(serializers.Serializer):
     momento = serializers.PrimaryKeyRelatedField(queryset=Momento.objects.all())
     contexto = serializers.CharField(
-        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+        required=False, allow_blank=True, default='', trim_whitespace=False,
     )
     instrucciones = serializers.CharField(
-        required=False, allow_blank=True, default='', max_length=MAX_LARGO_TEXTO_LIBRE, trim_whitespace=False,
+        required=False, allow_blank=True, default='', trim_whitespace=False,
     )
 
 

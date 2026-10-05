@@ -2391,3 +2391,10 @@ Como administrador quiero guardar los system prompts en la base, con versiones, 
 - **Se queda en el código a propósito**: la regla de datos de la infografía (va siempre al final y es la protección contra cifras inventadas), la estructura de las láminas, el esquema de salida del análisis y los prompts de extracción y transcripción, que no son de analítica. `PlantillaAnalisis` sigue existiendo para los flujos legacy; el análisis v2 nunca la usó.
 - API `/api/admin/system-prompts/` (leer: cualquier admin; escribir y activar: admin completo). Guía en `docs/INTEGRACION_FRONTEND_SYSTEM_PROMPTS.md`.
 - 16 tests nuevos; 2 existentes ajustados (prueban el título de la portada y ahora reciben el prefijo explícito).
+
+### HU-93 — El contexto y las instrucciones de un análisis no tienen tope de largo
+Como administrador quiero escribir contexto e instrucciones tan largos como haga falta al pedir un análisis, porque el tope de 4000 caracteres cortaba encargos reales.
+- Se quitó `MAX_LARGO_TEXTO_LIBRE` (4000) de los cuatro campos del asistente (`contexto`, `instrucciones`, `contexto_momento`, `instrucciones_momento`) en reportes, análisis de momento, de jornada y `analisis-v2`, incluida la personalización por momento. La migración solo cambia el estado de Django: en PostgreSQL los campos ya eran `text`.
+- Lo que sigue acotando el tamaño es el tope de la entrada completa del análisis v2 (`MAX_CARACTERES_ENTRADA`, ≈1,2 millones de caracteres), que falla con un mensaje claro.
+- Los system prompts (HU-92) nunca tuvieron tope.
+- 2 tests nuevos: 20.000 caracteres en cada campo se aceptan en `analisis-v2`, `analisis-momento-ia` y `reportes`.
