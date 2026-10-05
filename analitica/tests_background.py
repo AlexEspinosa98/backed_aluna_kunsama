@@ -47,9 +47,9 @@ class BaseBackground(TestCase):
         """Simula `crear_respuesta`: registra cada llamada y devuelve ids en orden."""
         ids = iter(ids or ('resp_1', 'resp_2'))
 
-        def crear(system, user, modelo, esfuerzo, flex, reparacion=None):
+        def crear(system, user, modelo, esfuerzo, flex, reparacion=None, esquema=None):
             self.creadas.append({'system': system, 'user': user, 'modelo': modelo, 'esfuerzo': esfuerzo,
-                                 'flex': flex, 'reparacion': reparacion})
+                                 'flex': flex, 'reparacion': reparacion, 'esquema': esquema})
             return respuesta(next(ids)), {}
         return patch(f'{MODULO}.crear_respuesta', side_effect=crear)
 

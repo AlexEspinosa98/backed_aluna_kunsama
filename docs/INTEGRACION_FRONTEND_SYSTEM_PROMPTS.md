@@ -13,6 +13,7 @@ Cada flujo usa **la versión activa de su tipo**, y desde esta pantalla se elige
 | `presentacion` | La presentación HTML de un reporte |
 | `presentacion_diseno` | La diagramación de la presentación (colores, tipografía, plantillas) |
 | `sugerencias` | Las sugerencias del asistente de análisis guiado |
+| `resumen_presentacion` | El resumen de un análisis para presentación en diapositivas (HU-99) |
 
 ## Reglas
 

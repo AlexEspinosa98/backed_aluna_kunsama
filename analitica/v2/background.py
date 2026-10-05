@@ -1,4 +1,7 @@
-"""Análisis integral de la jornada en el modo segundo plano de OpenAI (HU-98).
+"""Modo segundo plano de OpenAI para el análisis integral de la jornada (HU-98) y para el resumen
+de un análisis para presentación (HU-99). El ciclo (lanzar → consultar → validar → reparar →
+publicar) es común; lo propio de cada uno vive en un adaptador (`ADAPTADORES`): qué esquema de
+salida se pide y cómo se valida lo que vuelve.
 
 En el modo de siempre (`procesar.ejecutar_analisis_v2`) el servidor abre una conexión y espera la
 respuesta; si pasan `KUNSAMU_V2_TIMEOUT_SECONDS`, corta y el trabajo — pagado — se pierde. Acá se
@@ -60,7 +63,7 @@ def _cliente():
     return cliente_openai('analisis_v2_background', api_key=api_key)
 
 
-def crear_respuesta(system, user, modelo, esfuerzo, flex, reparacion=None):
+def crear_respuesta(system, user, modelo, esfuerzo, flex, reparacion=None, esquema=None):
     """Lanza la respuesta en segundo plano y devuelve `(response, notas)`. Sin reintentos
     automáticos al crear: un reintento por un corte de red podría dejar DOS análisis corriendo
     (y cobrándose) en OpenAI. Si Flex no tiene capacidad (429, que OpenAI no cobra), se lanza en
@@ -75,7 +78,7 @@ def crear_respuesta(system, user, modelo, esfuerzo, flex, reparacion=None):
         store=GUARDAR_EN_OPENAI, max_output_tokens=MAX_OUTPUT_TOKENS,
         text={'format': {
             'type': 'json_schema', 'name': NOMBRE_ESQUEMA, 'strict': True,
-            'schema': esquema_para_openai(cargar_esquema()),
+            'schema': esquema or esquema_para_openai(cargar_esquema()),
         }},
     )
     if esfuerzo:
@@ -127,7 +130,10 @@ def _system_y_user(analisis):
 def _lanzar(analisis, fase, reparacion=None):
     system, user = _system_y_user(analisis)
     opciones = _opciones(analisis)
-    respuesta, notas = crear_respuesta(system, user, reparacion=reparacion, **opciones)
+    adaptador = adaptador_de(type(analisis))
+    respuesta, notas = crear_respuesta(
+        system, user, reparacion=reparacion, esquema=adaptador.esquema(), **opciones,
+    )
     intentos = analisis.diagnostico.setdefault('intentos', [])
     intentos.append({
         'n': len(intentos) + 1, 'fase': fase, 'response_id': respuesta.id,
@@ -197,23 +203,27 @@ def _uso(respuesta):
 
 
 def avanzar_analisis_background(analisis_id):
-    """Consulta UNA vez la respuesta en curso y avanza el análisis. Devuelve True si el análisis
-    ya no está esperando a OpenAI. Seguro de llamar desde el hilo y desde el cron a la vez: la
-    fila se bloquea y el que llega segundo no hace nada."""
-    import openai
-
+    """El paso de `avanzar_en_segundo_plano` para un análisis integral de la jornada."""
     from analitica.models import AnalisisJornadaIA
 
+    return avanzar_en_segundo_plano(AnalisisJornadaIA, analisis_id)
+
+
+def avanzar_en_segundo_plano(Modelo, registro_id):
+    """Consulta UNA vez la respuesta en curso del registro y lo avanza. Devuelve True si ya no está
+    esperando a OpenAI. Seguro de llamar desde el hilo y desde el cron a la vez: la fila se
+    bloquea y el que llega segundo no hace nada."""
+    import openai
+
+    adaptador = adaptador_de(Modelo)
     with transaction.atomic():
         analisis = (
-            AnalisisJornadaIA.objects.select_for_update(skip_locked=True).select_related('jornada')
-            .filter(pk=analisis_id, estado=AnalisisJornadaIA.ESTADO_PROCESANDO)
+            Modelo.objects.select_for_update(skip_locked=True)
+            .filter(pk=registro_id, estado=Modelo.ESTADO_PROCESANDO)
             .exclude(respuesta_openai_id='').first()
         )
         if analisis is None:
-            return not AnalisisJornadaIA.objects.filter(
-                pk=analisis_id, estado=AnalisisJornadaIA.ESTADO_PROCESANDO,
-            ).exists()
+            return not Modelo.objects.filter(pk=registro_id, estado=Modelo.ESTADO_PROCESANDO).exists()
 
         intento = analisis.diagnostico['intentos'][-1]
         try:
@@ -261,12 +271,12 @@ def avanzar_analisis_background(analisis_id):
             _terminar_con_error(analisis, f'La respuesta de OpenAI no es un JSON válido: {exc}')
             return True
 
-        ultimo = analisis.fase_openai == AnalisisJornadaIA.FASE_REPARACION
-        errores = evaluar_salida_v2(salida, analisis.entrada, PIPELINE_LLM, intento, analisis.diagnostico, ultimo=ultimo)
+        ultimo = analisis.fase_openai == Modelo.FASE_REPARACION
+        publicable, errores = adaptador.evaluar(analisis, salida, intento, ultimo)
         if not errores:
             system, _ = _system_y_user(analisis)
             aplicar_resultado(analisis, {
-                'ok': True, 'salida': salida, 'error': None, 'modelo_usado': MODELO_USADO_LABEL,
+                'ok': True, 'salida': publicable, 'error': None, 'modelo_usado': MODELO_USADO_LABEL,
                 'prompt_usado': system, 'diagnostico': analisis.diagnostico,
             })
             return True
@@ -277,7 +287,7 @@ def avanzar_analisis_background(analisis_id):
             ))
             return True
         try:
-            _lanzar(analisis, AnalisisJornadaIA.FASE_REPARACION,
+            _lanzar(analisis, Modelo.FASE_REPARACION,
                     reparacion={'salida_previa': salida, 'errores': errores})
         except Exception as exc:  # noqa: BLE001
             _terminar_con_error(analisis, f'No se pudo lanzar la reparación en OpenAI: {exc}')
@@ -285,7 +295,7 @@ def avanzar_analisis_background(analisis_id):
         return False
 
 
-def seguir_hasta_terminar(analisis_id):
+def seguir_hasta_terminar(analisis_id, Modelo=None):
     """Lo que hace el hilo del análisis después de lanzarlo: consultar cada
     `INTERVALO_CONSULTA_SEGUNDOS` hasta que termine. Si el hilo muere (reinicio del servidor), el
     cron `consultar_analisis_background` sigue desde donde quedó."""
@@ -295,6 +305,64 @@ def seguir_hasta_terminar(analisis_id):
     while time.monotonic() < limite:
         time.sleep(INTERVALO_CONSULTA_SEGUNDOS)
         close_old_connections()
-        if avanzar_analisis_background(analisis_id):
+        if Modelo is None:
+            from analitica.models import AnalisisJornadaIA as Modelo
+        if avanzar_en_segundo_plano(Modelo, analisis_id):
             return
+
+
+# --- adaptadores ----------------------------------------------------------------------------------
+class _AdaptadorAnalisisJornada:
+    """Análisis integral: el modelo devuelve el contrato completo y se valida contra su entrada."""
+
+    def esquema(self):
+        return None  # el contrato completo, el de siempre
+
+    def evaluar(self, analisis, salida, intento, ultimo):
+        errores = evaluar_salida_v2(salida, analisis.entrada, PIPELINE_LLM, intento, analisis.diagnostico, ultimo=ultimo)
+        return salida, errores
+
+
+# Lo que copia el backend del análisis original en un resumen para presentación: el modelo no lo
+# escribe (no puede alterarlo ni gasta tokens copiándolo).
+CLAVES_COPIADAS_DEL_ORIGINAL = ('version', 'pipeline', 'estado', 'alcance', 'fuentes', 'cobertura')
+CLAVES_DEL_RESUMEN = ('informes', 'visualizaciones', 'limitaciones')
+
+
+def esquema_del_resumen():
+    """El esquema del contrato v2 restringido a lo que escribe el modelo en un resumen: mismas
+    definiciones (`$defs`), solo `informes`, `visualizaciones` y `limitaciones` en la raíz."""
+    import copy
+
+    esquema = copy.deepcopy(esquema_para_openai(cargar_esquema()))
+    esquema['properties'] = {k: esquema['properties'][k] for k in CLAVES_DEL_RESUMEN}
+    esquema['required'] = list(CLAVES_DEL_RESUMEN)
+    return esquema
+
+
+class _AdaptadorResumenPresentacion:
+    """Resumen para presentación (HU-99): el modelo escribe solo la parte editorial; el backend
+    completa el contrato con lo del original y valida TODO contra la entrada original del análisis
+    — así una cita o una métrica del resumen apunta a los mismos datos que en el análisis."""
+
+    def esquema(self):
+        return esquema_del_resumen()
+
+    def evaluar(self, resumen, salida, intento, ultimo):
+        from analitica.models import resultado_v2_de
+
+        fuente = resumen.fuente
+        original = resultado_v2_de(fuente)
+        completa = {**{k: original[k] for k in CLAVES_COPIADAS_DEL_ORIGINAL}, **salida}
+        errores = evaluar_salida_v2(
+            completa, fuente.entrada, original['pipeline'], intento, resumen.diagnostico, ultimo=ultimo,
+        )
+        return completa, errores
+
+
+def adaptador_de(Modelo):
+    return {
+        'AnalisisJornadaIA': _AdaptadorAnalisisJornada(),
+        'ResumenPresentacion': _AdaptadorResumenPresentacion(),
+    }[Modelo.__name__]
 
