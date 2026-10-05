@@ -4,7 +4,8 @@ from jornadas.models import Jornada, Momento
 
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaImagen, InfografiaJornada,
-    PlantillaAnalisis, PresentacionDiseno, Reporte, SystemPrompt,
+    PlantillaAnalisis, PresentacionDiseno, Reporte, ResumenPresentacion, SystemPrompt,
+    resultado_v2_de,
 )
 from .prompt_comun import ENFOQUE_CHOICES, ENFOQUE_DEFAULT
 from .v2.contrato import VERSION
@@ -478,3 +479,80 @@ class SystemPromptListaSerializer(SystemPromptSerializer):
 
     def get_largo(self, prompt) -> int:
         return len(prompt.contenido)
+
+
+class ResumenPresentacionCrearSerializer(serializers.ModelSerializer):
+    """HU-99. El análisis de origen: exactamente uno de `reporte`, `analisis_momento`,
+    `analisis_jornada` o `analisis_v2`, y tiene que estar completo con salida v2. `instrucciones`,
+    `modelo`, `esfuerzo` y `flex` son opcionales (sin ellos, la configuración)."""
+    modelo = serializers.CharField(source='modelo_solicitado', required=False, allow_blank=True)
+    esfuerzo = serializers.CharField(source='esfuerzo_solicitado', required=False, allow_blank=True)
+    flex = serializers.BooleanField(required=False, default=False)
+
+    class Meta:
+        model = ResumenPresentacion
+        fields = [
+            'id', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones', 'modelo', 'esfuerzo', 'flex',
+            'estado', 'creado_en',
+        ]
+        read_only_fields = ['id', 'estado', 'creado_en']
+
+    validate_modelo = AnalisisJornadaIACrearSerializer.validate_modelo
+    validate_esfuerzo = AnalisisJornadaIACrearSerializer.validate_esfuerzo
+
+    def validate(self, attrs):
+        presentes = [c for c in ResumenPresentacion.CAMPOS_FUENTE if attrs.get(c) is not None]
+        if len(presentes) != 1:
+            raise serializers.ValidationError(
+                'Manda exactamente uno de "reporte", "analisis_momento", "analisis_jornada" o "analisis_v2".'
+            )
+        campo = presentes[0]
+        analisis = attrs[campo]
+        if analisis.estado != analisis.ESTADO_COMPLETO:
+            raise serializers.ValidationError({campo: 'El análisis todavía no está completo.'})
+        resultado = resultado_v2_de(analisis) or {}
+        if resultado.get('version') != 'kunsamu.analisis/v2' or not analisis.entrada:
+            raise serializers.ValidationError({campo: (
+                'Este análisis es anterior al contrato kunsamu.analisis/v2 (no tiene salida estructurada '
+                'ni entrada guardada): no se puede resumir. Genera un análisis nuevo.'
+            )})
+        attrs['jornada'] = analisis.momento.jornada if campo == 'analisis_momento' else analisis.jornada
+        return attrs
+
+
+class ResumenPresentacionSerializer(serializers.ModelSerializer):
+    """`resultado` es la salida `kunsamu.analisis/v2` del resumen — el mismo contrato que el
+    análisis completo. Sin `entrada`: es una copia del análisis de origen."""
+    fuente = serializers.SerializerMethodField()
+    modelo = serializers.SerializerMethodField()
+    esfuerzo = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResumenPresentacion
+        fields = [
+            'id', 'jornada', 'fuente', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones',
+            'modelo', 'esfuerzo', 'flex', 'estado', 'resultado', 'error_mensaje', 'modelo_usado',
+            'prompt_usado', 'version_prompt', 'version_esquema', 'diagnostico',
+            'respuesta_openai_id', 'fase_openai', 'consultado_en', 'solicitado_por',
+            'creado_en', 'actualizado_en', 'completado_en',
+        ]
+        read_only_fields = fields
+
+    def get_fuente(self, obj) -> dict:
+        return {'tipo': obj.campo_fuente, 'id': getattr(obj, f'{obj.campo_fuente}_id')}
+
+    def get_modelo(self, obj) -> str:
+        from .v2.llm import DEFAULT_MODEL
+        return obj.modelo_solicitado or DEFAULT_MODEL
+
+    def get_esfuerzo(self, obj) -> str:
+        from .v2.llm import REASONING_EFFORT
+        return obj.esfuerzo_solicitado or REASONING_EFFORT
+
+
+class ResumenPresentacionListaSerializer(ResumenPresentacionSerializer):
+    """El listado sin las piezas pesadas; el detalle trae `resultado` completo."""
+    class Meta(ResumenPresentacionSerializer.Meta):
+        fields = [c for c in ResumenPresentacionSerializer.Meta.fields
+                  if c not in ('resultado', 'prompt_usado', 'diagnostico')]
+        read_only_fields = fields

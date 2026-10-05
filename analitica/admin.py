@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 from django.shortcuts import redirect
 
-from .models import AnalisisV2, PlantillaAnalisis, PresentacionDiseno, Reporte, SystemPrompt
+from .models import AnalisisV2, PlantillaAnalisis, PresentacionDiseno, Reporte, ResumenPresentacion, SystemPrompt
 
 
 @admin.register(SystemPrompt)
@@ -101,3 +101,17 @@ class AnalisisV2Admin(admin.ModelAdmin):
 class PresentacionDisenoAdmin(admin.ModelAdmin):
     list_display = ['id', '__str__', 'modelo', 'creado', 'actualizado']
     readonly_fields = ['diseno', 'diapositivas', 'correcciones', 'assets', 'modelo']
+
+
+@admin.register(ResumenPresentacion)
+class ResumenPresentacionAdmin(admin.ModelAdmin):
+    """Solo lectura: se piden y se borran por la API (HU-99)."""
+    list_display = ['id', 'jornada', 'estado', 'fase_openai', 'version_prompt', 'flex', 'creado_en', 'completado_en']
+    list_filter = ['estado', 'jornada']
+
+    def get_readonly_fields(self, request, obj=None):
+        return [f.name for f in self.model._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+

@@ -108,6 +108,7 @@ class SystemPrompt(models.Model):
     TIPO_PRESENTACION = 'presentacion'
     TIPO_PRESENTACION_DISENO = 'presentacion_diseno'
     TIPO_SUGERENCIAS = 'sugerencias'
+    TIPO_RESUMEN_PRESENTACION = 'resumen_presentacion'
     TIPO_CHOICES = [
         (TIPO_ANALISIS_LLM, 'Análisis — pipeline LLM'),
         (TIPO_ANALISIS_BERTOPIC, 'Análisis — pipeline BERTopic + LLM'),
@@ -115,6 +116,7 @@ class SystemPrompt(models.Model):
         (TIPO_PRESENTACION, 'Presentación HTML de un reporte'),
         (TIPO_PRESENTACION_DISENO, 'Diseño de presentación (diagramación)'),
         (TIPO_SUGERENCIAS, 'Sugerencias para el análisis guiado'),
+        (TIPO_RESUMEN_PRESENTACION, 'Resumen de un análisis para presentar en diapositivas'),
     ]
 
     tipo = models.CharField(max_length=30, choices=TIPO_CHOICES)
@@ -714,3 +716,94 @@ class PresentacionDiseno(models.Model):
     def __str__(self):
         fuente = self.reporte or self.analisis_momento or self.analisis_jornada
         return f'Diseño de presentación {self.id} · {fuente}'
+
+
+class ResumenPresentacion(models.Model):
+    """Un análisis ya terminado, resumido para presentarlo en diapositivas (HU-99).
+
+    Parte de la salida estructurada de un análisis (`kunsamu.analisis/v2`) y produce OTRA salida
+    con el mismo contrato, más corta: pocos hallazgos por informe, cada uno pensado como una
+    diapositiva. El modelo solo escribe `informes`, `visualizaciones` y `limitaciones`; lo demás
+    (`version`, `pipeline`, `estado`, `alcance`, `fuentes`, `cobertura`) se copia del original, y
+    el resultado se valida con las mismas reglas que el análisis, contra su entrada original —
+    así cada cifra, cita y visualización sigue siendo rastreable a los datos.
+
+    Corre en el modo segundo plano de OpenAI (mismo motor que el análisis integral, HU-98) con el
+    `SystemPrompt` activo de tipo `resumen_presentacion`. Se puede pedir varias veces sobre el
+    mismo análisis (con distintas instrucciones); cada pedido es una fila."""
+    ESTADO_PENDIENTE = 'pendiente'
+    ESTADO_PROCESANDO = 'procesando'
+    ESTADO_COMPLETO = 'completo'
+    ESTADO_ERROR = 'error'
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, 'Pendiente'),
+        (ESTADO_PROCESANDO, 'Procesando'),
+        (ESTADO_COMPLETO, 'Completo'),
+        (ESTADO_ERROR, 'Error'),
+    ]
+    FASE_INTENTO = 'intento'
+    FASE_REPARACION = 'reparacion'
+
+    # El análisis de origen: exactamente uno de los cuatro.
+    reporte = models.ForeignKey('Reporte', null=True, blank=True, on_delete=models.CASCADE, related_name='resumenes_presentacion')
+    analisis_momento = models.ForeignKey('AnalisisMomentoIA', null=True, blank=True, on_delete=models.CASCADE, related_name='resumenes_presentacion')
+    analisis_jornada = models.ForeignKey('AnalisisJornadaIA', null=True, blank=True, on_delete=models.CASCADE, related_name='resumenes_presentacion')
+    analisis_v2 = models.ForeignKey('AnalisisV2', null=True, blank=True, on_delete=models.CASCADE, related_name='resumenes_presentacion')
+    jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='resumenes_presentacion')
+
+    instrucciones = models.TextField(
+        blank=True, help_text='Público, duración, cantidad de diapositivas, énfasis… Sin tope de largo.',
+    )
+    modelo_solicitado = models.CharField(max_length=80, blank=True)
+    esfuerzo_solicitado = models.CharField(max_length=10, blank=True)
+    flex = models.BooleanField(default=False)
+
+    estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+    resultado = models.JSONField(default=dict, blank=True, help_text='Salida `kunsamu.analisis/v2` validada.')
+    # Lo que se le mandó al modelo (el análisis original más jornada e instrucciones), guardado
+    # antes de llamar: el intento y la reparación se arman desde aquí con el mismo texto exacto.
+    entrada = models.JSONField(default=dict, blank=True)
+    diagnostico = models.JSONField(default=dict, blank=True)
+    prompt_usado = models.TextField(blank=True)
+    version_prompt = models.CharField(max_length=40, blank=True)
+    version_esquema = models.CharField(max_length=40, blank=True)
+    modelo_usado = models.CharField(max_length=60, blank=True)
+    error_mensaje = models.TextField(blank=True)
+
+    respuesta_openai_id = models.CharField(max_length=120, blank=True, db_index=True)
+    fase_openai = models.CharField(max_length=12, blank=True)
+    consultado_en = models.DateTimeField(null=True, blank=True)
+
+    solicitado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='resumenes_presentacion_solicitados',
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+    completado_en = models.DateTimeField(null=True, blank=True)
+
+    CAMPOS_FUENTE = ('reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2')
+
+    class Meta:
+        ordering = ['-creado_en']
+        verbose_name = 'Resumen para presentación'
+        verbose_name_plural = 'Resúmenes para presentación'
+
+    def __str__(self):
+        return f'Resumen para presentación {self.id} · {self.campo_fuente} · {self.estado}'
+
+    @property
+    def campo_fuente(self):
+        return next((c for c in self.CAMPOS_FUENTE if getattr(self, f'{c}_id')), None)
+
+    @property
+    def fuente(self):
+        campo = self.campo_fuente
+        return getattr(self, campo) if campo else None
+
+
+def resultado_v2_de(analisis):
+    """La salida `kunsamu.analisis/v2` de cualquiera de los cuatro análisis (el reporte la guarda en
+    `analisis`, los demás en `resultado`)."""
+    return analisis.analisis if isinstance(analisis, Reporte) else analisis.resultado
+

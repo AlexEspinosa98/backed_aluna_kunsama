@@ -21,7 +21,7 @@ from .analysis import _estadisticas_pregunta, procesar_reporte
 from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis,
-    PresentacionDiseno, Reporte, SystemPrompt, SystemPromptInmutable,
+    PresentacionDiseno, Reporte, ResumenPresentacion, SystemPrompt, SystemPromptInmutable,
 )
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
@@ -32,7 +32,9 @@ from .serializers import (
     AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
     AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
     InfografiaJornadaSerializer, PlantillaAnalisisSerializer, PresentacionDisenoSerializer,
-    ReporteCrearSerializer, ReporteSerializer, SystemPromptListaSerializer, SystemPromptSerializer,
+    ReporteCrearSerializer, ReporteSerializer, ResumenPresentacionCrearSerializer,
+    ResumenPresentacionListaSerializer, ResumenPresentacionSerializer, SystemPromptListaSerializer,
+    SystemPromptSerializer,
 )
 from .sugerencias_ia_openai import generar_sugerencias
 from .v2.contrato import VERSION as VERSION_V2
@@ -1439,3 +1441,64 @@ class SystemPromptViewSet(viewsets.ModelViewSet):
 class Conflicto(APIException):
     status_code = status.HTTP_409_CONFLICT
     default_code = 'conflicto'
+
+
+class ResumenPresentacionViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Resumen de un análisis terminado para presentarlo en diapositivas (HU-99).
+
+    `POST` lo pide y responde `201` con el registro en `pendiente`; corre en segundo plano y se
+    sigue por `GET {id}/` hasta `completo` (con `resultado`, la salida `kunsamu.analisis/v2` del
+    resumen) o `error`. `?jornada=`, `?analisis_jornada=`… filtran el listado. Borrar uno en curso
+    lo cancela también en OpenAI."""
+    permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        queryset = ResumenPresentacion.objects.select_related('jornada')
+        queryset = filtrar_por_propietario(queryset, self.request.user, 'jornada__propietarios')
+        for campo in ('jornada', *ResumenPresentacion.CAMPOS_FUENTE):
+            valor = self.request.query_params.get(campo)
+            if valor:
+                queryset = queryset.filter(**{f'{campo}_id': valor})
+        return queryset
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ResumenPresentacionCrearSerializer
+        if self.action == 'list':
+            return ResumenPresentacionListaSerializer
+        return ResumenPresentacionSerializer
+
+    @extend_schema(request=ResumenPresentacionCrearSerializer, responses={201: ResumenPresentacionSerializer})
+    def create(self, request, *args, **kwargs):
+        entrada = ResumenPresentacionCrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        datos = entrada.validated_data
+        verificar_acceso_jornada(request.user, datos['jornada'])
+
+        campo = next(c for c in ResumenPresentacion.CAMPOS_FUENTE if datos.get(c) is not None)
+        if ResumenPresentacion.objects.filter(
+            **{campo: datos[campo]},
+            estado__in=[ResumenPresentacion.ESTADO_PENDIENTE, ResumenPresentacion.ESTADO_PROCESANDO],
+        ).exists():
+            return Response(
+                {'detail': 'Ya hay un resumen en proceso para este análisis — espera a que termine.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        resumen = entrada.save(solicitado_por=request.user)
+        from .resumen_presentacion import generar_resumen_presentacion
+        threading.Thread(target=generar_resumen_presentacion, args=(resumen.id,), daemon=True).start()
+        return Response(ResumenPresentacionSerializer(resumen).data, status=status.HTTP_201_CREATED)
+
+    def perform_destroy(self, instance):
+        if instance.estado == ResumenPresentacion.ESTADO_PROCESANDO and instance.respuesta_openai_id:
+            from .v2.background import cancelar_respuesta
+            with contexto_llamada(origen=instance, usuario=self.request.user):
+                cancelar_respuesta(instance.respuesta_openai_id)
+        instance.delete()
