@@ -10,9 +10,10 @@ Se generó a partir de un Reporte ya `completo` (no de respuestas crudas), así 
 de scope nueva aquí.
 """
 import os
-import threading
 
 from django.utils import timezone
+
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 GENERATION_TIMEOUT_SECONDS = 240
@@ -35,8 +36,8 @@ def _llamar_openai(system, user, max_tokens=MAX_OUTPUT_TOKENS, model=None):
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('presentacion', api_key=api_key)
             respuesta = client.chat.completions.create(
                 model=model or DEFAULT_MODEL,
                 messages=[
@@ -54,7 +55,7 @@ def _llamar_openai(system, user, max_tokens=MAX_OUTPUT_TOKENS, model=None):
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -76,6 +77,7 @@ def _limpiar_html(texto):
     return texto.strip()
 
 
+@auditar_llamadas('analitica.Reporte')
 def generar_presentacion_html(reporte_id):
     """Genera la presentación HTML de un Reporte ya `completo` y la guarda en
     `presentacion_html`. Corre en un hilo de background, igual que `procesar_reporte` en

@@ -10,9 +10,10 @@ del comportamiento anterior (y porque los registros históricos se generaron con
 ningún análisis nuevo pasa por ahí."""
 import json
 import os
-import threading
 
 from django.utils import timezone
+
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
 
 from .prompt_comun import REGLA_DATOS_ANALISIS, ensamblar_system  # noqa: F401 — usados por el flujo legacy conservado abajo
 from .v2.contrato import MODO_INTEGRAL, MODO_POR_MOMENTO, PIPELINE_LLM
@@ -383,8 +384,8 @@ def _llamar_openai_json(system, user, model=None, max_output_tokens=None, timeou
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('analisis_legacy', api_key=api_key)
             kwargs = dict(
                 model=model or DEFAULT_MODEL,
                 messages=[
@@ -405,7 +406,7 @@ def _llamar_openai_json(system, user, model=None, max_output_tokens=None, timeou
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=timeout_seconds)
 
@@ -449,6 +450,7 @@ def _validar_y_limpiar(resultado, momento, enfoque=None):
     return resultado
 
 
+@auditar_llamadas('analitica.AnalisisMomentoIA')
 def analizar_momento_ia(analisis_id):
     """Genera el análisis de un `AnalisisMomentoIA` ya creado (estado `pendiente`). Corre en un
     hilo de background — mismo patrón que `procesar_reporte`/`generar_presentacion_html` — y no
@@ -512,6 +514,7 @@ def _validar_y_limpiar_jornada(resultado, jornada, enfoque=None):
     return resultado
 
 
+@auditar_llamadas('analitica.AnalisisJornadaIA')
 def analizar_jornada_ia(analisis_id):
     """Genera el análisis de un `AnalisisJornadaIA` ya creado (estado `pendiente`) — mismo patrón
     que `analizar_momento_ia`, pero leyendo TODOS los momentos activos de la jornada en una sola

@@ -3,9 +3,10 @@ aparte del análisis que analitica/presentacion.py: nunca recalcula nada, solo r
 partir de `informe.resultado` ya cerrado."""
 import json
 import os
-import threading
 
 from django.utils import timezone
+
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 GENERATION_TIMEOUT_SECONDS = 240
@@ -58,8 +59,8 @@ def _llamar_openai(system, user, max_tokens=MAX_OUTPUT_TOKENS, model=None):
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('presentacion_transcripcion', api_key=api_key)
             respuesta = client.chat.completions.create(
                 model=model or DEFAULT_MODEL,
                 messages=[
@@ -77,7 +78,7 @@ def _llamar_openai(system, user, max_tokens=MAX_OUTPUT_TOKENS, model=None):
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -97,6 +98,7 @@ def _limpiar_html(texto):
     return texto.strip()
 
 
+@auditar_llamadas('transcripciones.InformeTranscripcion', jornada='sesion__jornada_id')
 def generar_presentacion_html(informe_id):
     """Genera la presentación HTML de un InformeTranscripcion ya `completo` y la guarda en
     `presentacion_html`. Corre en un hilo de background — no comparte ningún recurso con

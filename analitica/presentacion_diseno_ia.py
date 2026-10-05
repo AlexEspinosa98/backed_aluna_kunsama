@@ -276,9 +276,9 @@ def llamar_openai_presentacion(mensajes):
     if not api_key:
         raise ErrorGeneracionDiseno(503, 'Falta OPENAI_API_KEY')
 
-    from openai import OpenAI
+    from auditoria.openai_cliente import cliente_openai
 
-    cliente = OpenAI(api_key=api_key, timeout=TIMEOUT_SEGUNDOS)
+    cliente = cliente_openai('presentacion_diseno', api_key=api_key, timeout=TIMEOUT_SEGUNDOS)
     formato = {
         'type': 'json_schema',
         'json_schema': {'name': NOMBRE_ESQUEMA, 'strict': True, 'schema': JSON_SCHEMA},

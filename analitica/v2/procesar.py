@@ -17,6 +17,8 @@ import os
 from django.db import close_old_connections
 from django.utils import timezone
 
+from auditoria.openai_cliente import auditar_llamadas
+
 from .contrato import PIPELINE_BERTOPIC_LLM, TIPO_PROMPT_POR_PIPELINE, VERSION_ESQUEMA
 from .entrada import construir_entrada, hay_respuestas
 from .llm import MODELO_USADO_LABEL, llamar_openai_estructurado
@@ -172,6 +174,7 @@ def _completar(analisis, salida, modelo_usado, prompt_usado, diagnostico):
     ])
 
 
+@auditar_llamadas('analitica.AnalisisV2')
 def procesar_analisis_v2(analisis_id):
     close_old_connections()
     from analitica.models import AnalisisV2

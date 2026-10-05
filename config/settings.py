@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     'analitica',
     'instrumentos',
     'transcripciones',
+    'auditoria',
 ]
 
 MIDDLEWARE = [

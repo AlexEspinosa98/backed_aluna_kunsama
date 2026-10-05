@@ -16,10 +16,11 @@ fallando, se sintetiza con los tramos que sí funcionaron y se deja constancia e
 import json
 import os
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.utils import timezone
+
+from auditoria.openai_cliente import auditar_llamadas, con_contexto, hilo_con_contexto
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o')
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
@@ -116,8 +117,8 @@ def _llamar_openai_json(system, user, max_output_tokens, timeout_seconds, model=
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('informe_transcripcion', api_key=api_key)
             kwargs = dict(
                 model=model or DEFAULT_MODEL,
                 messages=[
@@ -136,7 +137,7 @@ def _llamar_openai_json(system, user, max_output_tokens, timeout_seconds, model=
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=timeout_seconds)
 
@@ -201,6 +202,7 @@ def _validar_y_limpiar(resultado, sesion):
     return resultado
 
 
+@auditar_llamadas('transcripciones.InformeTranscripcion', jornada='sesion__jornada_id')
 def generar_informe_transcripcion(informe_id):
     """Genera el informe de un InformeTranscripcion ya creado (estado `pendiente`). Corre en un
     hilo de background — mismo patrón que procesar_reporte/analizar_jornada_ia."""
@@ -229,7 +231,7 @@ def generar_informe_transcripcion(informe_id):
         resumenes_parciales = [None] * len(tramos)
         with ThreadPoolExecutor(max_workers=min(len(tramos), MAX_TRAMOS_EN_PARALELO)) as pool:
             futuros = {
-                pool.submit(_resumir_tramo, i, len(tramos), _texto_tramo(tramo)): i
+                pool.submit(con_contexto(_resumir_tramo), i, len(tramos), _texto_tramo(tramo)): i
                 for i, tramo in enumerate(tramos)
             }
             for futuro in as_completed(futuros):
