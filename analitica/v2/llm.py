@@ -47,13 +47,28 @@ def cargar_json_estricto(texto):
     return json.loads(texto, parse_constant=_rechazar_constante)
 
 
+def _sin_hermanos_de_ref(nodo):
+    """El modo estricto de OpenAI rechaza un `$ref` acompañado de otras claves
+    ("$ref cannot have keywords {'description'}"). El contrato v2.1 las trae (las `description`
+    de los campos `color`, válidas en JSON Schema) y no se toca: se quitan solo en la copia que
+    viaja a OpenAI. Son descripciones, no restricciones — la definición referenciada ya trae las
+    suyas — así que el esquema exigido es el mismo."""
+    if isinstance(nodo, dict):
+        if '$ref' in nodo:
+            return {'$ref': nodo['$ref']}
+        return {clave: _sin_hermanos_de_ref(valor) for clave, valor in nodo.items()}
+    if isinstance(nodo, list):
+        return [_sin_hermanos_de_ref(valor) for valor in nodo]
+    return nodo
+
+
 def esquema_para_openai(esquema):
-    """Copia del esquema sin las claves informativas de la raíz (`$schema`, `title`,
-    `description`), que el modo estricto de OpenAI no necesita y algunos modelos rechazan."""
+    """Copia del esquema lista para el modo estricto de OpenAI: sin las claves informativas de la
+    raíz (`$schema`, `title`, `description`) y sin claves junto a un `$ref` (HU-100)."""
     copia = copy.deepcopy(esquema)
     for clave in ('$schema', 'title', 'description'):
         copia.pop(clave, None)
-    return copia
+    return _sin_hermanos_de_ref(copia)
 
 
 def _mensaje_reparacion(errores):

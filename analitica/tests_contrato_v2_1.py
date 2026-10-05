@@ -182,3 +182,26 @@ class ActualizarPromptsTests(TestCase):
         self.assertIn('sankey', llm)
         call_command('actualizar_prompts_v2_1', '--activar', stdout=StringIO())
         self.assertEqual(SystemPrompt.activo_de('analisis_llm').version, antes['analisis_llm'] + 1)
+
+
+class EsquemaParaOpenAITests(SimpleTestCase):
+    """El modo estricto de OpenAI rechaza un `$ref` con otras claves al lado (pasó en producción con
+    las `description` de los campos `color` de v2.1). Verificado contra la API real."""
+
+    def test_ningun_ref_lleva_claves_al_lado(self):
+        from .v2.background import esquema_del_resumen
+        from .v2.contrato import cargar_esquema
+        from .v2.llm import esquema_para_openai
+
+        def con_hermanos(nodo):
+            if isinstance(nodo, dict):
+                propio = ['$ref'] if '$ref' in nodo and len(nodo) > 1 else []
+                return propio + [x for v in nodo.values() for x in con_hermanos(v)]
+            if isinstance(nodo, list):
+                return [x for v in nodo for x in con_hermanos(v)]
+            return []
+
+        self.assertEqual(con_hermanos(esquema_para_openai(cargar_esquema())), [])
+        self.assertEqual(con_hermanos(esquema_del_resumen()), [])
+        # El contrato del frontend no se toca.
+        self.assertIn('description', cargar_esquema()['$defs']['nodo']['properties']['color'])
