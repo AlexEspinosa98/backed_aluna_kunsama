@@ -47,10 +47,10 @@ detalle) de los tres modelos.
 | Campo | Tipo | Default | Notas |
 |---|---|---|---|
 | `enfoque` | `"cualitativo" \| "cuantitativo" \| "mixto"` | `"mixto"` | Otro valor → `400` con la clave `enfoque`. |
-| `contexto` | texto, hasta 4000 caracteres | `""` | Contexto general que escribió el usuario. Puede coincidir con `Jornada.descripcion` o no. |
-| `instrucciones` | texto, hasta 4000 caracteres | `""` | Instrucciones adicionales del usuario. |
-| `contexto_momento` | texto, hasta 4000 caracteres | `""` | Sólo en alcance por momento (`analisis-momento-ia` y `reportes` con un momento). |
-| `instrucciones_momento` | texto, hasta 4000 caracteres | `""` | Ídem. |
+| `contexto` | texto, sin límite de largo (HU-93) | `""` | Contexto general que escribió el usuario. Puede coincidir con `Jornada.descripcion` o no. |
+| `instrucciones` | texto, sin límite de largo (HU-93) | `""` | Instrucciones adicionales del usuario. |
+| `contexto_momento` | texto, sin límite de largo (HU-93) | `""` | Sólo en alcance por momento (`analisis-momento-ia` y `reportes` con un momento). |
+| `instrucciones_momento` | texto, sin límite de largo (HU-93) | `""` | Ídem. |
 
 Ejemplo de lo que manda hoy el frontend para un momento con IA:
 

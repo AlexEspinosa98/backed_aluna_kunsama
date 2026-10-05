@@ -554,6 +554,20 @@ class AnalisisGuiadoCamposTests(APITestCase):
         self.assertEqual(resp.data['momento_orden'], self.momento.orden)
         self.assertEqual(resp.data['contexto_momento'], 'CtxM')
 
+    def test_campos_guiados_sin_tope_de_largo(self):
+        """HU-93: antes se cortaban en 4000 caracteres; ahora no hay tope, ni en reportes ni en
+        los análisis de momento."""
+        largo = 'x' * 20000
+        campos = {'contexto': largo, 'instrucciones': largo,
+                  'contexto_momento': largo, 'instrucciones_momento': largo}
+        resp = self.client.post('/api/admin/analisis-momento-ia/', {'momento': self.momento.id, **campos}, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(len(resp.data['instrucciones_momento']), 20000)
+        resp = self.client.post(
+            '/api/admin/reportes/', {'jornada': self.jornada.id, 'momentos': [self.momento.id], **campos}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.data)
+
     def test_analisis_momento_sin_respuestas_da_400(self):
         momento_vacio = Momento.objects.create(jornada=self.jornada, orden=99, titulo='Vacío')
         resp = self.client.post('/api/admin/analisis-momento-ia/', {'momento': momento_vacio.id}, format='json')

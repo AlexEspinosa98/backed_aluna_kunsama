@@ -22,11 +22,10 @@ ENFOQUE_CHOICES = [
 ]
 ENFOQUE_DEFAULT = ENFOQUE_MIXTO
 
-# Tope compartido por los cuatro campos de texto libre del asistente (contexto, instrucciones y
-# sus variantes _momento) — un mismo límite para los cuatro porque los cuatro son la misma clase
-# de dato (texto que escribió una persona para orientar el análisis), no hay razón para que uno
-# admita más que otro.
-MAX_LARGO_TEXTO_LIBRE = 4000
+# Los cuatro campos de texto libre del asistente (contexto, instrucciones y sus variantes
+# _momento) no tienen tope de largo: lo decidió el dueño del producto (HU-93). Lo que acota el
+# tamaño real es el límite de la entrada completa del análisis v2
+# (`v2.procesar.MAX_CARACTERES_ENTRADA`), que ya falla con un mensaje claro.
 
 # Va SIEMPRE al final del prompt compuesto, después del contexto y las instrucciones — es la
 # única línea que ninguna instrucción de usuario puede sobreescribir. En analisis_ia_openai.py

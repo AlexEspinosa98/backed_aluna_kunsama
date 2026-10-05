@@ -295,6 +295,20 @@ class AnalisisV2ApiTests(APITestCase):
         hilo.return_value.start.assert_called_once()
         self.assertEqual(AnalisisV2.objects.get(pk=resp.data['id']).solicitado_por, self.admin)
 
+    def test_contexto_e_instrucciones_sin_tope_de_largo(self):
+        """HU-93: antes se cortaba en 4000 caracteres; ahora no hay tope."""
+        largo = 'x' * 20000
+        resp, _ = self._post({
+            'jornada': self.jornada.id, 'modo': 'por_momento', 'pipeline': 'llm',
+            'momentos': [self.d['m1'].id], 'contexto': largo, 'instrucciones': largo,
+            'personalizacion_momentos': [
+                {'momento': self.d['m1'].id, 'contexto': largo, 'instrucciones': largo},
+            ],
+        })
+        self.assertEqual(resp.status_code, 201, resp.data)
+        analisis = AnalisisV2.objects.get(pk=resp.data['id'])
+        self.assertEqual(len(analisis.instrucciones), 20000)
+
     def test_por_momento_con_personalizacion(self):
         m1 = self.d['m1']
         resp, _ = self._post({

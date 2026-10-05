@@ -148,8 +148,8 @@ Cuerpo (`AnalisisV2CrearSerializer`, ver `analitica/serializers.py`):
 | `modo` | `"integral"` \| `"por_momento"` | — obligatorio | `integral` = TODOS los momentos de la jornada, activos o no, un solo informe. `por_momento` = solo los `momentos` indicados, un informe por cada uno, en el orden de `Momento.orden` (no en el orden en que se mandaron los ids). |
 | `momentos` | array de int (pks) | `[]` | **Obligatorio y no vacío** en `por_momento`; **no se acepta** (debe ir vacío o ausente) en `integral`. Cada id debe pertenecer a `jornada`. |
 | `pipeline` | `"llm"` \| `"bertopic_llm"` | `"llm"` | `bertopic_llm` agrega, antes de llamar a la IA, una ejecución de BERTopic por cada pregunta de texto (`abierta`/`audio`) con 8 o más respuestas no vacías (ver §5). |
-| `contexto` | string, ≤4000 caracteres | `""` | Contexto general de quien pide el análisis. Viaja como dato en `entrada.personalizacion.contexto_usuario` — nunca se anexa al system prompt. |
-| `instrucciones` | string, ≤4000 caracteres | `""` | Ídem, en `entrada.personalizacion.instrucciones_usuario`. Ajusta énfasis y tono; el formato del informe (el esquema) es fijo por contrato, no lo cambian las instrucciones. |
+| `contexto` | string, sin límite de largo (HU-93) | `""` | Contexto general de quien pide el análisis. Viaja como dato en `entrada.personalizacion.contexto_usuario` — nunca se anexa al system prompt. |
+| `instrucciones` | string, sin límite de largo (HU-93) | `""` | Ídem, en `entrada.personalizacion.instrucciones_usuario`. Ajusta énfasis y tono; el formato del informe (el esquema) es fijo por contrato, no lo cambian las instrucciones. |
 | `personalizacion_momentos` | array de `{"momento": <id>, "contexto": "", "instrucciones": ""}` | `[]` | Opcional. Cada `momento` debe estar en el alcance de este análisis (todos los de la jornada en `integral`, los indicados en `por_momento`) y aparecer como máximo una vez. |
 
 Respuesta `201` con el análisis recién creado en `estado: "pendiente"` (serializer de detalle,

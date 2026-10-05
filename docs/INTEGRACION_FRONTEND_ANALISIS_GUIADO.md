@@ -78,10 +78,10 @@ como punto de partida si se vuelve a lanzar.
 | Campo | Tipo | Default | En cuáles | Notas |
 |---|---|---|---|---|
 | `enfoque` | `"cualitativo"` \| `"cuantitativo"` \| `"mixto"` | `"mixto"` | los 3 | Valor inválido → `400` con la clave `enfoque`. |
-| `contexto` | string, ≤4000 caracteres | `""` | los 3 | Contexto general (puede precargarse con `Jornada.descripcion`). |
-| `instrucciones` | string, ≤4000 caracteres | `""` | los 3 | Tono, público, cantidad de gráficos, idioma… manda sobre el estilo por defecto. |
-| `contexto_momento` | string, ≤4000 caracteres | `""` | `reportes` y `analisis-momento-ia` | Solo aplica con alcance de un único momento. |
-| `instrucciones_momento` | string, ≤4000 caracteres | `""` | `reportes` y `analisis-momento-ia` | Ídem. |
+| `contexto` | string, sin límite de largo (HU-93) | `""` | los 3 | Contexto general (puede precargarse con `Jornada.descripcion`). |
+| `instrucciones` | string, sin límite de largo (HU-93) | `""` | los 3 | Tono, público, cantidad de gráficos, idioma… manda sobre el estilo por defecto. |
+| `contexto_momento` | string, sin límite de largo (HU-93) | `""` | `reportes` y `analisis-momento-ia` | Solo aplica con alcance de un único momento. |
+| `instrucciones_momento` | string, sin límite de largo (HU-93) | `""` | `reportes` y `analisis-momento-ia` | Ídem. |
 
 `AnalisisJornadaIA` **no** tiene los dos `_momento` — su alcance es siempre la jornada entera.
 
