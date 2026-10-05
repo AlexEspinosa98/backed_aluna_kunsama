@@ -2418,3 +2418,8 @@ Como administrador quiero que cada llamada a OpenAI quede guardada con la petici
 - **Admin**: Auditoría → Llamadas a OpenAI, de solo lectura, con filtros por flujo, estado, modelo, endpoint y jornada, y la petición y la respuesta formateadas.
 - **Tamaño**: la tabla crece rápido — cada análisis integral guarda ~1 MB de entrada por intento, y cada infografía las imágenes en base64. Entra en el respaldo diario.
 - 15 tests: petición y respuesta completas, sin API key, errores HTTP y de red, una fila por reintento, el registro que falla no rompe la llamada, multipart de imágenes, relaciones por contexto y por decorador, propagación a hilos, carácter nulo, y un flujo real de `procesar_analisis_v2` de punta a punta.
+
+### HU-96 — El análisis usa gpt-6.1-sol con esfuerzo de razonamiento alto
+Como dueño del producto quiero que el análisis corra con `gpt-6.1-sol` y esfuerzo `high`, sin cambiar el modelo ni el esfuerzo del resto de los flujos.
+- `analitica/v2/llm.py` lee `OPENAI_REASONING_EFFORT_V2` antes que `OPENAI_REASONING_EFFORT`, igual que ya hacía con `OPENAI_MODEL_V2` antes que `OPENAI_MODEL`. Así el análisis v2 (momento, jornada, reportes, `analisis-v2`) se configura aparte: la extracción de documentos y los informes de transcripción, que leen la variable general, no cambian.
+- En producción: `OPENAI_MODEL_V2=gpt-6.1-sol` y `OPENAI_REASONING_EFFORT_V2=high`. Verificado contra la API que el modelo existe para la cuenta, y en la documentación de OpenAI: 922 mil tokens de entrada, 128 mil de salida, `reasoning_effort` (`low`…`max`) y salida estructurada — los topes de HU-94 (2 M caracteres, 72 mil tokens de salida) siguen dentro.
