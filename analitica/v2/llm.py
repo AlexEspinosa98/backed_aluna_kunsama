@@ -26,6 +26,12 @@ DEFAULT_MODEL = os.environ.get('OPENAI_MODEL_V2') or os.environ.get('OPENAI_MODE
 REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT_V2') or os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 # La salida v2 es grande (informes + cobertura + visualizaciones tipadas): mucho más margen que
 # los 6000/8000 tokens de las vías legacy.
+# Lo que se puede pedir al lanzar un análisis (HU-98). El modelo por defecto siempre está permitido.
+MODELOS_PERMITIDOS = sorted({
+    m.strip() for m in os.environ.get('KUNSAMU_V2_MODELOS_PERMITIDOS', 'gpt-6.1-sol,gpt-5.6-terra').split(',')
+    if m.strip()
+} | {DEFAULT_MODEL})
+ESFUERZOS_PERMITIDOS = ['low', 'medium', 'high', 'xhigh', 'max']
 MAX_OUTPUT_TOKENS = int(os.environ.get('KUNSAMU_V2_MAX_OUTPUT_TOKENS', '24000'))
 TIMEOUT_SECONDS = int(os.environ.get('KUNSAMU_V2_TIMEOUT_SECONDS', '540'))
 NOMBRE_ESQUEMA = 'kunsamu_analisis_v2'
@@ -65,20 +71,31 @@ def _mensaje_reparacion(errores):
     )
 
 
-def llamar_openai_estructurado(system, user, modelo=None, reparacion=None):
+def turnos_de_reparacion(reparacion):
+    """Los dos turnos que se agregan a la conversación para el reintento de reparación: la
+    respuesta anterior del modelo y la lista de errores. Los usan los dos modos (este y el de
+    segundo plano, `v2.background`) para que la reparación sea idéntica."""
+    return [
+        {'role': 'assistant', 'content': json.dumps(reparacion['salida_previa'], ensure_ascii=False)},
+        {'role': 'user', 'content': _mensaje_reparacion(reparacion['errores'])},
+    ]
+
+
+def llamar_openai_estructurado(system, user, modelo=None, reparacion=None, esfuerzo=None, flex=False):
     """`reparacion`: `{'salida_previa': dict, 'errores': [str]}` para el único reintento que hace
     procesar.py — se manda la conversación completa (system, user, assistant=JSON previo,
-    user=errores) para que el modelo corrija sobre lo que ya produjo."""
+    user=errores) para que el modelo corrija sobre lo que ya produjo. `modelo`/`esfuerzo`/`flex`:
+    los que pidió quien lanzó el análisis (HU-98); sin ellos, los de la configuración."""
     api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
         return None, 'OPENAI_API_KEY no está configurada en el entorno del servidor (.env).', {}
 
     esquema = esquema_para_openai(cargar_esquema())
     modelo = modelo or DEFAULT_MODEL
+    esfuerzo = esfuerzo or REASONING_EFFORT
     mensajes = [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]
     if reparacion:
-        mensajes.append({'role': 'assistant', 'content': json.dumps(reparacion['salida_previa'], ensure_ascii=False)})
-        mensajes.append({'role': 'user', 'content': _mensaje_reparacion(reparacion['errores'])})
+        mensajes.extend(turnos_de_reparacion(reparacion))
     resultado = {}
 
     def _crear(client, response_format, system_extra=''):
@@ -89,11 +106,13 @@ def llamar_openai_estructurado(system, user, modelo=None, reparacion=None):
             model=modelo, messages=msgs, max_completion_tokens=MAX_OUTPUT_TOKENS,
             response_format=response_format,
         )
-        if REASONING_EFFORT:
+        if esfuerzo:
             # Los modelos de razonamiento no aceptan `temperature` — nunca ambos a la vez.
-            kwargs['reasoning_effort'] = REASONING_EFFORT
+            kwargs['reasoning_effort'] = esfuerzo
         else:
             kwargs['temperature'] = 0.2
+        if flex:
+            kwargs['service_tier'] = 'flex'
         return client.chat.completions.create(**kwargs)
 
     def _run():

@@ -534,12 +534,23 @@ def analizar_jornada_ia(analisis_id):
         # momentos de la jornada, un solo informe. Ver el comentario en analizar_momento_ia. Las
         # transcripciones vinculadas (`_transcripciones_payload`) todavía no entran como fuente
         # del contrato v2 (HU aparte).
+        # HU-98: por defecto en el modo segundo plano de OpenAI — sin conexión abierta ni corte por
+        # tiempo; este hilo solo lanza y consulta (y si muere, el cron sigue). Con
+        # KUNSAMU_V2_BACKGROUND_JORNADA=0 vuelve al modo de siempre.
+        from .v2 import background
+        if background.ACTIVO:
+            background.iniciar_analisis_background(analisis)
+            background.seguir_hasta_terminar(analisis.id)
+            return
+
         from .v2.procesar import aplicar_resultado, ejecutar_analisis_v2, guardador_de_entrada
 
         r = ejecutar_analisis_v2(
             analisis.jornada, MODO_INTEGRAL, [], PIPELINE_LLM,
             contexto=analisis.contexto, instrucciones=analisis.instrucciones,
             referencia=f'analisis-jornada-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+            modelo=analisis.modelo_solicitado or None, esfuerzo=analisis.esfuerzo_solicitado or None,
+            flex=analisis.flex,
         )
         aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio

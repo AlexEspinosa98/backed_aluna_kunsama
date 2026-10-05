@@ -439,6 +439,20 @@ class AnalisisJornadaIA(AnalisisGuiadoMixin, ResultadoV2Mixin, models.Model):
 
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='analisis_ia')
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
+
+    # Lo que pidió quien lanzó el análisis (HU-98). Vacío = lo de la configuración
+    # (OPENAI_MODEL_V2 / OPENAI_REASONING_EFFORT_V2); `flex` = tier Flex de OpenAI, mitad de precio
+    # a cambio de más demora, que en segundo plano no importa.
+    modelo_solicitado = models.CharField(max_length=80, blank=True)
+    esfuerzo_solicitado = models.CharField(max_length=10, blank=True)
+    flex = models.BooleanField(default=False)
+    # Modo segundo plano de OpenAI (HU-98): la respuesta en curso y en qué fase va. Mientras
+    # `respuesta_openai_id` tenga valor, el análisis está esperando a OpenAI, no a un hilo nuestro.
+    FASE_INTENTO = 'intento'
+    FASE_REPARACION = 'reparacion'
+    respuesta_openai_id = models.CharField(max_length=120, blank=True, db_index=True)
+    fase_openai = models.CharField(max_length=12, blank=True)
+    consultado_en = models.DateTimeField(null=True, blank=True)
     resultado = models.JSONField(
         default=dict, blank=True,
         help_text='jornada_id, resumen_ejecutivo, hallazgos[] (cada uno con titulo, descripcion, '

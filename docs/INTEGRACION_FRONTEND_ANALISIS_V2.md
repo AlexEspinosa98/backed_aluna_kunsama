@@ -458,3 +458,51 @@ silencio (§1).
       concreto, no en el listado.
 - [ ] Al pedir la infografía de un `AnalisisV2` concreto, mandar `analisis_v2: <id>` — no confiar
       en "la jornada"/"el momento" solos.
+
+---
+
+## Análisis integral de la jornada: modelo, esfuerzo, Flex y modo segundo plano (HU-98)
+
+Aplica **solo** a `POST /api/admin/analisis-jornada-ia/` (el análisis integral). Los demás análisis
+no cambian.
+
+### Opciones al lanzarlo (todas opcionales)
+
+```json
+POST /api/admin/analisis-jornada-ia/
+{ "jornada": 9,
+  "contexto": "…", "instrucciones": "…",
+  "modelo": "gpt-6.1-sol",      // opcional — sin él, el de la configuración
+  "esfuerzo": "high",           // opcional — low | medium | high | xhigh | max
+  "flex": true }                // opcional — false por defecto
+```
+
+- Un `modelo` o `esfuerzo` fuera de la lista permitida es `400`.
+- **`flex: true`** usa el tier Flex de OpenAI: **mitad de precio**, a cambio de que tarde más.
+  Si OpenAI no tiene capacidad Flex en ese momento, el análisis corre igual en el tier normal (y
+  queda anotado en `diagnostico.intentos[].flex_no_disponible`).
+- Qué ofrecer en pantalla, y qué se usa si no se elige nada:
+
+```
+GET /api/admin/analisis-jornada-ia/opciones/
+{ "modelos": ["gpt-5.6-terra", "gpt-6.1-sol"], "modelo_por_defecto": "gpt-6.1-sol",
+  "esfuerzos": ["low", "medium", "high", "xhigh", "max"], "esfuerzo_por_defecto": "high",
+  "flex_por_defecto": false, "segundo_plano": true }
+```
+
+El detalle del análisis trae `modelo`, `esfuerzo` y `flex` **efectivos** (lo pedido, o la
+configuración).
+
+### Qué cambia en el seguimiento
+
+Nada en los estados: sigue `pendiente` → `procesando` → `completo` | `error`, por el mismo polling.
+Lo que cambia es que **ya no hay corte a los 9 minutos**: OpenAI procesa el análisis por su cuenta y
+el backend recoge la respuesta. Un análisis grande con esfuerzo alto o con Flex puede tardar
+bastante más que antes — el tope de seguridad es de 2 horas, después se cancela y termina en error.
+
+Campos nuevos, informativos: `respuesta_openai_id`, `fase_openai` (`intento` | `reparacion`) y
+`consultado_en` (última vez que el backend preguntó por el estado). Con `fase_openai: "reparacion"`
+el modelo está corrigiendo una primera respuesta que no pasó la validación — vale mostrar
+"revisando" en vez de un spinner genérico.
+
+**Borrar** un análisis `procesando` lo cancela también en OpenAI (no se paga lo que ya nadie va a ver).
