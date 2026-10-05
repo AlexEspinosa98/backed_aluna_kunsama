@@ -21,7 +21,9 @@ from auditoria.openai_cliente import hilo_con_contexto
 from .contrato import cargar_esquema
 
 DEFAULT_MODEL = os.environ.get('OPENAI_MODEL_V2') or os.environ.get('OPENAI_MODEL', 'gpt-4o')
-REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
+# Propio del análisis (como OPENAI_MODEL_V2), para poder subirlo sin arrastrar a la extracción de
+# documentos ni a los informes de transcripción, que leen OPENAI_REASONING_EFFORT.
+REASONING_EFFORT = os.environ.get('OPENAI_REASONING_EFFORT_V2') or os.environ.get('OPENAI_REASONING_EFFORT', 'medium')
 # La salida v2 es grande (informes + cobertura + visualizaciones tipadas): mucho más margen que
 # los 6000/8000 tokens de las vías legacy.
 MAX_OUTPUT_TOKENS = int(os.environ.get('KUNSAMU_V2_MAX_OUTPUT_TOKENS', '24000'))
