@@ -15,7 +15,8 @@ se guarda en `AnalisisV2.diagnostico`, que la API expone, y el módulo nunca rev
 import copy
 import json
 import os
-import threading
+
+from auditoria.openai_cliente import hilo_con_contexto
 
 from .contrato import cargar_esquema
 
@@ -95,8 +96,8 @@ def llamar_openai_estructurado(system, user, modelo=None, reparacion=None):
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('analisis_v2', api_key=api_key)
             formato_estricto = {
                 'type': 'json_schema',
                 'json_schema': {'name': NOMBRE_ESQUEMA, 'strict': True, 'schema': esquema},
@@ -127,7 +128,7 @@ def llamar_openai_estructurado(system, user, modelo=None, reparacion=None):
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=TIMEOUT_SECONDS)
 

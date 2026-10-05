@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 
+from auditoria.openai_cliente import contexto_llamada
 from jornadas.permissions import EsAdminCompleto
 from jornadas.scoping import es_dependencia, filtrar_por_propietario, verificar_acceso_jornada
 
@@ -564,12 +565,13 @@ class AnalisisSugerenciasView(APIView):
         datos = entrada.validated_data
         verificar_acceso_jornada(request.user, datos['jornada'])
 
-        sugerencias = generar_sugerencias(
-            jornada=datos['jornada'],
-            momento_ids=[momento.id for momento in datos['momentos']],
-            metodo=datos['metodo'], enfoque=datos['enfoque'],
-            contexto=datos['contexto'], instrucciones=datos['instrucciones'],
-        )
+        with contexto_llamada(jornada=datos['jornada'], usuario=request.user):
+            sugerencias = generar_sugerencias(
+                jornada=datos['jornada'],
+                momento_ids=[momento.id for momento in datos['momentos']],
+                metodo=datos['metodo'], enfoque=datos['enfoque'],
+                contexto=datos['contexto'], instrucciones=datos['instrucciones'],
+            )
         return Response({'sugerencias': sugerencias})
 
 
@@ -1320,9 +1322,10 @@ class PresentacionDisenoViewSet(
         }
 
         try:
-            diseno, correcciones, modelo_usado, assets_enviados, version_prompt = generar_diseno(
-                jornada, contexto_analisis, diapositivas,
-            )
+            with contexto_llamada(origen=analisis, jornada=jornada, usuario=request.user):
+                diseno, correcciones, modelo_usado, assets_enviados, version_prompt = generar_diseno(
+                    jornada, contexto_analisis, diapositivas,
+                )
         except ErrorGeneracionDiseno as exc:
             return Response({'detail': exc.detail}, status=exc.status_code)
 

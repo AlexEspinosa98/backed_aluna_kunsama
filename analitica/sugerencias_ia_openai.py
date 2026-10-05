@@ -10,7 +10,8 @@ un reporte que se espera. Un modelo chico y rápido (no el de razonamiento que u
 analisis_ia_openai.py/analysis.py — acá sobra profundidad y sobra tiempo)."""
 import json
 import os
-import threading
+
+from auditoria.openai_cliente import hilo_con_contexto
 
 SUGERENCIAS_MODEL = os.environ.get('OPENAI_SUGERENCIAS_MODEL', 'gpt-4o-mini')
 # HU-57 exige "menos de 10 segundos"; 8s deja margen para el round-trip HTTP y el parseo antes de
@@ -84,8 +85,8 @@ def generar_sugerencias(jornada, momento_ids, metodo, enfoque, contexto, instruc
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('sugerencias', api_key=api_key)
             respuesta = client.chat.completions.create(
                 model=SUGERENCIAS_MODEL,
                 messages=[
@@ -100,7 +101,7 @@ def generar_sugerencias(jornada, momento_ids, metodo, enfoque, contexto, instruc
         except Exception as exc:  # noqa: BLE001 — cualquier falla cae a lista vacía, nunca a error
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=SUGERENCIAS_TIMEOUT_SECONDS)
     if hilo.is_alive() or not resultado.get('texto'):

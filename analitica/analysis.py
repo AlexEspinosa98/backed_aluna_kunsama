@@ -45,6 +45,8 @@ from concurrent.futures import ThreadPoolExecutor
 from django.db import close_old_connections
 from django.utils import timezone
 
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
+
 from .prompt_comun import (
     ENFOQUE_CUALITATIVO, REGLA_DATOS_ANALISIS, bloque_contexto, bloque_enfoque, bloque_instrucciones,
     normalizar_enfoque,
@@ -222,8 +224,8 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('analisis_local_legacy', api_key=api_key)
             kwargs = dict(
                 model=OPENAI_MODEL,
                 messages=[
@@ -243,7 +245,7 @@ def _llamar_llm(system, user, max_tokens=250, temperature=0.5):
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a texto de respaldo
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -1060,6 +1062,7 @@ def analizar_jornada(plantilla, momentos_analisis, participacion, enfoque=None, 
 # Orquestador — corre en un hilo en background lanzado desde la vista.
 # ---------------------------------------------------------------------------
 
+@auditar_llamadas('analitica.Reporte')
 def procesar_reporte(reporte_id):
     """REDISEÑO (2026-09-20, contrato `kunsamu.analisis/v2`, docs/mejora_promps/): el reporte ya no
     corre el pipeline multiagente de este módulo (`analizar_pregunta`/`_sintetizar_momento`/

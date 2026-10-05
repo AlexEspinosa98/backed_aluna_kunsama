@@ -21,13 +21,13 @@ import base64
 import io
 import json
 import os
-import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.files.base import ContentFile
 from django.utils import timezone
 
+from auditoria.openai_cliente import auditar_llamadas, con_contexto, hilo_con_contexto
 from jornadas.models import JornadaAsset
 
 from .v2.contrato import VERSION as VERSION_V2
@@ -389,8 +389,8 @@ def _llamar_openai_imagen(prompt, imagenes_referencia_png):
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('infografia', api_key=api_key)
             if imagenes_referencia_png:
                 archivos = [
                     (f'referencia-{i}.png', io.BytesIO(png), 'image/png')
@@ -420,7 +420,7 @@ def _llamar_openai_imagen(prompt, imagenes_referencia_png):
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -446,7 +446,7 @@ def _generar_slides(datos, texto_system_design, imagenes_referencia, instruccion
         return indice, png, error
 
     with ThreadPoolExecutor(max_workers=len(SLIDES)) as pool:
-        for futuro in as_completed([pool.submit(_una, i) for i in range(len(SLIDES))]):
+        for futuro in as_completed([pool.submit(con_contexto(_una), i) for i in range(len(SLIDES))]):
             indice, png, error = futuro.result()
             if png:
                 resultados[indice] = png
@@ -455,6 +455,7 @@ def _generar_slides(datos, texto_system_design, imagenes_referencia, instruccion
     return resultados, errores
 
 
+@auditar_llamadas('analitica.InfografiaJornada')
 def generar_infografias(infografia_id):
     """Genera las láminas de una InfografiaJornada (una por SLIDE) y las guarda como
     InfografiaImagen. Corre en un hilo de background (ver

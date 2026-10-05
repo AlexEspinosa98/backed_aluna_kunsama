@@ -18,7 +18,6 @@ espera la aprobación de un admin. La excepción es la carga que hace el propio 
 y envíe por el endpoint normal — ahí la revisión ya pasaba antes de escribir."""
 import json
 import os
-import threading
 
 from django.db import transaction
 from django.utils import timezone
@@ -26,6 +25,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import APIException
 
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
 from jornadas import emparejamiento, lectura_documentos
 
 # Modelo de TRANSCRIPCIÓN, distinto del de generación — ver el razonamiento completo y
@@ -224,8 +224,8 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('extraccion_momento', api_key=api_key)
             kwargs = dict(
                 model=DEFAULT_MODEL,
                 messages=[
@@ -254,7 +254,7 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
         except Exception as exc:  # noqa: BLE001
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -545,6 +545,7 @@ def crear_participante_desde_responsable(momento, responsable):
     )
 
 
+@auditar_llamadas('participantes.ExtraccionMomento')
 def procesar_extraccion_momento(extraccion_id):
     """Genera el `resultado` de una ExtraccionMomento ya creada (estado 'pendiente'). Corre en un
     hilo de background — mismo patrón que instrumentos.extraccion_ia_openai. NO escribe

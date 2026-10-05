@@ -22,10 +22,10 @@ El resultado nunca se acepta solo: cae siempre en AplicacionInstrumento.estado='
 generado_por_ia=True para revisión humana (ver ExtraccionInstrumento en models.py)."""
 import json
 import os
-import threading
 
 from django.utils import timezone
 
+from auditoria.openai_cliente import auditar_llamadas, hilo_con_contexto
 from jornadas import emparejamiento, lectura_documentos
 
 # Modelo de TRANSCRIPCIÓN, deliberadamente distinto del de generación (`OPENAI_MODEL`, que usan
@@ -230,8 +230,8 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
 
     def _run():
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
+            from auditoria.openai_cliente import cliente_openai
+            client = cliente_openai('extraccion_instrumento', api_key=api_key)
             kwargs = dict(
                 model=DEFAULT_MODEL,
                 messages=[
@@ -262,7 +262,7 @@ def _llamar_openai_extraccion(esquema, texto_documento=None, imagenes_base64=Non
         except Exception as exc:  # noqa: BLE001 — cualquier falla de la API cae a error legible
             resultado['error'] = str(exc)
 
-    hilo = threading.Thread(target=_run, daemon=True)
+    hilo = hilo_con_contexto(_run)
     hilo.start()
     hilo.join(timeout=GENERATION_TIMEOUT_SECONDS)
 
@@ -502,6 +502,7 @@ def asignar_responsable_instrumento(extraccion, usuario):
     return _escribir_aplicacion(extraccion, extraccion.resultado_crudo or {})
 
 
+@auditar_llamadas('instrumentos.ExtraccionInstrumento', jornada='instrumento__jornada_id')
 def procesar_extraccion_instrumento(extraccion_id):
     """Genera la AplicacionInstrumento de una ExtraccionInstrumento ya creada (estado
     'pendiente'). Corre en un hilo de background — mismo patrón que
