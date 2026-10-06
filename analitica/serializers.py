@@ -412,6 +412,17 @@ class _AnalisisV2CamposDerivados(serializers.ModelSerializer):
     version = serializers.SerializerMethodField()
     metodo = serializers.SerializerMethodField()
     estado_analitico = serializers.SerializerMethodField()
+    ajuste_de = serializers.SerializerMethodField()
+
+    def get_ajuste_de(self, obj) -> dict | None:
+        """HU-102: `{"tipo": "analisis_jornada", "id": 29}` si es un ajuste, o None. El tipo usa los
+        mismos nombres que la lista unificada (sin el prefijo `ajuste_de_`); `id` es None si el
+        origen se borró después."""
+        if not obj.es_ajuste:
+            return None
+        campo = obj.campo_ajuste
+        return {'tipo': campo.removeprefix('ajuste_de_') if campo else None,
+                'id': getattr(obj, f'{campo}_id') if campo else None}
 
     def get_version(self, obj):
         # La de su resultado (v2 o v2.1, HU-100); la vigente si todavía no hay resultado.
@@ -435,6 +446,7 @@ class AnalisisV2ListaSerializer(_AnalisisV2CamposDerivados):
             'id', 'version', 'jornada', 'jornada_id', 'momentos', 'modo', 'pipeline', 'metodo',
             'contexto', 'instrucciones', 'personalizacion_momentos', 'adjuntos', 'estado', 'estado_analitico',
             'error_mensaje', 'version_prompt', 'version_esquema', 'modelo_usado', 'solicitado_por',
+            'es_ajuste', 'ajuste_de', 'flex', 'fase_openai', 'consultado_en',
             'creado_en', 'actualizado_en', 'completado_en',
         ]
         read_only_fields = fields
@@ -514,6 +526,54 @@ class AnalisisV2CrearSerializer(serializers.ModelSerializer):
         if momentos:
             analisis.momentos.set(momentos)
         return analisis
+
+
+class AjusteAnalisisCrearSerializer(serializers.Serializer):
+    """HU-102. El análisis a ajustar: exactamente uno de `reporte`, `analisis_momento`,
+    `analisis_jornada` o `analisis_v2` (que puede ser otro ajuste), completo y con salida v2.
+    `instrucciones` es obligatorio: es lo que se quiere cambiar."""
+    reporte = serializers.PrimaryKeyRelatedField(queryset=Reporte.objects.all(), required=False, allow_null=True)
+    analisis_momento = serializers.PrimaryKeyRelatedField(queryset=AnalisisMomentoIA.objects.all(), required=False, allow_null=True)
+    analisis_jornada = serializers.PrimaryKeyRelatedField(queryset=AnalisisJornadaIA.objects.all(), required=False, allow_null=True)
+    analisis_v2 = serializers.PrimaryKeyRelatedField(queryset=AnalisisV2.objects.all(), required=False, allow_null=True)
+    instrucciones = serializers.CharField(trim_whitespace=True, help_text=(
+        'Qué ajustar: más profundidad en un tema, otro énfasis o público, corregir una '
+        'interpretación, sumar recomendaciones… Sin tope de largo.'
+    ))
+    contexto = serializers.CharField(required=False, allow_blank=True, default='', trim_whitespace=False)
+    adjuntos = CampoAdjuntos()
+    modelo = serializers.CharField(required=False, allow_blank=True, default='')
+    esfuerzo = serializers.CharField(required=False, allow_blank=True, default='')
+    flex = serializers.BooleanField(required=False, default=False)
+
+    CAMPOS_ORIGEN = ('reporte', 'analisis_momento', 'analisis_jornada', 'analisis_v2')
+
+    validate_modelo = AnalisisJornadaIACrearSerializer.validate_modelo
+    validate_esfuerzo = AnalisisJornadaIACrearSerializer.validate_esfuerzo
+
+    def validate(self, attrs):
+        presentes = [c for c in self.CAMPOS_ORIGEN if attrs.get(c) is not None]
+        if len(presentes) != 1:
+            raise serializers.ValidationError(
+                'Manda exactamente uno de "reporte", "analisis_momento", "analisis_jornada" o "analisis_v2".'
+            )
+        campo = presentes[0]
+        origen = attrs[campo]
+        if origen.estado != origen.ESTADO_COMPLETO:
+            raise serializers.ValidationError({campo: 'El análisis todavía no está completo.'})
+        resultado = resultado_v2_de(origen) or {}
+        if not es_contrato_v2(resultado) or not origen.entrada:
+            raise serializers.ValidationError({campo: (
+                'Este análisis es anterior al contrato kunsamu.analisis/v2 (no tiene salida estructurada '
+                'ni entrada guardada): no se puede ajustar. Genera un análisis nuevo.'
+            )})
+        if resultado.get('estado') == 'sin_datos':
+            raise serializers.ValidationError({campo: 'El análisis no tiene datos: no hay nada que ajustar.'})
+        attrs['campo_origen'] = campo
+        attrs['origen'] = origen
+        attrs['jornada'] = origen.momento.jornada if campo == 'analisis_momento' else origen.jornada
+        attrs['adjuntos'] = validar_adjuntos(attrs.get('adjuntos'), attrs['jornada'])
+        return attrs
 
 
 class SystemPromptSerializer(serializers.ModelSerializer):

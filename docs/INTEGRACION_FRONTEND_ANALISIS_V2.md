@@ -507,3 +507,10 @@ el modelo está corrigiendo una primera respuesta que no pasó la validación �
 "revisando" en vez de un spinner genérico.
 
 **Borrar** un análisis `procesando` lo cancela también en OpenAI (no se paga lo que ya nadie va a ver).
+
+## Ajustar un análisis ya terminado (HU-102)
+
+`POST /api/admin/analisis-v2/ajustar/` toma un análisis completo (de cualquiera de los cuatro tipos) y
+se lo vuelve a pasar a OpenAI con `instrucciones` y, opcionalmente, `contexto` y `adjuntos`. Devuelve un
+`AnalisisV2` nuevo con `es_ajuste: true` y `ajuste_de: {tipo, id}`. Guía completa:
+`docs/INTEGRACION_FRONTEND_AJUSTE_ANALISIS.md`.
