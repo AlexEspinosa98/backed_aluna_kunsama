@@ -157,8 +157,11 @@ def _reunir_imagenes_referencia(jornada):
     archivo individual que falle al leerse/convertirse se omite (no debe tumbar toda la generación
     por un asset puntual corrupto)."""
     imagenes = []
-    assets = jornada.assets.filter(tipo=JornadaAsset.TIPO_ASSET).exclude(archivo='')[:MAX_ASSETS_REFERENCIA]
-    system_design = jornada.assets.filter(
+    # `usar_en_presentacion=False` (HU-101): una imagen que se subió solo como insumo del análisis
+    # (la foto de un papelógrafo) no tiene por qué aparecer como referencia visual.
+    visibles = jornada.assets.filter(usar_en_presentacion=True)
+    assets = visibles.filter(tipo=JornadaAsset.TIPO_ASSET).exclude(archivo='')[:MAX_ASSETS_REFERENCIA]
+    system_design = visibles.filter(
         tipo=JornadaAsset.TIPO_SYSTEM_DESIGN,
     ).exclude(archivo='').first()
     for asset in list(assets) + ([system_design] if system_design else []):

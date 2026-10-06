@@ -1,3 +1,5 @@
+import threading
+
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
@@ -24,7 +26,9 @@ from .serializers import (
     ColumnaMatrizPreguntaSerializer,
     FilaMatrizPreguntaSerializer,
     JornadaAdminSerializer,
+    JornadaAssetActualizarSerializer,
     JornadaAssetCrearSerializer,
+    JornadaAssetDetalleSerializer,
     JornadaAssetSerializer,
     MomentoAdminSerializer,
     OpcionPreguntaSerializer,
@@ -105,15 +109,28 @@ class RolJornadaAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):
 
 
 class JornadaAssetAdminViewSet(ModelViewSet):
-    """Assets (imágenes) y system design de una jornada — usados como referencia visual real al
-    generar infografías (ver analitica.infografia_ia_openai). Solo list/create/destroy: un asset
-    se reemplaza subiendo uno nuevo y borrando el viejo, nunca se edita in place."""
-    http_method_names = ['get', 'post', 'delete', 'head', 'options']
+    """Assets de una jornada: imágenes y system design —referencia visual de infografías y
+    presentaciones (ver analitica.infografia_ia_openai)— y, desde HU-101, documentos de apoyo.
+    Cualquiera de ellos se puede adjuntar a un análisis como fuente o como contexto (ver
+    analitica/v2/adjuntos.py).
+
+    El archivo nunca se edita in place: se sube uno nuevo y se borra el viejo. PATCH solo cambia
+    título, descripción, `usar_en_presentacion` y, si hace falta corregirlo, `contenido_texto`.
+    Un documento se lee apenas se sube (en segundo plano); una imagen se lee con visión la primera
+    vez que se adjunta a un análisis, para no gastar una llamada por cada foto de infografía.
+    `POST {id}/leer/` vuelve a leerlo."""
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
     permission_classes = [IsAdminUser]
 
     def get_serializer_class(self):
         if self.action == 'create':
             return JornadaAssetCrearSerializer
+        if self.action == 'partial_update':
+            return JornadaAssetActualizarSerializer
+        if self.action == 'retrieve' or (
+            self.action == 'list' and self.request.query_params.get('con_contenido') in ('1', 'true')
+        ):
+            return JornadaAssetDetalleSerializer
         return JornadaAssetSerializer
 
     def get_queryset(self):
@@ -121,6 +138,9 @@ class JornadaAssetAdminViewSet(ModelViewSet):
         jornada_id = self.request.query_params.get('jornada')
         if jornada_id:
             queryset = queryset.filter(jornada_id=jornada_id)
+        tipo = self.request.query_params.get('tipo')
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -132,8 +152,31 @@ class JornadaAssetAdminViewSet(ModelViewSet):
         if es_dependencia(request.user) and not jornada.propietarios.filter(id=request.user.id).exists():
             raise PermissionDenied('No puedes crear contenido bajo una jornada que no es tuya.')
         creados = entrada.save(subido_por=request.user)
+        documentos = [a.id for a in creados if a.tipo == JornadaAsset.TIPO_DOCUMENTO]
+        if documentos:
+            from .contenido_assets import leer_en_segundo_plano
+            threading.Thread(target=leer_en_segundo_plano, args=(documentos,), daemon=True).start()
         salida = JornadaAssetSerializer(creados, many=True, context=self.get_serializer_context())
         return Response(salida.data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, *args, **kwargs):
+        asset = self.get_object()
+        entrada = JornadaAssetActualizarSerializer(asset, data=request.data, partial=True)
+        entrada.is_valid(raise_exception=True)
+        entrada.save()
+        return Response(JornadaAssetDetalleSerializer(asset, context=self.get_serializer_context()).data)
+
+    @extend_schema(request=None, responses={202: JornadaAssetSerializer})
+    @action(detail=True, methods=['post'], url_path='leer')
+    def leer(self, request, pk=None):
+        """Vuelve a leer el contenido del asset (por ejemplo, tras un error). Responde 202 y lee
+        en segundo plano; se sigue por `GET {id}/` hasta `contenido_estado` `listo` o `error`."""
+        asset = self.get_object()
+        asset.contenido_estado = JornadaAsset.CONTENIDO_LEYENDO
+        asset.save(update_fields=['contenido_estado'])
+        from .contenido_assets import leer_en_segundo_plano
+        threading.Thread(target=leer_en_segundo_plano, args=([asset.id],), kwargs={'forzar': True}, daemon=True).start()
+        return Response(JornadaAssetSerializer(asset).data, status=status.HTTP_202_ACCEPTED)
 
 
 class MomentoAdminViewSet(ValidarPropietarioAlCrearMixin, ModelViewSet):

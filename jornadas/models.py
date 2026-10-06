@@ -75,12 +75,42 @@ class JornadaAsset(models.Model):
 
     Una fila = una referencia. Se permiten varias por jornada (historial); la generación usa
     siempre la más reciente de cada clase (el último `asset`, el último `system_design` con
-    archivo y el último `system_design` con texto)."""
+    archivo y el último `system_design` con texto).
+
+    Desde HU-101 hay un tercer tipo, `documento` (.pdf/.docx/.txt/.md), y cualquier asset —imagen,
+    documento o guía de marca— se puede adjuntar a un análisis, eligiendo en el pedido si entra
+    como **fuente** (evidencia secundaria, citable) o como **contexto** (marco para interpretar,
+    nunca evidencia). Ver `analitica/v2/adjuntos.py`. Lo que el modelo de análisis lee de un asset
+    es siempre TEXTO: `contenido_texto`, que se calcula una vez y se reutiliza — el texto extraído
+    de un documento, la transcripción con visión de un PDF escaneado o la descripción con visión de
+    una imagen (ver `jornadas/contenido_assets.py`). `usar_en_presentacion` decide si una imagen
+    entra a la diagramación de presentaciones y a las infografías."""
     TIPO_ASSET = 'asset'
     TIPO_SYSTEM_DESIGN = 'system_design'
+    TIPO_DOCUMENTO = 'documento'
     TIPO_CHOICES = [
         (TIPO_ASSET, 'Asset'),
         (TIPO_SYSTEM_DESIGN, 'System design'),
+        (TIPO_DOCUMENTO, 'Documento'),
+    ]
+
+    CONTENIDO_SIN_LEER = 'sin_leer'
+    CONTENIDO_LEYENDO = 'leyendo'
+    CONTENIDO_LISTO = 'listo'
+    CONTENIDO_ERROR = 'error'
+    CONTENIDO_CHOICES = [
+        (CONTENIDO_SIN_LEER, 'Sin leer'),
+        (CONTENIDO_LEYENDO, 'Leyendo'),
+        (CONTENIDO_LISTO, 'Listo'),
+        (CONTENIDO_ERROR, 'Error'),
+    ]
+    METODO_TEXTO = 'texto_extraido'
+    METODO_VISION = 'vision'
+    METODO_TEXTO_ESCRITO = 'texto_escrito'
+    METODO_CHOICES = [
+        (METODO_TEXTO, 'Texto extraído del archivo'),
+        (METODO_VISION, 'Leído con visión (IA)'),
+        (METODO_TEXTO_ESCRITO, 'Texto escrito al subirlo'),
     ]
 
     jornada = models.ForeignKey(Jornada, on_delete=models.CASCADE, related_name='assets')
@@ -92,6 +122,22 @@ class JornadaAsset(models.Model):
     texto = models.TextField(blank=True, help_text=(
         'Guía de marca escrita (colores, tipografía, tono). Solo aplica a tipo system_design.'
     ))
+    titulo = models.CharField(max_length=200, blank=True, help_text=(
+        'Nombre legible del adjunto (si no se da, se usa el nombre del archivo).'
+    ))
+    descripcion = models.TextField(blank=True, help_text=(
+        'Qué es y para qué sirve, escrito por quien lo sube. Le llega al modelo junto al contenido.'
+    ))
+    usar_en_presentacion = models.BooleanField(default=True, help_text=(
+        'Si la imagen entra a la diagramación de presentaciones y a las infografías.'
+    ))
+    contenido_texto = models.TextField(blank=True, help_text=(
+        'Lo que el análisis lee del asset (texto extraído, transcripción o descripción con visión). '
+        'Se calcula una vez y se reutiliza.'
+    ))
+    contenido_estado = models.CharField(max_length=10, choices=CONTENIDO_CHOICES, default=CONTENIDO_SIN_LEER)
+    contenido_metodo = models.CharField(max_length=20, choices=METODO_CHOICES, blank=True)
+    contenido_error = models.TextField(blank=True)
     subido_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='assets_jornada_subidos',
@@ -100,6 +146,18 @@ class JornadaAsset(models.Model):
 
     class Meta:
         ordering = ['-creado_en']
+
+    @property
+    def nombre_legible(self):
+        if self.titulo:
+            return self.titulo
+        if self.nombre_archivo_original:
+            return self.nombre_archivo_original
+        if self.archivo:
+            return self.archivo.name.rsplit('/', 1)[-1]
+        if self.tipo == self.TIPO_SYSTEM_DESIGN:
+            return 'Guía de marca'
+        return f'Asset {self.id}'
 
     def __str__(self):
         detalle = self.nombre_archivo_original or self.archivo.name or f'texto ({len(self.texto)} car.)'

@@ -164,6 +164,7 @@ def iniciar_analisis_background(analisis):
             contexto=analisis.contexto, instrucciones=analisis.instrucciones,
             referencia=f'analisis-jornada-{analisis.id}',
             al_guardar_entrada=guardador_de_entrada(analisis), diagnostico=analisis.diagnostico,
+            adjuntos=analisis.adjuntos,
         )
         if preparado['user'] is None:
             aplicar_resultado(analisis, {
