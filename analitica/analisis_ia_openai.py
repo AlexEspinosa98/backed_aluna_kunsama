@@ -483,6 +483,7 @@ def analizar_momento_ia(analisis_id):
                 'instrucciones': analisis.instrucciones_momento,
             }],
             referencia=f'analisis-momento-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
+            adjuntos=analisis.adjuntos,
         )
         aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio
@@ -550,7 +551,7 @@ def analizar_jornada_ia(analisis_id):
             contexto=analisis.contexto, instrucciones=analisis.instrucciones,
             referencia=f'analisis-jornada-{analisis.id}', al_guardar_entrada=guardador_de_entrada(analisis),
             modelo=analisis.modelo_solicitado or None, esfuerzo=analisis.esfuerzo_solicitado or None,
-            flex=analisis.flex,
+            flex=analisis.flex, adjuntos=analisis.adjuntos,
         )
         aplicar_resultado(analisis, r)
     except Exception as exc:  # noqa: BLE001 — nunca debe dejar el hilo morir en silencio

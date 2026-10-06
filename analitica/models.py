@@ -37,6 +37,10 @@ class AnalisisGuiadoMixin(models.Model):
             'gráficos, idioma…) — mandan sobre el estilo y la estructura por defecto.'
         ),
     )
+    adjuntos = models.JSONField(default=list, blank=True, help_text=(
+        'Documentos/imágenes de la jornada (JornadaAsset) sumados al análisis (HU-101): lista de '
+        '{"asset": <id>, "uso": "fuente"|"contexto"}. Ver analitica/v2/adjuntos.py.'
+    ))
 
     class Meta:
         abstract = True
@@ -635,6 +639,10 @@ class AnalisisV2(models.Model):
         'Lista de {"momento": <id>, "contexto": "…", "instrucciones": "…"} — como máximo una '
         'entrada por momento del alcance.'
     ))
+    adjuntos = models.JSONField(default=list, blank=True, help_text=(
+        'Documentos/imágenes de la jornada (JornadaAsset) sumados al análisis (HU-101): lista de '
+        '{"asset": <id>, "uso": "fuente"|"contexto"}. Ver analitica/v2/adjuntos.py.'
+    ))
     estado = models.CharField(max_length=12, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE)
     error_mensaje = models.TextField(blank=True)
     entrada = models.JSONField(default=dict, blank=True)
@@ -754,6 +762,10 @@ class ResumenPresentacion(models.Model):
     instrucciones = models.TextField(
         blank=True, help_text='Público, duración, cantidad de diapositivas, énfasis… Sin tope de largo.',
     )
+    adjuntos = models.JSONField(default=list, blank=True, help_text=(
+        'Ids de JornadaAsset que entran como contexto del resumen (HU-101). Solo contexto: un '
+        'resumen no puede sumar fuentes que el análisis original no tenía.'
+    ))
     modelo_solicitado = models.CharField(max_length=80, blank=True)
     esfuerzo_solicitado = models.CharField(max_length=10, blank=True)
     flex = models.BooleanField(default=False)

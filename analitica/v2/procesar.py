@@ -19,6 +19,7 @@ from django.utils import timezone
 
 from auditoria.openai_cliente import auditar_llamadas
 
+from .adjuntos import anexar_adjuntos
 from .contrato import PIPELINE_BERTOPIC_LLM, TIPO_PROMPT_POR_PIPELINE, VERSION_ESQUEMA
 from .entrada import construir_entrada, hay_respuestas
 from .llm import MODELO_USADO_LABEL, llamar_openai_estructurado
@@ -33,12 +34,13 @@ MODELO_USADO_SIN_DATOS = 'Sin datos — generado por el backend sin IA'
 
 def preparar_entrada_v2(jornada, modo, momentos, pipeline, contexto='', instrucciones='',
                         personalizacion_momentos=None, referencia='', al_guardar_entrada=None,
-                        diagnostico=None):
+                        diagnostico=None, adjuntos=None):
     """Todo lo que va ANTES de llamar a la IA, compartido por el modo de siempre
     (`ejecutar_analisis_v2`) y el de segundo plano (`v2.background`, HU-98). Lanza ante cualquier
     error. Devuelve `{'prompt': SystemPrompt, 'entrada': dict, 'user': str|None,
     'salida_sin_datos': dict|None}` — con `user` en None cuando no hay respuestas, porque entonces
-    la salida la arma el backend sin IA (`salida_sin_datos`)."""
+    la salida la arma el backend sin IA (`salida_sin_datos`). `adjuntos`: los documentos/imágenes
+    de la jornada que entran como fuente o como contexto (HU-101, ver `adjuntos.py`)."""
     from analitica.models import SystemPrompt
 
     diagnostico = diagnostico if diagnostico is not None else {'bertopic': [], 'intentos': []}
@@ -47,6 +49,8 @@ def preparar_entrada_v2(jornada, modo, momentos, pipeline, contexto='', instrucc
         jornada, modo, list(momentos or []), contexto=contexto, instrucciones=instrucciones,
         personalizacion_momentos=personalizacion_momentos,
     )
+    if adjuntos:
+        anexar_adjuntos(entrada, jornada, adjuntos, diagnostico=diagnostico)
     if pipeline == PIPELINE_BERTOPIC_LLM:
         from .bertopic_adaptador import anexar_bertopic
         entrada, notas = anexar_bertopic(entrada, analisis_id=referencia)
@@ -94,7 +98,7 @@ def evaluar_salida_v2(salida, entrada, pipeline, intento, diagnostico, ultimo):
 
 def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instrucciones='',
                          personalizacion_momentos=None, referencia='', al_guardar_entrada=None,
-                         modelo=None, esfuerzo=None, flex=False):
+                         modelo=None, esfuerzo=None, flex=False, adjuntos=None):
     """Corre el análisis completo y devuelve un dict — NUNCA lanza:
       {'ok': bool, 'entrada': dict, 'salida': dict|None, 'error': str|None,
        'prompt_usado': str, 'modelo_usado': str, 'diagnostico': dict,
@@ -116,7 +120,7 @@ def ejecutar_analisis_v2(jornada, modo, momentos, pipeline, contexto='', instruc
         preparado = preparar_entrada_v2(
             jornada, modo, momentos, pipeline, contexto=contexto, instrucciones=instrucciones,
             personalizacion_momentos=personalizacion_momentos, referencia=referencia,
-            al_guardar_entrada=al_guardar_entrada, diagnostico=diagnostico,
+            al_guardar_entrada=al_guardar_entrada, diagnostico=diagnostico, adjuntos=adjuntos,
         )
         entrada, prompt, user = preparado['entrada'], preparado['prompt'], preparado['user']
         resultado.update({'entrada': entrada, 'version_prompt': prompt.referencia})
@@ -231,6 +235,7 @@ def procesar_analisis_v2(analisis_id):
             contexto=analisis.contexto, instrucciones=analisis.instrucciones,
             personalizacion_momentos=analisis.personalizacion_momentos,
             referencia=f'analisis-v2-{analisis.id}', al_guardar_entrada=_guardar_entrada,
+            adjuntos=analisis.adjuntos,
         )
         if not r['ok']:
             raise RuntimeError(r['error'])

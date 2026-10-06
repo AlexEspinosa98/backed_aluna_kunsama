@@ -1099,7 +1099,7 @@ def procesar_reporte(reporte_id):
             reporte.jornada, modo, momentos, PIPELINE_BERTOPIC_LLM,
             contexto=reporte.contexto, instrucciones=reporte.instrucciones,
             personalizacion_momentos=personalizacion, referencia=f'reporte-{reporte.id}',
-            al_guardar_entrada=guardador_de_entrada(reporte),
+            al_guardar_entrada=guardador_de_entrada(reporte), adjuntos=reporte.adjuntos,
         )
         aplicar_resultado(
             reporte, r, campo_resultado='analisis',

@@ -13,6 +13,7 @@ from django.db import close_old_connections
 from auditoria.openai_cliente import auditar_llamadas
 
 from .v2 import background
+from .v2.adjuntos import USO_CONTEXTO, bloque_referencias, resolver_adjuntos
 from .v2.contrato import VERSION_ESQUEMA
 from .v2.migracion_contrato import visualizaciones_a_v2_1
 
@@ -30,11 +31,20 @@ def entrada_del_resumen(resumen):
     # El resumen sale en v2.1 (HU-100): si el análisis es v2, sus visualizaciones van ya en la forma
     # v2.1 (campos de color vacíos) para que el modelo las pueda copiar idénticas.
     analisis['visualizaciones'] = visualizaciones_a_v2_1(analisis['visualizaciones'])
-    return {
+    entrada = {
         'jornada': {'nombre': resumen.jornada.nombre, 'descripcion': resumen.jornada.descripcion or ''},
         'instrucciones_usuario': resumen.instrucciones or '',
         'analisis': analisis,
     }
+    # HU-101: material de contexto para enmarcar el resumen (público, normativa, antecedentes).
+    # Solo contexto: el resumen se valida contra la entrada del análisis original.
+    if resumen.adjuntos:
+        _, referencias, _ = resolver_adjuntos(
+            resumen.jornada, [{'asset': i, 'uso': USO_CONTEXTO} for i in resumen.adjuntos],
+            usos=(USO_CONTEXTO,),
+        )
+        entrada['referencias'] = bloque_referencias(referencias)
+    return entrada
 
 
 def iniciar_resumen(resumen):

@@ -473,8 +473,11 @@ def _indice_ids_fuente(fuente):
 
 def _textos_de_fuente(fuente):
     """(puntero, texto) de todo texto citable de una fuente: respuestas escalares, celdas de
-    matriz/lista, documentos BERTopic y segmentos de transcripción."""
+    matriz/lista, documentos BERTopic, segmentos de transcripción y el texto de un documento o
+    imagen adjunta como fuente (HU-101, `resumen_secundario` con `datos.texto`)."""
     datos = fuente.get('datos') or {}
+    if fuente.get('tipo') == 'resumen_secundario' and isinstance(datos.get('texto'), str):
+        yield '/texto', datos['texto']
     for i, r in enumerate(datos.get('respuestas') or []):
         valor = r.get('valor')
         if isinstance(valor, str):

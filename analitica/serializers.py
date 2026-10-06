@@ -13,8 +13,78 @@ from .v2.contrato import VERSION, es_contrato_v2
 # Campos del análisis guiado (HU-57, ver docs/HU_BACKEND_ANALISIS_GUIADO.md §1) comunes a los
 # tres serializers de creación — un solo lugar para no repetir la lista tres veces y que agregar
 # un campo nuevo el día de mañana sea un cambio en un solo sitio.
-CAMPOS_ANALISIS_GUIADO = ['enfoque', 'contexto', 'instrucciones']
+CAMPOS_ANALISIS_GUIADO = ['enfoque', 'contexto', 'instrucciones', 'adjuntos']
 CAMPOS_ANALISIS_GUIADO_MOMENTO = CAMPOS_ANALISIS_GUIADO + ['contexto_momento', 'instrucciones_momento']
+
+
+class _AdjuntoItem(serializers.Field):
+    """Un adjunto del pedido (HU-101): `{"asset": <id>, "uso": "fuente"|"contexto"}`, o solo el id
+    (entonces `uso` = "contexto", el que no puede alterar la analítica)."""
+    default_error_messages = {
+        'invalido': 'Cada adjunto es un id de asset o {"asset": <id>, "uso": "fuente"|"contexto"}.',
+        'uso': 'uso debe ser "fuente" o "contexto".',
+    }
+
+    def to_internal_value(self, data):
+        from .v2.adjuntos import USO_CONTEXTO, USO_CHOICES
+
+        if isinstance(data, dict):
+            asset, uso = data.get('asset'), data.get('uso') or USO_CONTEXTO
+        else:
+            asset, uso = data, USO_CONTEXTO
+        try:
+            asset = int(asset)
+        except (TypeError, ValueError):
+            self.fail('invalido')
+        if uso not in dict(USO_CHOICES):
+            self.fail('uso')
+        return {'asset': asset, 'uso': uso}
+
+    def to_representation(self, value):
+        return value
+
+
+class CampoAdjuntos(serializers.ListField):
+    def __init__(self, **kwargs):
+        kwargs.setdefault('required', False)
+        kwargs.setdefault('help_text', (
+            'Documentos o imágenes de la jornada (ids de /api/admin/jornada-assets/) que entran al '
+            'análisis: [{"asset": 12, "uso": "fuente"}, {"asset": 15, "uso": "contexto"}]. '
+            '"fuente" = evidencia secundaria citable; "contexto" = marco para interpretar, nunca '
+            'evidencia. Un id suelto equivale a uso "contexto".'
+        ))
+        super().__init__(child=_AdjuntoItem(), **kwargs)
+
+
+def validar_adjuntos(adjuntos, jornada, usos=None):
+    """Los adjuntos tienen que ser assets de la MISMA jornada del análisis, sin repetirse, y con
+    algo que leer. Devuelve la lista normalizada (lanza ValidationError con `{'adjuntos': …}`)."""
+    from jornadas.models import JornadaAsset
+
+    from .v2.adjuntos import MAX_ADJUNTOS
+
+    adjuntos = adjuntos or []
+    if len(adjuntos) > MAX_ADJUNTOS:
+        raise serializers.ValidationError({'adjuntos': f'Como máximo {MAX_ADJUNTOS} adjuntos por análisis.'})
+    ids = [a['asset'] for a in adjuntos]
+    if len(set(ids)) != len(ids):
+        raise serializers.ValidationError({'adjuntos': 'Un asset aparece más de una vez.'})
+    if usos is not None:
+        for a in adjuntos:
+            if a['uso'] not in usos:
+                raise serializers.ValidationError({'adjuntos': f'Aquí solo se admite uso {", ".join(usos)}.'})
+    existentes = {a.id: a for a in JornadaAsset.objects.filter(id__in=ids)}
+    for asset_id in ids:
+        asset = existentes.get(asset_id)
+        if asset is None:
+            raise serializers.ValidationError({'adjuntos': f'No existe el asset {asset_id}.'})
+        if asset.jornada_id != jornada.id:
+            raise serializers.ValidationError(
+                {'adjuntos': f'El asset {asset_id} no pertenece a la jornada del análisis.'}
+            )
+        if not asset.archivo and not asset.texto:
+            raise serializers.ValidationError({'adjuntos': f'El asset {asset_id} no tiene contenido.'})
+    return adjuntos
 
 
 class PlantillaAnalisisSerializer(serializers.ModelSerializer):
@@ -63,6 +133,7 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
         many=True, queryset=Momento.objects.all(), required=False,
         help_text='Vacío = jornada completa. Uno = momento individual. Varios = momentos combinados.',
     )
+    adjuntos = CampoAdjuntos()
 
     class Meta:
         model = Reporte
@@ -83,6 +154,7 @@ class ReporteCrearSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'momentos': f'El momento "{momento.titulo}" no pertenece a la jornada seleccionada.'}
                 )
+        attrs['adjuntos'] = validar_adjuntos(attrs.get('adjuntos'), jornada)
         if attrs.get('plantilla') is None:
             attrs['plantilla'] = PlantillaAnalisis.objects.filter(
                 tipo=PlantillaAnalisis.TIPO_LOCAL, predeterminada=True
@@ -123,10 +195,16 @@ class AnalisisMomentoIASerializer(serializers.ModelSerializer):
 
 
 class AnalisisMomentoIACrearSerializer(serializers.ModelSerializer):
+    adjuntos = CampoAdjuntos()
+
     class Meta:
         model = AnalisisMomentoIA
         fields = ['id', 'momento', 'estado', 'creado_en', *CAMPOS_ANALISIS_GUIADO_MOMENTO]
         read_only_fields = ['id', 'estado', 'creado_en']
+
+    def validate(self, attrs):
+        attrs['adjuntos'] = validar_adjuntos(attrs.get('adjuntos'), attrs['momento'].jornada)
+        return attrs
         # El guard de "sin respuestas" (HU-57 §5) vive en AnalisisMomentoIAViewSet.create(),
         # después de verificar_acceso_jornada — ver el comentario en ReporteCrearSerializer.
 
@@ -167,6 +245,7 @@ class AnalisisJornadaIACrearSerializer(serializers.ModelSerializer):
     modelo = serializers.CharField(source='modelo_solicitado', required=False, allow_blank=True)
     esfuerzo = serializers.CharField(source='esfuerzo_solicitado', required=False, allow_blank=True)
     flex = serializers.BooleanField(required=False, default=False)
+    adjuntos = CampoAdjuntos()
 
     class Meta:
         model = AnalisisJornadaIA
@@ -184,6 +263,10 @@ class AnalisisJornadaIACrearSerializer(serializers.ModelSerializer):
         if valor and valor not in ESFUERZOS_PERMITIDOS:
             raise serializers.ValidationError(f'Esfuerzo no válido. Opciones: {ESFUERZOS_PERMITIDOS}.')
         return valor
+
+    def validate(self, attrs):
+        attrs['adjuntos'] = validar_adjuntos(attrs.get('adjuntos'), attrs['jornada'])
+        return attrs
         # El guard de "sin respuestas" (HU-57 §5) vive en AnalisisJornadaIAViewSet.create(),
         # después de verificar_acceso_jornada — ver el comentario en ReporteCrearSerializer.
 
@@ -350,7 +433,7 @@ class AnalisisV2ListaSerializer(_AnalisisV2CamposDerivados):
         model = AnalisisV2
         fields = [
             'id', 'version', 'jornada', 'jornada_id', 'momentos', 'modo', 'pipeline', 'metodo',
-            'contexto', 'instrucciones', 'personalizacion_momentos', 'estado', 'estado_analitico',
+            'contexto', 'instrucciones', 'personalizacion_momentos', 'adjuntos', 'estado', 'estado_analitico',
             'error_mensaje', 'version_prompt', 'version_esquema', 'modelo_usado', 'solicitado_por',
             'creado_en', 'actualizado_en', 'completado_en',
         ]
@@ -370,12 +453,13 @@ class AnalisisV2CrearSerializer(serializers.ModelSerializer):
         help_text='Obligatorio y no vacío en por_momento; no se acepta en integral.',
     )
     personalizacion_momentos = PersonalizacionMomentoSerializer(many=True, required=False)
+    adjuntos = CampoAdjuntos()
 
     class Meta:
         model = AnalisisV2
         fields = [
             'id', 'jornada', 'modo', 'pipeline', 'momentos', 'contexto', 'instrucciones',
-            'personalizacion_momentos', 'estado', 'creado_en',
+            'personalizacion_momentos', 'adjuntos', 'estado', 'creado_en',
         ]
         read_only_fields = ['id', 'estado', 'creado_en']
 
@@ -412,6 +496,7 @@ class AnalisisV2CrearSerializer(serializers.ModelSerializer):
             if momento.id in vistos:
                 raise serializers.ValidationError({'personalizacion_momentos': 'Un momento aparece más de una vez.'})
             vistos.add(momento.id)
+        attrs['adjuntos'] = validar_adjuntos(attrs.get('adjuntos'), jornada)
         return attrs
 
     def create(self, validated_data):
@@ -489,12 +574,16 @@ class ResumenPresentacionCrearSerializer(serializers.ModelSerializer):
     modelo = serializers.CharField(source='modelo_solicitado', required=False, allow_blank=True)
     esfuerzo = serializers.CharField(source='esfuerzo_solicitado', required=False, allow_blank=True)
     flex = serializers.BooleanField(required=False, default=False)
+    adjuntos = CampoAdjuntos(help_text=(
+        'Ids de assets de la jornada que entran como CONTEXTO del resumen (HU-101). Solo contexto: '
+        'el resumen no puede sumar fuentes que el análisis original no tenía.'
+    ))
 
     class Meta:
         model = ResumenPresentacion
         fields = [
-            'id', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones', 'modelo', 'esfuerzo', 'flex',
-            'estado', 'creado_en',
+            'id', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones', 'adjuntos', 'modelo', 'esfuerzo',
+            'flex', 'estado', 'creado_en',
         ]
         read_only_fields = ['id', 'estado', 'creado_en']
 
@@ -518,6 +607,12 @@ class ResumenPresentacionCrearSerializer(serializers.ModelSerializer):
                 'ni entrada guardada): no se puede resumir. Genera un análisis nuevo.'
             )})
         attrs['jornada'] = analisis.momento.jornada if campo == 'analisis_momento' else analisis.jornada
+        # Solo contexto (HU-101): el resumen se valida contra la entrada del análisis original, así
+        # que no puede sumar fuentes que ese análisis no tenía.
+        from .v2.adjuntos import USO_CONTEXTO
+        attrs['adjuntos'] = [
+            a['asset'] for a in validar_adjuntos(attrs.get('adjuntos'), attrs['jornada'], usos=(USO_CONTEXTO,))
+        ]
         return attrs
 
 
@@ -531,7 +626,7 @@ class ResumenPresentacionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ResumenPresentacion
         fields = [
-            'id', 'jornada', 'fuente', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones',
+            'id', 'jornada', 'fuente', *ResumenPresentacion.CAMPOS_FUENTE, 'instrucciones', 'adjuntos',
             'modelo', 'esfuerzo', 'flex', 'estado', 'resultado', 'error_mensaje', 'modelo_usado',
             'prompt_usado', 'version_prompt', 'version_esquema', 'diagnostico',
             'respuesta_openai_id', 'fase_openai', 'consultado_en', 'solicitado_por',

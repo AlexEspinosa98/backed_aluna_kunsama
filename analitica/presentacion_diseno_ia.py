@@ -53,6 +53,8 @@ def _mime_real(asset):
 
 
 def _nombre_asset(asset):
+    if asset.titulo:
+        return asset.titulo
     if asset.nombre_archivo_original:
         return asset.nombre_archivo_original
     if asset.archivo:
@@ -70,7 +72,9 @@ def _reunir_assets(jornada):
     cada una ≤ `MAX_TAMANO_IMAGEN_BYTES` y con mime real png/jpeg/webp/gif."""
     resumen = []
     imagenes = []
-    for asset in jornada.assets.all():
+    # HU-101: los documentos de apoyo no son referencia visual, y una imagen marcada con
+    # `usar_en_presentacion=False` se subió solo como insumo del análisis.
+    for asset in jornada.assets.filter(usar_en_presentacion=True).exclude(tipo=JornadaAsset.TIPO_DOCUMENTO):
         id_texto = str(asset.id)
         es_marca_con_texto = asset.tipo == JornadaAsset.TIPO_SYSTEM_DESIGN and asset.texto
         texto = asset.texto if es_marca_con_texto else None
@@ -96,6 +100,7 @@ def _reunir_assets(jornada):
                         imagen_adjunta = True
         resumen.append({
             'id': id_texto, 'tipo': asset.tipo, 'nombre': _nombre_asset(asset),
+            'descripcion': asset.descripcion or None,
             'texto': texto, 'imagen_adjunta': imagen_adjunta,
         })
     return resumen, imagenes

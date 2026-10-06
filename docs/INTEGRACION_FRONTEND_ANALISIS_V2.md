@@ -151,6 +151,7 @@ Cuerpo (`AnalisisV2CrearSerializer`, ver `analitica/serializers.py`):
 | `contexto` | string, sin límite de largo (HU-93) | `""` | Contexto general de quien pide el análisis. Viaja como dato en `entrada.personalizacion.contexto_usuario` — nunca se anexa al system prompt. |
 | `instrucciones` | string, sin límite de largo (HU-93) | `""` | Ídem, en `entrada.personalizacion.instrucciones_usuario`. Ajusta énfasis y tono; el formato del informe (el esquema) es fijo por contrato, no lo cambian las instrucciones. |
 | `personalizacion_momentos` | array de `{"momento": <id>, "contexto": "", "instrucciones": ""}` | `[]` | Opcional. Cada `momento` debe estar en el alcance de este análisis (todos los de la jornada en `integral`, los indicados en `por_momento`) y aparecer como máximo una vez. |
+| `adjuntos` | array de `{"asset": <id>, "uso": "fuente"\|"contexto"}` (o ids sueltos = `contexto`) | `[]` | HU-101. Documentos/imágenes de la jornada (`/api/admin/jornada-assets/`). `fuente` = evidencia secundaria citable (`f-adj<id>`, tipo `resumen_secundario`); `contexto` = marco para interpretar, nunca evidencia (`entrada.referencias`). Ver `docs/INTEGRACION_FRONTEND_ADJUNTOS.md`. |
 
 Respuesta `201` con el análisis recién creado en `estado: "pendiente"` (serializer de detalle,
 `AnalisisV2Serializer` — ver §3; `resultado`/`entrada`/`diagnostico` llegan vacíos porque el

@@ -13,6 +13,8 @@ Usuario = get_user_model()
 EXTENSIONES_POR_TIPO_ASSET = {
     JornadaAsset.TIPO_ASSET: ('png', 'jpg', 'jpeg', 'webp', 'gif'),
     JornadaAsset.TIPO_SYSTEM_DESIGN: ('png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf'),
+    # HU-101: documentos de apoyo para el análisis (y su resumen para presentación).
+    JornadaAsset.TIPO_DOCUMENTO: ('pdf', 'docx', 'txt', 'md'),
 }
 
 
@@ -158,13 +160,49 @@ class JornadaAdminSerializer(serializers.ModelSerializer):
 
 
 class JornadaAssetSerializer(serializers.ModelSerializer):
+    """`contenido_*` es lo que lee un análisis cuando se le adjunta el asset (HU-101). El texto
+    completo solo va en el detalle (`?con_contenido=1` en el listado): puede pesar cientos de KB."""
+    nombre = serializers.CharField(source='nombre_legible', read_only=True)
+    contenido_caracteres = serializers.SerializerMethodField()
+
     class Meta:
         model = JornadaAsset
         fields = [
-            'id', 'jornada', 'tipo', 'archivo', 'nombre_archivo_original', 'texto', 'subido_por',
-            'creado_en',
+            'id', 'jornada', 'tipo', 'archivo', 'nombre_archivo_original', 'texto', 'titulo',
+            'descripcion', 'nombre', 'usar_en_presentacion', 'contenido_estado', 'contenido_metodo',
+            'contenido_error', 'contenido_caracteres', 'subido_por', 'creado_en',
         ]
-        read_only_fields = ['nombre_archivo_original', 'subido_por', 'creado_en']
+        read_only_fields = [
+            'nombre_archivo_original', 'contenido_estado', 'contenido_metodo', 'contenido_error',
+            'subido_por', 'creado_en',
+        ]
+
+    def get_contenido_caracteres(self, asset):
+        return len(asset.contenido_texto or '')
+
+
+class JornadaAssetDetalleSerializer(JornadaAssetSerializer):
+    class Meta(JornadaAssetSerializer.Meta):
+        fields = JornadaAssetSerializer.Meta.fields + ['contenido_texto']
+
+
+class JornadaAssetActualizarSerializer(serializers.ModelSerializer):
+    """PATCH (HU-101): solo los datos descriptivos. El archivo no se reemplaza in place — se sube
+    uno nuevo y se borra el viejo, como siempre. `contenido_texto` se puede corregir a mano (una
+    lectura con visión que se equivocó en una cifra); queda marcado como `texto_escrito`."""
+    class Meta:
+        model = JornadaAsset
+        fields = ['titulo', 'descripcion', 'usar_en_presentacion', 'contenido_texto']
+
+    def update(self, instance, validated_data):
+        if 'contenido_texto' in validated_data:
+            texto = validated_data['contenido_texto']
+            validated_data['contenido_estado'] = (
+                JornadaAsset.CONTENIDO_LISTO if texto.strip() else JornadaAsset.CONTENIDO_SIN_LEER
+            )
+            validated_data['contenido_metodo'] = JornadaAsset.METODO_TEXTO_ESCRITO if texto.strip() else ''
+            validated_data['contenido_error'] = ''
+        return super().update(instance, validated_data)
 
 
 class JornadaAssetCrearSerializer(serializers.Serializer):
@@ -180,6 +218,10 @@ class JornadaAssetCrearSerializer(serializers.Serializer):
     tipo = serializers.ChoiceField(choices=JornadaAsset.TIPO_CHOICES, default=JornadaAsset.TIPO_ASSET)
     archivos = serializers.ListField(child=serializers.FileField(), required=False, default=list)
     texto = serializers.CharField(required=False, allow_blank=True, default='', trim_whitespace=True)
+    # HU-101: se aplican a todos los assets de la tanda. `titulo` solo tiene sentido con un archivo.
+    titulo = serializers.CharField(required=False, allow_blank=True, default='', max_length=200)
+    descripcion = serializers.CharField(required=False, allow_blank=True, default='')
+    usar_en_presentacion = serializers.BooleanField(required=False, default=True)
 
     def _mensaje_sin_archivos(self, mensaje):
         """Si mandaron `archivo` (singular) el problema no es que falte el archivo sino que el
@@ -199,11 +241,16 @@ class JornadaAssetCrearSerializer(serializers.Serializer):
         archivos = attrs['archivos']
         texto = attrs['texto']
 
-        if tipo == JornadaAsset.TIPO_ASSET:
+        if attrs['titulo'] and len(archivos) > 1:
+            raise serializers.ValidationError({'titulo': (
+                'Un título por request solo vale con un archivo: con varios, cada uno toma el '
+                'nombre de su archivo (se puede cambiar después con PATCH).'
+            )})
+        if tipo in (JornadaAsset.TIPO_ASSET, JornadaAsset.TIPO_DOCUMENTO):
             if texto:
                 raise serializers.ValidationError({'texto': (
-                    'Solo un system_design puede ser texto — un asset es una imagen que se usa '
-                    'como referencia visual.'
+                    'Solo un system_design puede ser texto — un asset o un documento es un '
+                    'archivo.'
                 )})
             if not archivos:
                 raise serializers.ValidationError({'archivos': self._mensaje_sin_archivos(
@@ -229,6 +276,9 @@ class JornadaAssetCrearSerializer(serializers.Serializer):
             'jornada': validated_data['jornada'],
             'tipo': validated_data['tipo'],
             'subido_por': validated_data.get('subido_por'),
+            'titulo': validated_data.get('titulo', ''),
+            'descripcion': validated_data.get('descripcion', ''),
+            'usar_en_presentacion': validated_data.get('usar_en_presentacion', True),
         }
         creados = [
             JornadaAsset.objects.create(
