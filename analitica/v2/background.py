@@ -118,11 +118,17 @@ def _system_y_user(analisis):
     """El system prompt de la versión con que se preparó la corrida (inmutable, HU-92) y el user
     serializado DESDE LA ENTRADA GUARDADA. Se arma igual en el intento y en la reparación: jsonb
     reordena las claves al guardar, y si el intento usara la entrada en memoria el texto cambiaría
-    entre llamadas y la reparación perdería la caché de OpenAI (entrada ~20 veces más barata)."""
+    entre llamadas y la reparación perdería la caché de OpenAI (entrada ~20 veces más barata).
+
+    `version_prompt` puede componer varias versiones con `+` (un ajuste, HU-102:
+    `analisis_llm#5+ajuste_analisis#1`): el system es su contenido en ese orden."""
     from analitica.models import SystemPrompt
 
-    tipo, version = analisis.version_prompt.split('#')
-    system = SystemPrompt.objects.get(tipo=tipo, version=int(version)).contenido
+    partes = []
+    for referencia in analisis.version_prompt.split('+'):
+        tipo, version = referencia.split('#')
+        partes.append(SystemPrompt.objects.get(tipo=tipo, version=int(version)).contenido.rstrip())
+    system = '\n\n'.join(partes)
     user = json.dumps(analisis.entrada, ensure_ascii=False, separators=(',', ':'))
     return system, user
 
@@ -365,9 +371,23 @@ class _AdaptadorResumenPresentacion:
         return completa, errores
 
 
+class _AdaptadorAjusteAnalisis:
+    """Ajuste de un análisis (HU-102, un `AnalisisV2` con `es_ajuste`): el modelo devuelve el
+    contrato completo y se valida contra la entrada del ajuste — la del análisis original más el
+    bloque `ajuste`, con las mismas fuentes —, con el pipeline del original."""
+
+    def esquema(self):
+        return None
+
+    def evaluar(self, analisis, salida, intento, ultimo):
+        errores = evaluar_salida_v2(salida, analisis.entrada, analisis.pipeline, intento, analisis.diagnostico, ultimo=ultimo)
+        return salida, errores
+
+
 def adaptador_de(Modelo):
     return {
         'AnalisisJornadaIA': _AdaptadorAnalisisJornada(),
         'ResumenPresentacion': _AdaptadorResumenPresentacion(),
+        'AnalisisV2': _AdaptadorAjusteAnalisis(),
     }[Modelo.__name__]
 

@@ -113,6 +113,7 @@ class SystemPrompt(models.Model):
     TIPO_PRESENTACION_DISENO = 'presentacion_diseno'
     TIPO_SUGERENCIAS = 'sugerencias'
     TIPO_RESUMEN_PRESENTACION = 'resumen_presentacion'
+    TIPO_AJUSTE_ANALISIS = 'ajuste_analisis'
     TIPO_CHOICES = [
         (TIPO_ANALISIS_LLM, 'Análisis — pipeline LLM'),
         (TIPO_ANALISIS_BERTOPIC, 'Análisis — pipeline BERTopic + LLM'),
@@ -121,6 +122,7 @@ class SystemPrompt(models.Model):
         (TIPO_PRESENTACION_DISENO, 'Diseño de presentación (diagramación)'),
         (TIPO_SUGERENCIAS, 'Sugerencias para el análisis guiado'),
         (TIPO_RESUMEN_PRESENTACION, 'Resumen de un análisis para presentar en diapositivas'),
+        (TIPO_AJUSTE_ANALISIS, 'Ajuste de un análisis ya entregado (se suma al prompt del análisis)'),
     ]
 
     tipo = models.CharField(max_length=30, choices=TIPO_CHOICES)
@@ -603,7 +605,17 @@ class AnalisisV2(models.Model):
     nunca recalculado: los JSON Pointers de citas y documentos BERTopic de `resultado` apuntan a
     índices de sus arrays. `resultado` solo se llena con una salida que pasó las dos capas de
     validación; lo descartado (salidas inválidas, errores, metadatos de las llamadas, notas del
-    adaptador BERTopic) queda en `diagnostico` para auditoría."""
+    adaptador BERTopic) queda en `diagnostico` para auditoría.
+
+    **Ajustes (HU-102).** Un análisis con `es_ajuste=True` es la versión corregida de otro ya
+    terminado (`ajuste_de_*`, uno solo): se le vuelve a pasar a OpenAI el análisis previo junto con
+    su entrada original EXACTA y las instrucciones de ajuste (ver `analitica/ajuste_analisis.py`).
+    Corre siempre en el modo segundo plano de OpenAI (`respuesta_openai_id`, `fase_openai`…) porque
+    la entrada más el análisis previo pueden pasar del millón de caracteres. `instrucciones` y
+    `contexto` son las del ajuste."""
+    FASE_INTENTO = 'intento'
+    FASE_REPARACION = 'reparacion'
+    CAMPOS_AJUSTE = ('ajuste_de_reporte', 'ajuste_de_analisis_momento', 'ajuste_de_analisis_jornada', 'ajuste_de_analisis_v2')
     MODO_INTEGRAL = MODO_INTEGRAL
     MODO_POR_MOMENTO = MODO_POR_MOMENTO
     PIPELINE_LLM = PIPELINE_LLM
@@ -656,9 +668,32 @@ class AnalisisV2(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='analisis_v2_solicitados',
     )
+    # HU-102: ajuste de un análisis ya terminado. `es_ajuste` sobrevive aunque se borre el origen
+    # (las FK quedan en NULL): el ajuste no depende de él, lleva su propia copia de la entrada.
+    es_ajuste = models.BooleanField(default=False)
+    ajuste_de_reporte = models.ForeignKey('Reporte', null=True, blank=True, on_delete=models.SET_NULL, related_name='ajustes')
+    ajuste_de_analisis_momento = models.ForeignKey('AnalisisMomentoIA', null=True, blank=True, on_delete=models.SET_NULL, related_name='ajustes')
+    ajuste_de_analisis_jornada = models.ForeignKey('AnalisisJornadaIA', null=True, blank=True, on_delete=models.SET_NULL, related_name='ajustes')
+    ajuste_de_analisis_v2 = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='ajustes')
+    # Modo segundo plano de OpenAI (mismo motor que AnalisisJornadaIA, HU-98) — solo los ajustes.
+    modelo_solicitado = models.CharField(max_length=80, blank=True)
+    esfuerzo_solicitado = models.CharField(max_length=10, blank=True)
+    flex = models.BooleanField(default=False)
+    respuesta_openai_id = models.CharField(max_length=120, blank=True, db_index=True)
+    fase_openai = models.CharField(max_length=12, blank=True)
+    consultado_en = models.DateTimeField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
     actualizado_en = models.DateTimeField(auto_now=True)
     completado_en = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def campo_ajuste(self):
+        return next((c for c in self.CAMPOS_AJUSTE if getattr(self, f'{c}_id')), None)
+
+    @property
+    def origen_ajuste(self):
+        campo = self.campo_ajuste
+        return getattr(self, campo) if campo else None
 
     class Meta:
         ordering = ['-creado_en']

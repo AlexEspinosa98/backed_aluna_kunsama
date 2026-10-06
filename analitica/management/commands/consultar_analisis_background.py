@@ -1,5 +1,5 @@
-"""Retoma los análisis integrales (HU-98) y los resúmenes para presentación (HU-99) que esperan a
-OpenAI en segundo plano.
+"""Retoma los análisis integrales (HU-98), los resúmenes para presentación (HU-99) y los ajustes de
+un análisis (HU-102) que esperan a OpenAI en segundo plano.
 
 Cada análisis lo sigue su propio hilo, que consulta cada 30 s. Pero un reinicio del servidor
 mata ese hilo, y entonces nadie recogería la respuesta que OpenAI igual termina. Este comando,
@@ -16,7 +16,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from analitica.models import AnalisisJornadaIA, ResumenPresentacion
+from analitica.models import AnalisisJornadaIA, AnalisisV2, ResumenPresentacion
 from analitica.v2.background import avanzar_en_segundo_plano
 from auditoria.openai_cliente import contexto_llamada
 
@@ -26,7 +26,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **opciones):
         hace_un_minuto = timezone.now() - timedelta(minutes=1)
-        for Modelo in (AnalisisJornadaIA, ResumenPresentacion):
+        for Modelo in (AnalisisJornadaIA, ResumenPresentacion, AnalisisV2):
             pendientes = (
                 Modelo.objects.filter(estado=Modelo.ESTADO_PROCESANDO)
                 .exclude(respuesta_openai_id='')

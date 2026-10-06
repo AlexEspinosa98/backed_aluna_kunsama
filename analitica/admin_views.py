@@ -22,13 +22,14 @@ from .infografia_ia_openai import _obtener_datos_analitica, generar_infografias
 from .models import (
     AnalisisJornadaIA, AnalisisMomentoIA, AnalisisV2, InfografiaJornada, PlantillaAnalisis,
     PresentacionDiseno, Reporte, ResumenPresentacion, SystemPrompt, SystemPromptInmutable,
+    resultado_v2_de,
 )
 from .pdf_presentacion import construir_pdf_response
 from .presentacion import generar_presentacion_html
 from .presentacion_diseno_ia import ErrorGeneracionDiseno, TIPOS_DIAPOSITIVA_VALIDOS, generar_diseno
 from .reporte_excel import construir_excel_response_por_momento, construir_excel_response_por_pregunta
 from .serializers import (
-    AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
+    AjusteAnalisisCrearSerializer, AnalisisJornadaIACrearSerializer, AnalisisJornadaIASerializer, AnalisisMomentoIACrearSerializer,
     AnalisisMomentoIASerializer, AnalisisSugerenciasSerializer, AnalisisV2CrearSerializer,
     AnalisisV2ListaSerializer, AnalisisV2Serializer, InfografiaJornadaCrearSerializer,
     InfografiaJornadaSerializer, PlantillaAnalisisSerializer, PresentacionDisenoSerializer,
@@ -540,8 +541,10 @@ class AnalisisV2ViewSet(
         modo = entrada.validated_data['modo']
         momentos = entrada.validated_data.get('momentos') or []
 
+        # Los ajustes (HU-102) quedan fuera: corren en segundo plano hasta 2 horas y los retoma el
+        # cron si el hilo muere — no son huérfanos a los 45 minutos.
         AnalisisV2.objects.filter(
-            jornada=jornada,
+            jornada=jornada, es_ajuste=False,
             estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
             actualizado_en__lt=timezone.now() - UMBRAL_HUERFANO_ANALISIS_V2,
         ).update(
@@ -553,7 +556,7 @@ class AnalisisV2ViewSet(
 
         ids_alcance = {m.id for m in momentos}
         en_curso = AnalisisV2.objects.filter(
-            jornada=jornada, modo=modo,
+            jornada=jornada, modo=modo, es_ajuste=False,
             estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
         ).prefetch_related('momentos')
         for otro in en_curso:
@@ -576,6 +579,56 @@ class AnalisisV2ViewSet(
         salida = AnalisisV2Serializer(analisis)
         headers = self.get_success_headers(salida.data)
         return Response(salida.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @extend_schema(
+        request=AjusteAnalisisCrearSerializer, responses={201: AnalisisV2Serializer},
+        description=(
+            'Ajusta un análisis ya terminado (HU-102): se le vuelve a pasar a OpenAI con '
+            '`instrucciones` (y opcionalmente `contexto` y `adjuntos`) y se obtiene un AnalisisV2 '
+            'NUEVO con `es_ajuste: true`. El original no cambia. Corre en segundo plano; se sigue por '
+            '`GET analisis-v2/{id}/`. Ver docs/INTEGRACION_FRONTEND_AJUSTE_ANALISIS.md.'
+        ),
+    )
+    @action(detail=False, methods=['post'], url_path='ajustar')
+    def ajustar(self, request):
+        entrada = AjusteAnalisisCrearSerializer(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        datos = entrada.validated_data
+        verificar_acceso_jornada(request.user, datos['jornada'])
+
+        campo, origen = datos['campo_origen'], datos['origen']
+        if AnalisisV2.objects.filter(
+            **{f'ajuste_de_{campo}': origen},
+            estado__in=[AnalisisV2.ESTADO_PENDIENTE, AnalisisV2.ESTADO_PROCESANDO],
+        ).exists():
+            return Response(
+                {'detail': 'Ya hay un ajuste en proceso para este análisis — espera a que termine.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        solicitud = origen.entrada['solicitud']
+        resultado = resultado_v2_de(origen)
+        ajuste = AnalisisV2.objects.create(
+            jornada=datos['jornada'], modo=solicitud['modo'], pipeline=resultado['pipeline'],
+            instrucciones=datos['instrucciones'], contexto=datos['contexto'], adjuntos=datos['adjuntos'],
+            es_ajuste=True, **{f'ajuste_de_{campo}': origen},
+            modelo_solicitado=datos['modelo'], esfuerzo_solicitado=datos['esfuerzo'], flex=datos['flex'],
+            solicitado_por=request.user,
+        )
+        if solicitud['modo'] == AnalisisV2.MODO_POR_MOMENTO:
+            ajuste.momentos.set([int(m) for m in solicitud['momento_ids']])
+
+        from .ajuste_analisis import procesar_ajuste
+        threading.Thread(target=procesar_ajuste, args=(ajuste.id,), daemon=True).start()
+        return Response(AnalisisV2Serializer(ajuste).data, status=status.HTTP_201_CREATED)
+
+    def perform_destroy(self, instance):
+        # Un ajuste en curso se cancela también en OpenAI, para no pagar algo que nadie va a leer.
+        if instance.estado == AnalisisV2.ESTADO_PROCESANDO and instance.respuesta_openai_id:
+            from .v2.background import cancelar_respuesta
+            with contexto_llamada(origen=instance, usuario=self.request.user):
+                cancelar_respuesta(instance.respuesta_openai_id)
+        instance.delete()
 
 
 class AnalisisSugerenciasView(APIView):
@@ -700,6 +753,9 @@ def _item_analisis_v2(analisis):
         'modo': analisis.modo,
         'pipeline': analisis.pipeline,
         'estado_analitico': (analisis.resultado or {}).get('estado'),
+        # HU-102: un ajuste se lista como un análisis más, marcado y con su origen.
+        'es_ajuste': analisis.es_ajuste,
+        'ajuste_de': AnalisisV2ListaSerializer().get_ajuste_de(analisis),
     }
 
 
