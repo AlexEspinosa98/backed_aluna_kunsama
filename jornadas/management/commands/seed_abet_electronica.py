@@ -116,6 +116,13 @@ MOMENTOS = [
                          'entre tres y cinco años después de graduarse que todavía no esté '
                          'suficientemente representado?',
             },
+            {
+                'texto': 'Comentario adicional dictado: grabe con su voz cualquier idea, '
+                         'preocupación o propuesta sobre los Objetivos Educativos que no '
+                         'haya quedado recogida en las respuestas anteriores.',
+                'tipo': Pregunta.TIPO_AUDIO,
+                'obligatoria': False,
+            },
         ],
     },
 ]
